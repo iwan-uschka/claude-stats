@@ -73,8 +73,16 @@ public struct OAuthUsageClient: QuotaProviding {
         guard http.statusCode == 200 else {
             throw ClaudeStatsError.unexpectedQuotaResponse("oauth/usage: HTTP \(http.statusCode)")
         }
-        guard let root = QuotaJSON.object(try? JSONSerialization.jsonObject(with: data)) else {
-            throw ClaudeStatsError.unexpectedQuotaResponse("oauth/usage: body is not a JSON object")
+        let root: [String: Any]
+        do {
+            guard let parsed = QuotaJSON.object(try JSONSerialization.jsonObject(with: data)) else {
+                throw ClaudeStatsError.unexpectedQuotaResponse("oauth/usage: body is not a JSON object")
+            }
+            root = parsed
+        } catch let error as ClaudeStatsError {
+            throw error
+        } catch {
+            throw ClaudeStatsError.unexpectedQuotaResponse("oauth/usage: JSON decode failed: \(error)")
         }
         guard let windows = QuotaJSON.windows(in: root) else {
             throw ClaudeStatsError.unexpectedQuotaResponse(

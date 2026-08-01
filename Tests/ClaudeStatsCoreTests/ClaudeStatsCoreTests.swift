@@ -11,6 +11,23 @@ final class ClaudeStatsCoreTests: XCTestCase {
         XCTAssertNil(Entrypoint(rawJSONLValue: "something-new"))
     }
 
+    func testEntrypointBreakdownOrderedRowsFillsZeros() {
+        let breakdown = EntrypointBreakdown(window: .fiveHour, tokensByEntrypoint: [.cli: 10])
+        XCTAssertEqual(breakdown.orderedRows.map(\.tokens), [10, 0, 0])
+        XCTAssertEqual(breakdown.totalTokens, 10)
+    }
+
+    func testTimeWindowStartDate() {
+        let end = Date(timeIntervalSince1970: 1000)
+        XCTAssertEqual(TimeWindow.fiveHour.startDate(endingAt: end), end.addingTimeInterval(-5 * 60 * 60))
+    }
+
+    func testNearestKnownTierAtToleranceBoundary() {
+        // 19_000 * 1.25 == 23_750, exactly at default tolerance
+        XCTAssertEqual(PlanTier.nearestKnownTier(forFiveHourTokens: 23_750), .pro)
+        XCTAssertEqual(PlanTier.nearestKnownTier(forFiveHourTokens: 23_751), .custom(tokens: 23_751))
+    }
+
     func testMocksProvideDataForEveryWindow() async throws {
         let store = MockUsageStore()
         for window in TimeWindow.allCases {

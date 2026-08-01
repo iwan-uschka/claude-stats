@@ -20,9 +20,6 @@ public enum Entrypoint: String, Sendable, Hashable, Codable, CaseIterable {
         self.init(rawValue: rawJSONLValue)
     }
 
-    /// The value as written in the JSONL.
-    public var jsonlValue: String { rawValue }
-
     /// Row label in the popover's "This Mac" breakdown.
     public var displayName: String {
         switch self {

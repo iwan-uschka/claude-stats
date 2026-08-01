@@ -35,6 +35,9 @@ struct PopoverView: View {
             Divider()
             modelSection
             costSection
+            if model.usingSampleData {
+                sampleDataLine
+            }
             if let error = model.lastError {
                 errorLine(error)
             }
@@ -51,6 +54,7 @@ struct PopoverView: View {
         HStack(spacing: 6) {
             ClaudeMarkView(size: 13)
                 .foregroundStyle(.primary)
+                .accessibilityHidden(true)
             Text("Claude Stats")
                 .font(.system(size: 12, weight: .semibold))
             Spacer()
@@ -181,6 +185,12 @@ struct PopoverView: View {
         }
     }
 
+    private var sampleDataLine: some View {
+        Text("Sample data — no Claude logs found")
+            .font(PopoverMetrics.captionFont)
+            .foregroundStyle(.orange)
+    }
+
     private func errorLine(_ error: String) -> some View {
         Text(error)
             .font(PopoverMetrics.captionFont)
@@ -193,7 +203,7 @@ struct PopoverView: View {
 
     private var footer: some View {
         HStack(spacing: 8) {
-            Button("Refresh") { model.refresh() }
+            Button("Refresh") { model.refresh(force: true) }
                 .keyboardShortcut("r", modifiers: .command)
             Button("Settings") { model.openSettings() }
             Spacer()

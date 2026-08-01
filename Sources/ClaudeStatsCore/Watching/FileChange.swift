@@ -25,7 +25,8 @@ public struct FileChange: Sendable, Hashable {
     /// Same path, with the union of both flag sets — used when coalescing
     /// several OS events for one path into a single change.
     public func merging(_ other: FileChange) -> FileChange {
-        FileChange(path: path, flags: flags.union(other.flags))
+        assert(path == other.path, "merging changes for different paths: \(path) vs \(other.path)")
+        return FileChange(path: path, flags: flags.union(other.flags))
     }
 
     /// Kinds of change, mapped from the raw FSEvents event flags.
@@ -72,8 +73,22 @@ public struct FileChangeBatch: Sendable, Hashable {
     /// deterministic ordering), one entry per unique path.
     public let changes: [FileChange]
 
+    /// Enforces the "one entry per unique path" invariant: repeated entries
+    /// for the same path have their flags unioned (not just the first kept),
+    /// so a caller reporting e.g. `.created` then `.removed` for one path
+    /// doesn't lose either half of that information.
     public init(changes: [FileChange]) {
-        self.changes = changes
+        var merged: [String: FileChange] = [:]
+        var order: [String] = []
+        for change in changes {
+            if let existing = merged[change.path] {
+                merged[change.path] = existing.merging(change)
+            } else {
+                merged[change.path] = change
+                order.append(change.path)
+            }
+        }
+        self.changes = order.map { merged[$0]! }
     }
 
     /// Just the paths, in the same order as ``changes``.
@@ -101,6 +116,7 @@ public struct FileChangeBatch: Sendable, Hashable {
     /// Convenience for the log-parsing layer: content changes whose path has
     /// the given extension (e.g. `"jsonl"`), case-insensitively.
     public func contentChanges(withExtension ext: String) -> [FileChange] {
-        contentChanges.filter { $0.path.lowercased().hasSuffix("." + ext.lowercased()) }
+        let suffix = "." + ext.lowercased().drop(while: { $0 == "." })
+        return contentChanges.filter { $0.path.lowercased().hasSuffix(suffix) }
     }
 }

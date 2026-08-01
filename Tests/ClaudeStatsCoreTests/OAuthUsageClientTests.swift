@@ -174,6 +174,19 @@ final class OAuthUsageClientTests: XCTestCase {
         let message = await assertThrowsUnexpectedQuotaResponse {
             try await self.makeClient().currentSnapshot()
         }
+        // Underlying `JSONSerialization` decode error text varies by OS/SDK
+        // version, so only the prefix this client adds is pinned here.
+        XCTAssertTrue(message?.hasPrefix("oauth/usage: JSON decode failed:") ?? false, message ?? "nil")
+    }
+
+    func testNonObjectJSONThrowsUnexpectedQuotaResponse() async throws {
+        // Valid JSON, but not an object — the decode succeeds, so this hits
+        // the distinct "body is not a JSON object" guard rather than the
+        // decode-failure path above.
+        StubURLProtocol.respond(statusCode: 200, body: "[1, 2, 3]")
+        let message = await assertThrowsUnexpectedQuotaResponse {
+            try await self.makeClient().currentSnapshot()
+        }
         XCTAssertEqual(message, "oauth/usage: body is not a JSON object")
     }
 

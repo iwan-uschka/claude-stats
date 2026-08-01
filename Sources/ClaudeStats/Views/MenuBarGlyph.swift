@@ -48,7 +48,7 @@ enum MenuBarGlyph {
             return true
         }
         image.isTemplate = true
-        image.accessibilityDescription = "Claude usage"
+        image.accessibilityDescription = "Claude Stats: \(Int(fractions[0] * 100))% five-hour, \(Int(fractions[1] * 100))% seven-day usage"
         return image
     }
 

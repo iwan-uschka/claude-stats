@@ -27,6 +27,7 @@ struct ClaudeMarkView: View {
         ClaudeMarkShape()
             .fill(style: ClaudeMarkShape.fillStyle)
             .frame(width: size, height: size)
+            .accessibilityHidden(true)
     }
 }
 

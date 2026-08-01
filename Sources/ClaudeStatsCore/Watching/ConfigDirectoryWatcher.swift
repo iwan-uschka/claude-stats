@@ -11,7 +11,7 @@ import Foundation
 /// ## Usage
 ///
 /// ```swift
-/// let watcher = try ConfigDirectoryWatcher(
+/// let watcher = ConfigDirectoryWatcher(
 ///     configuration: .claudeConfigDirectory()
 /// ) { batch in
 ///     if batch.requiresFullRescan {
@@ -162,6 +162,15 @@ public final class ConfigDirectoryWatcher: @unchecked Sendable {
     private var stream: FSEventStreamRef?
     /// Lock-guarded. The manually retained `EventSink` handed to C as `info`.
     private var sinkPointer: UnsafeMutableRawPointer?
+    /// Lock-guarded. Set for the duration of stream creation in ``start()``, so
+    /// a second concurrent `start()` call can't create its own stream and race
+    /// the first one's `self.stream` write.
+    private var isStarting = false
+
+    /// Marks `queue` so ``stop()`` can tell whether it's already running on
+    /// it (e.g. called from inside a coalescer flush closure) and invalidate
+    /// directly instead of `queue.sync`-ing into itself, which would deadlock.
+    private static let queueKey = DispatchSpecificKey<Void>()
 
     /// - Parameters:
     ///   - configuration: What to watch and how hard to debounce.
@@ -169,6 +178,7 @@ public final class ConfigDirectoryWatcher: @unchecked Sendable {
     public init(configuration: Configuration, onChange: @escaping ChangeHandler) {
         self.configuration = configuration
         let queue = DispatchQueue(label: "de.bitgrip.claude-stats.config-watcher")
+        queue.setSpecific(key: ConfigDirectoryWatcher.queueKey, value: ())
         self.queue = queue
 
         let active = ActiveFlag()
@@ -204,11 +214,17 @@ public final class ConfigDirectoryWatcher: @unchecked Sendable {
     /// - Throws: ``StartError``.
     public func start() throws {
         lock.lock()
-        guard stream == nil else {
+        guard stream == nil, !isStarting else {
             lock.unlock()
             return
         }
+        isStarting = true
         lock.unlock()
+        defer {
+            lock.lock()
+            isStarting = false
+            lock.unlock()
+        }
 
         guard !configuration.paths.isEmpty else { throw StartError.noPathsConfigured }
 
@@ -307,12 +323,29 @@ public final class ConfigDirectoryWatcher: @unchecked Sendable {
         // dispatch queue and guarantees no further callbacks (so it must come
         // before releasing the sink the callback dereferences); Release drops
         // our reference to the stream itself.
-        FSEventStreamStop(stream)
-        FSEventStreamInvalidate(stream)
-        FSEventStreamRelease(stream)
+        //
+        // `FSEventStreamInvalidate` must run on the queue the stream was
+        // scheduled on (`FSEventStreamSetDispatchQueue` in `start()`) — that
+        // guarantee is what makes "no further callbacks" true. Calling it from
+        // an arbitrary thread is undefined behaviour per the FSEvents
+        // threading contract, and could let an in-flight callback on `queue`
+        // race the sink's release below.
+        let teardown = {
+            FSEventStreamStop(stream)
+            FSEventStreamInvalidate(stream)
+            FSEventStreamRelease(stream)
+            if let sinkPointer {
+                Unmanaged<EventSink>.fromOpaque(sinkPointer).release()
+            }
+        }
 
-        if let sinkPointer {
-            Unmanaged<EventSink>.fromOpaque(sinkPointer).release()
+        if DispatchQueue.getSpecific(key: ConfigDirectoryWatcher.queueKey) != nil {
+            // Already running on `queue` (e.g. `stop()` invoked from inside a
+            // coalescer flush closure) — `queue.sync` here would deadlock, and
+            // running inline still satisfies the "invalidate on queue" contract.
+            teardown()
+        } else {
+            queue.sync(execute: teardown)
         }
     }
 

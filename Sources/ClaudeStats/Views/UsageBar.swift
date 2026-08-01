@@ -10,13 +10,18 @@ struct UsageBar: View {
     var height: CGFloat = 6
     var trackOpacity: Double = 0.12
     var fillOpacity: Double = 0.75
+    /// Set when this bar isn't already wrapped by a labelled, combined
+    /// accessibility element (e.g. a caller using it standalone). Callers like
+    /// `WindowBarView`/`EntrypointRow` that already combine+label the whole row
+    /// should leave this `nil` so they aren't overridden with an empty label.
+    var accessibilityLabel: String? = nil
 
     private var clampedFraction: Double {
         DisplayFormat.clamped01(fraction)
     }
 
     var body: some View {
-        GeometryReader { proxy in
+        let bar = GeometryReader { proxy in
             ZStack(alignment: .leading) {
                 shape.fill(Color.primary.opacity(trackOpacity))
                 shape
@@ -27,6 +32,12 @@ struct UsageBar: View {
         .frame(height: height)
         .accessibilityElement()
         .accessibilityValue(DisplayFormat.percent(fraction: clampedFraction))
+
+        if let accessibilityLabel {
+            bar.accessibilityLabel(accessibilityLabel)
+        } else {
+            bar
+        }
     }
 
     private var shape: RoundedRectangle {

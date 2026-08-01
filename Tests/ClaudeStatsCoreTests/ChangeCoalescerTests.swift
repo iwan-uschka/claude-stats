@@ -163,6 +163,13 @@ final class ChangeCoalescerTests: XCTestCase {
         XCTAssertEqual(recorder.batches.count, 1)
     }
 
+    func testMaximumDelayShorterThanDebounceBecomesTheEffectiveInterval() {
+        let (coalescer, scheduler, recorder) = makeCoalescer(maximumDelay: 0.1) // < interval (0.35)
+        coalescer.record(FileChange(path: "/a.jsonl", flags: .modified))
+        scheduler.advance(by: 0.1)
+        XCTAssertEqual(recorder.batches.count, 1, "cap should win when it's shorter than the debounce window")
+    }
+
     // MARK: Manual flush / cancel
 
     func testFlushNowDeliversImmediatelyAndOnlyOnce() {
@@ -208,6 +215,22 @@ final class ChangeCoalescerTests: XCTestCase {
 
         XCTAssertEqual(recorder.batches.count, 1)
         XCTAssertEqual(recorder.batches[0].paths, ["/b.jsonl"], "cancelled changes must not resurface")
+    }
+
+    func testDeallocatingTheCoalescerReleasesTimersWithoutDelivering() {
+        let scheduler = ManualScheduler()
+        let recorder = BatchRecorder()
+        var coalescer: ChangeCoalescer? = ChangeCoalescer(
+            debounceInterval: interval,
+            maximumDelay: 1.0,
+            scheduler: scheduler,
+            onFlush: { [recorder] batch in recorder.append(batch) }
+        )
+        coalescer?.record(FileChange(path: "/a.jsonl", flags: .modified))
+        coalescer = nil
+
+        scheduler.advance(by: 10)
+        XCTAssertEqual(recorder.batches.count, 0)
     }
 
     // MARK: Batch conveniences (what callers actually act on)

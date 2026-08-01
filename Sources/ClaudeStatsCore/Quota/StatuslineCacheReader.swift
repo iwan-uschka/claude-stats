@@ -84,7 +84,7 @@ public struct StatuslineCacheReader: QuotaProviding {
     }
 
     public func currentSnapshot() async throws -> QuotaSnapshot {
-        guard let data = fileManager.contents(atPath: cacheURL.path) else {
+        guard let (data, mtime) = readCacheFileWithModificationDate() else {
             // No hook installed, or it has never fired.
             throw ClaudeStatsError.noQuotaSourceAvailable
         }
@@ -102,9 +102,13 @@ public struct StatuslineCacheReader: QuotaProviding {
             throw ClaudeStatsError.noQuotaSourceAvailable
         }
 
-        let capturedAt = QuotaJSON.date(root["captured_at"] ?? root["capturedAt"])
-            ?? fileModificationDate()
-            ?? now()
+        // No fallback to `now()`: if neither the payload nor the file itself
+        // can tell us when this was captured, treat the age as unknown rather
+        // than silently trusting it as freshly captured.
+        guard let capturedAt = QuotaJSON.capturedAtKeys.lazy.compactMap({ QuotaJSON.date(root[$0]) }).first ?? mtime
+        else {
+            throw ClaudeStatsError.noQuotaSourceAvailable
+        }
 
         let snapshot = QuotaSnapshot(
             fiveHour: windows.fiveHour,
@@ -119,7 +123,22 @@ public struct StatuslineCacheReader: QuotaProviding {
         return snapshot
     }
 
-    private func fileModificationDate() -> Date? {
-        try? fileManager.attributesOfItem(atPath: cacheURL.path)[.modificationDate] as? Date
+    /// Reads the cache file's bytes and modification time from a single open
+    /// descriptor, so they always describe the same file state — two separate
+    /// syscalls (as `FileManager.contents(atPath:)` followed by
+    /// `attributesOfItem(atPath:)`) could otherwise straddle the helper
+    /// script's atomic `mktemp` + `mv` rewrite and pair old bytes with a new
+    /// mtime (or vice versa).
+    private func readCacheFileWithModificationDate() -> (data: Data, mtime: Date?)? {
+        let fd = open(cacheURL.path, O_RDONLY)
+        guard fd >= 0 else { return nil }
+        defer { close(fd) }
+
+        var info = stat()
+        guard fstat(fd, &info) == 0 else { return nil }
+
+        let data = FileHandle(fileDescriptor: fd, closeOnDealloc: false).readDataToEndOfFile()
+        let mtime = Date(timeIntervalSince1970: Double(info.st_mtimespec.tv_sec))
+        return (data, mtime)
     }
 }

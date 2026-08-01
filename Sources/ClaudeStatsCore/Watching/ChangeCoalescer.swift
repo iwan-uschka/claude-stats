@@ -124,6 +124,11 @@ public final class ChangeCoalescer: @unchecked Sendable {
     // MARK: Recording
 
     /// Record one change, (re)opening the debounce window.
+    ///
+    /// Callers other than a single serial context are not supported:
+    /// overlapping `record()` calls from multiple threads can race the
+    /// debounce-restore step and starve delivery. `ConfigDirectoryWatcher`
+    /// satisfies this by only ever calling `record()` from its own serial queue.
     public func record(_ change: FileChange) {
         record([change])
     }
@@ -132,7 +137,8 @@ public final class ChangeCoalescer: @unchecked Sendable {
     /// which hands over an array of paths per callback.
     ///
     /// Recording an empty sequence is a no-op and does not disturb a window
-    /// that's already open.
+    /// that's already open. See ``record(_:)-1eqhj`` for the single-caller-context
+    /// requirement.
     public func record<S: Sequence>(_ changes: S) where S.Element == FileChange {
         lock.lock()
 

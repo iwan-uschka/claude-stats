@@ -255,18 +255,6 @@ public struct SessionLogParser: Sendable {
         byte == 0x20 || byte == 0x09 || byte == 0x0A || byte == 0x0D || byte == 0x0B || byte == 0x0C
     }
 
-    /// Drop leading/trailing ASCII whitespace (space, tab, CR, LF, form feed)
-    /// without allocating a `String` — enough for JSONL, where lines are
-    /// machine-written and any padding is ASCII.
-    static func trimmingASCIIWhitespace(_ data: Data) -> Data {
-        var start = data.startIndex
-        var end = data.endIndex
-        while start < end, isASCIIWhitespace(data[start]) { start += 1 }
-        while end > start, isASCIIWhitespace(data[end - 1]) { end -= 1 }
-        guard start != data.startIndex || end != data.endIndex else { return data }
-        return data[start..<end]
-    }
-
     /// Offsets of the same trim, applied to a borrowed buffer — no `Data`
     /// slice, so a whole-file scan trims every line without touching the heap.
     static func trimmedASCIIWhitespaceRange(_ bytes: UnsafeRawBufferPointer) -> Range<Int> {

@@ -5,17 +5,27 @@ Menu bar app for macOS showing live Claude token usage. Sibling to
 menu bar, popover on click" shape, but for Claude quota instead of
 CPU/GPU/RAM.
 
-No code yet — this is the locked plan from the initial design pass. Treat
-every decision below as settled unless the user reopens it; don't re-derive
-or re-litigate.
+Core scaffold (data layer, parsing, quota providers, UI) already implemented —
+see `Sources/`. Treat the plan below as the design baseline; verify against
+the code before assuming a feature is missing. Every decision below is
+settled unless the user reopens it; don't re-derive or re-litigate.
+
+## Layout
+
+- `ClaudeStatsCore` — models, parsing, watching, quota (unit-tested)
+- `ClaudeStats` — AppKit/SwiftUI menu bar app (executable, not testable by SwiftPM)
+
+## Commands
+
+- `swift build` / `swift test`
 
 ## Data layer
 
 Two independent tiers, deliberately decoupled:
 
 1. **Local log parsing (primary, always-on, zero auth).** Parse Claude Code's
-   session JSONL under `~/.config/claude` (or `$CLAUDE_CONFIG_DIR`) —
-   `~/.claude/projects/*/*.jsonl`. Gives: token counts, cost math (per-model
+   session JSONL under `~/.claude` (or `$CLAUDE_CONFIG_DIR`) —
+   `~/.claude/projects/*/*.jsonl`. `~/.config/claude` is NOT consulted. Gives: token counts, cost math (per-model
    pricing), burn rate, and a source breakdown via the `entrypoint` field
    already present on each line — confirmed values on this machine: `cli`,
    `claude-vscode`, `sdk-cli` (Agent SDK / subagents / workflows / headless

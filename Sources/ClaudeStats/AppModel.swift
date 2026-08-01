@@ -14,7 +14,16 @@ final class AppModel: ObservableObject {
     @Published private(set) var estimatedCostToday: Double?
     @Published private(set) var breakdown: EntrypointBreakdown?
     @Published private(set) var modelUsage: [ModelUsage] = []
-    @Published private(set) var lastError: String?
+    @Published private(set) var usingSampleData: Bool
+
+    /// Kept independent per subsystem so one reload's success can't clobber
+    /// another's still-live failure — see `lastError`.
+    @Published private(set) var localStatsError: String?
+    @Published private(set) var breakdownError: String?
+    @Published private(set) var quotaError: String?
+
+    /// The line shown in the popover's error banner, if any.
+    var lastError: String? { localStatsError ?? breakdownError ?? quotaError }
 
     /// Window selected by the "This Mac" toggle.
     @Published var selectedWindow: TimeWindow = .fiveHour {
@@ -23,30 +32,47 @@ final class AppModel: ObservableObject {
 
     private let quotaProvider: any QuotaProviding
     private var usageStore: any UsageStoring
+    private var refreshTask: Task<Void, Never>?
+    private var lastQuotaPoll: Date?
+    private let minimumQuotaPollInterval: TimeInterval = 60
 
-    init(quotaProvider: any QuotaProviding, usageStore: any UsageStoring) {
+    init(quotaProvider: any QuotaProviding, usageStore: any UsageStoring, usingSampleData: Bool = false) {
         self.quotaProvider = quotaProvider
         self.usageStore = usageStore
+        self.usingSampleData = usingSampleData
     }
 
     /// Swaps in a freshly-rebuilt store (the FSEvents-triggered refresh path)
-    /// without replacing the `AppModel` instance the views are bound to.
+    /// without replacing the `AppModel` instance the views are bound to, and
+    /// reloads the published local-stats/breakdown state from it immediately.
     func updateUsageStore(_ newStore: any UsageStoring) {
         usageStore = newStore
+        reloadLocalStats()
+        reloadBreakdown()
     }
 
-    /// Reload everything. Later work replaces the manual call with an
-    /// FSEvents-driven refresh plus a quota polling timer.
-    func refresh() {
+    /// Reload everything. The quota network poll is throttled to
+    /// `minimumQuotaPollInterval` unless `force` is set (manual "Refresh").
+    func refresh(force: Bool = false) {
         reloadLocalStats()
         reloadBreakdown()
 
-        Task { [quotaProvider] in
+        let shouldPollQuota = force || lastQuotaPoll.map {
+            Date().timeIntervalSince($0) >= minimumQuotaPollInterval
+        } ?? true
+        guard shouldPollQuota else { return }
+        lastQuotaPoll = Date()
+
+        refreshTask?.cancel()
+        refreshTask = Task { [quotaProvider] in
             do {
                 let snapshot = try await quotaProvider.currentSnapshot()
+                guard !Task.isCancelled else { return }
                 self.snapshot = snapshot
+                self.quotaError = nil
             } catch {
-                self.lastError = String(describing: error)
+                guard !Task.isCancelled else { return }
+                self.quotaError = String(describing: error)
             }
         }
     }
@@ -57,16 +83,18 @@ final class AppModel: ObservableObject {
             burnRatePerHour = try usageStore.burnRatePerHour()
             estimatedCostToday = try usageStore.estimatedCostToday()
             modelUsage = try usageStore.modelUsage(last24h: true)
+            localStatsError = nil
         } catch {
-            lastError = String(describing: error)
+            localStatsError = String(describing: error)
         }
     }
 
     private func reloadBreakdown() {
         do {
             breakdown = try usageStore.entrypointBreakdown(for: selectedWindow)
+            breakdownError = nil
         } catch {
-            lastError = String(describing: error)
+            breakdownError = String(describing: error)
         }
     }
 
@@ -95,14 +123,13 @@ extension AppModel {
             quotaProvider: MockQuotaProvider(snapshot: snapshot ?? .placeholder()),
             usageStore: store
         )
-        model.selectedWindow = window
+        model.selectedWindow = window // already populates `breakdown` via didSet
         model.snapshot = snapshot
         model.planTier = try? store.detectedPlanTier()
         model.burnRatePerHour = try? store.burnRatePerHour()
         model.estimatedCostToday = try? store.estimatedCostToday()
         model.modelUsage = (try? store.modelUsage(last24h: true)) ?? []
-        model.breakdown = try? store.entrypointBreakdown(for: window)
-        model.lastError = error
+        model.quotaError = error
         return model
     }
 

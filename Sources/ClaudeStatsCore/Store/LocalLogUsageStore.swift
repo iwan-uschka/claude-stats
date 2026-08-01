@@ -33,7 +33,12 @@ public struct LocalLogUsageStore: UsageStoring {
         calendar: Calendar = .current,
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
-        self.events = events.sorted { $0.timestamp < $1.timestamp }
+        // `adding(events:)` merges two individually-sorted sequences; skip the
+        // O(n log n) resort of the whole accumulated history when the
+        // concatenation is already in order, which is the common case for an
+        // incremental refresh.
+        let alreadySorted = zip(events, events.dropFirst()).allSatisfy { $0.timestamp <= $1.timestamp }
+        self.events = alreadySorted ? events : events.sorted { $0.timestamp < $1.timestamp }
         self.skippedLines = skippedLines
         self.calendar = calendar
         self.nowProvider = now
@@ -200,6 +205,15 @@ public struct LocalLogUsageStore: UsageStoring {
         return PlanTier.nearestKnownTier(forFiveHourTokens: p90)
     }
 
+    /// Quota-weighted tokens (``TokenUsage/quotaWeightedTokens``) in `window`,
+    /// ending at "now" — the same metric ``detectedPlanTier()`` calibrates
+    /// against, so estimators divide like-for-like against a plan budget.
+    public func quotaWeightedTokens(in window: TimeWindow) throws -> Int {
+        let now = nowProvider()
+        return events(in: window.startDate(endingAt: now), to: now)
+            .reduce(0) { $0 + $1.usage.quotaWeightedTokens }
+    }
+
     // MARK: - Derived values
 
     /// Number of days of local history the plan-tier heuristic looks at.
@@ -222,7 +236,15 @@ public struct LocalLogUsageStore: UsageStoring {
             buckets[index, default: 0] += event.usage.quotaWeightedTokens
         }
 
-        let totals = buckets.values.filter { $0 > 0 }.sorted()
+        // Bucket 0 (the most recent) only ever collects a fraction of a real
+        // 5-hour window unless "now" lands exactly on a boundary, which would
+        // skew the percentile downward right after a burst of recent usage.
+        // Excluded whenever other history exists to fall back on; kept when
+        // it's the only data available (e.g. right after a fresh install).
+        var totals = buckets.filter { $0.key != 0 }.values.filter { $0 > 0 }.sorted()
+        if totals.isEmpty {
+            totals = buckets.values.filter { $0 > 0 }.sorted()
+        }
         guard !totals.isEmpty else { return 0 }
         // Nearest-rank percentile: smallest value with at least 90% of samples at or below it.
         let rank = Int((LocalLogUsageStore.planDetectionPercentile * Double(totals.count)).rounded(.up))

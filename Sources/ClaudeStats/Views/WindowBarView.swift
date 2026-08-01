@@ -28,7 +28,6 @@ struct WindowBarView: View {
                 .frame(width: 92, alignment: .trailing)
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(title)
     }
 }
 

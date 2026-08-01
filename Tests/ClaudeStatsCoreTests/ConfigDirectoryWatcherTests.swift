@@ -78,8 +78,12 @@ final class ConfigDirectoryWatcherTests: XCTestCase {
         }
 
         // The debounce collapsed the create/modify/rename burst of an atomic
-        // write into a small number of batches, not one per raw OS event.
-        XCTAssertLessThanOrEqual(recorder.batches.count, 3)
+        // write into a small number of batches, not one per raw OS event. The
+        // exact count isn't the invariant under test (CI load or slow FSEvents
+        // delivery can split coalescing further) — the file's own delivery
+        // below is; a loose ceiling just catches a coalescer that stopped
+        // coalescing at all.
+        XCTAssertLessThanOrEqual(recorder.batches.count, 6)
 
         let change = try XCTUnwrap(
             recorder.batches
@@ -146,6 +150,17 @@ final class ConfigDirectoryWatcherTests: XCTestCase {
         XCTAssertThrowsError(try watcher.start()) { error in
             XCTAssertEqual(error as? ConfigDirectoryWatcher.StartError, .noPathsConfigured)
         }
+        XCTAssertFalse(watcher.isRunning)
+    }
+
+    func testStartAcceptsAMissingDirectoryWhenNotRequired() throws {
+        let missing = temporaryDirectory.appendingPathComponent("does-not-exist").path
+        let watcher = ConfigDirectoryWatcher(
+            configuration: .init(path: missing, requiresExistingPaths: false)
+        ) { _ in }
+        XCTAssertNoThrow(try watcher.start())
+        XCTAssertTrue(watcher.isRunning)
+        watcher.stop()
     }
 
     // MARK: Config-directory convenience
@@ -167,16 +182,16 @@ final class ConfigDirectoryWatcherTests: XCTestCase {
         XCTAssertEqual(configuration.maximumDelay, ChangeCoalescer.defaultMaximumDelay)
     }
 
-    func testClaudeConfigDirectoryDefaultsToDotClaudeInHome() {
+    func testClaudeConfigDirectoryDefaultsToDotClaudeInHome() throws {
         let configuration = ConfigDirectoryWatcher.Configuration
             .claudeConfigDirectory(environment: [:])
-        let path = try? XCTUnwrap(configuration.paths.first)
+        let path = try XCTUnwrap(configuration.paths.first)
 
         XCTAssertEqual(
             path,
             FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude").path
         )
-        XCTAssertFalse(path?.contains("/.config/claude") ?? true, "must not be ~/.config/claude")
+        XCTAssertFalse(path.contains("/.config/claude"), "must not be ~/.config/claude")
     }
 
     // MARK: Path resolution

@@ -163,9 +163,11 @@ final class SVGPathParserTests: XCTestCase {
 
     func testPathMustStartWithAMoveTo() {
         XCTAssertThrowsError(try path("L10 10")) { error in
+            // Offset points at the offending command letter itself (index 0),
+            // not one character past it.
             XCTAssertEqual(
                 error as? SVGPathParseError,
-                .missingInitialMoveTo(offset: 1)
+                .missingInitialMoveTo(offset: 0)
             )
         }
     }

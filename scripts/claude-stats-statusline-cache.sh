@@ -67,7 +67,10 @@
 # Without `jq`, the raw payload is written verbatim and the app uses the file's
 # modification time as the capture time. Both shapes are accepted by the reader.
 #
-# Override the cache directory with $CLAUDE_STATS_CACHE_DIR (used by tests).
+# Override the cache directory with $CLAUDE_STATS_CACHE_DIR — useful for
+# manually exercising this script against a scratch directory. (No automated
+# test harness exercises this script yet; that claim was previously here but
+# wasn't true — the repo has no shell test runner.)
 
 set -uo pipefail
 

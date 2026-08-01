@@ -9,6 +9,9 @@ enum PopoverMetrics {
     static let labelColumnWidth: CGFloat = 84
     /// Width of the trailing numeric column (token counts).
     static let valueColumnWidth: CGFloat = 74
+    /// Width of the token column in the "By model" section — wider than
+    /// ``valueColumnWidth`` to fit the larger all-time token counts shown there.
+    static let modelTokenColumnWidth: CGFloat = valueColumnWidth + 24
     /// Width of the cost column in the "By model" section.
     static let costColumnWidth: CGFloat = 54
     static let rowSpacing: CGFloat = 8

@@ -65,6 +65,11 @@ public enum SVGPathParser {
             scanner.skipSeparators()
             if scanner.isAtEnd { break }
 
+            // Captured before consuming the command letter, so a thrown
+            // `missingInitialMoveTo` points at the offending letter itself
+            // rather than one character past it.
+            let commandOffset = scanner.offset
+
             if let letter = scanner.takeCommand() {
                 command = letter
             } else if let previous = command {
@@ -85,7 +90,7 @@ public enum SVGPathParser {
             let relative = active.isLowercase
 
             if !hasStarted, active != "M", active != "m" {
-                throw SVGPathParseError.missingInitialMoveTo(offset: scanner.offset)
+                throw SVGPathParseError.missingInitialMoveTo(offset: commandOffset)
             }
 
             switch active {
@@ -181,6 +186,7 @@ public enum SVGPathParser {
                 current = subpathStart
                 lastCubicControl = nil
                 lastQuadControl = nil
+                command = nil // Z takes no arguments; nothing to implicitly repeat.
 
             default:
                 throw SVGPathParseError.unexpectedCharacter(active, offset: scanner.offset)

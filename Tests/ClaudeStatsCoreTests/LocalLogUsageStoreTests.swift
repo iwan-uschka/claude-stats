@@ -307,8 +307,8 @@ final class LocalLogUsageStoreTests: XCTestCase {
         XCTAssertNil(ModelPricing.forModelID("<synthetic>"))
     }
 
-    func testCacheWriteTTLChangesCost() {
-        let pricing = try! XCTUnwrap(ModelPricing.forFamily(.sonnet))
+    func testCacheWriteTTLChangesCost() throws {
+        let pricing = try XCTUnwrap(ModelPricing.forFamily(.sonnet))
         let write5m = TokenUsage(cacheCreationInputTokens: 1_000_000, ephemeral5mInputTokens: 1_000_000)
         let write1h = TokenUsage(cacheCreationInputTokens: 1_000_000, ephemeral1hInputTokens: 1_000_000)
         let unattributed = TokenUsage(cacheCreationInputTokens: 1_000_000)
@@ -437,6 +437,33 @@ final class LocalLogUsageStoreTests: XCTestCase {
         XCTAssertEqual(store.fiveHourWindowP90(), 100_000)
     }
 
+    func testFiveHourWindowP90ExcludesThePartialCurrentBucketWhenOlderHistoryExists() throws {
+        let now = Self.referenceNow
+        // A big burst 60s ago (partial "current" bucket) plus 7 fully-populated
+        // older-day buckets at a much lower, consistent level. Including the
+        // burst in the percentile would skew P90 toward it; excluding it (the
+        // fix here) keeps P90 anchored to the representative older buckets.
+        var events = [
+            UsageEvent(
+                timestamp: now.addingTimeInterval(-60),
+                entrypoint: .cli,
+                modelID: "claude-sonnet-5",
+                usage: TokenUsage(inputTokens: 5_000_000)
+            ),
+        ]
+        events += (1...7).map { day in
+            UsageEvent(
+                timestamp: now.addingTimeInterval(-Double(day) * 86_400 - 60),
+                entrypoint: .cli,
+                modelID: "claude-sonnet-5",
+                usage: TokenUsage(inputTokens: 19_000)
+            )
+        }
+        let store = LocalLogUsageStore(events: events, calendar: Self.utcCalendar, now: { now })
+
+        XCTAssertEqual(store.fiveHourWindowP90(), 19_000)
+    }
+
     // MARK: - Config directory resolution
 
     func testResolveHonoursCLAUDE_CONFIG_DIR() throws {
@@ -511,7 +538,6 @@ final class LocalLogUsageStoreTests: XCTestCase {
         XCTAssertEqual(try store.entrypointBreakdown(for: .fiveHour).totalTokens, 16_550)
         XCTAssertEqual(try store.modelUsage(last24h: true).count, 4)
         XCTAssertEqual(store.skippedLines.count, 1, "only the truncated fixture line")
-        XCTAssertTrue(store.events.map(\.timestamp).sorted() == store.events.map(\.timestamp))
     }
 
     func testInitFromEnvironmentUsesTheOverride() throws {
@@ -569,6 +595,29 @@ final class LocalLogUsageStoreTests: XCTestCase {
         XCTAssertEqual(merged.events.map(\.timestamp), merged.events.map(\.timestamp).sorted())
         XCTAssertEqual(try merged.entrypointBreakdown(for: .fiveHour).tokens(for: .vscode), 150)
         XCTAssertEqual(try merged.entrypointBreakdown(for: .fiveHour).tokens(for: .cli), 13_800)
+    }
+
+    func testAddingOutOfOrderEventsStillSortsTheResult() {
+        // Synthetic, deliberately out-of-order data — the fixture-based test
+        // above happens to already be chronological end-to-end, which would
+        // pass whether or not the merge actually sorted anything.
+        let now = Self.referenceNow
+        let store = LocalLogUsageStore(
+            events: [
+                UsageEvent(timestamp: now, entrypoint: .cli, modelID: "claude-sonnet-5", usage: TokenUsage(inputTokens: 1)),
+            ],
+            calendar: Self.utcCalendar,
+            now: { now }
+        )
+        let outOfOrder = [
+            UsageEvent(timestamp: now.addingTimeInterval(-3600), entrypoint: .cli, modelID: "claude-sonnet-5", usage: TokenUsage(inputTokens: 2)),
+            UsageEvent(timestamp: now.addingTimeInterval(-7200), entrypoint: .cli, modelID: "claude-sonnet-5", usage: TokenUsage(inputTokens: 3)),
+        ]
+        let merged = store.adding(events: outOfOrder)
+
+        let naiveConcatenation = store.events + outOfOrder
+        XCTAssertNotEqual(naiveConcatenation.map(\.timestamp), merged.events.map(\.timestamp))
+        XCTAssertEqual(merged.events.map(\.timestamp), merged.events.map(\.timestamp).sorted())
     }
 
     func testEventsInRangeIsInclusiveAtBothEnds() throws {

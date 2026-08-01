@@ -22,6 +22,11 @@ enum QuotaJSON {
     /// Reset-timestamp key spellings.
     static let resetKeys = ["resets_at", "resetsAt", "reset_at", "resetAt"]
 
+    /// Capture-timestamp key spellings (currently only used by the statusline
+    /// cache payload, but centralised alongside `resetKeys` for the next
+    /// source that needs one).
+    static let capturedAtKeys = ["captured_at", "capturedAt"]
+
     static func object(_ value: Any?) -> [String: Any]? {
         value as? [String: Any]
     }
@@ -35,13 +40,18 @@ enum QuotaJSON {
     }
 
     static func double(_ value: Any?) -> Double? {
+        let result: Double?
         switch value {
-        case let number as NSNumber: return number.doubleValue
-        case let double as Double: return double
-        case let int as Int: return Double(int)
-        case let string as String: return Double(string)
-        default: return nil
+        case let number as NSNumber: result = number.doubleValue
+        case let double as Double: result = double
+        case let int as Int: result = Double(int)
+        case let string as String: result = Double(string)
+        default: result = nil
         }
+        // `Double("nan")`/`Double("inf")` parse successfully in Swift; reject
+        // them here so a malformed upstream value fails the coercion instead
+        // of silently propagating a NaN through `QuotaWindow.fractionUsed`.
+        return result.flatMap { $0.isFinite ? $0 : nil }
     }
 
     /// Coerces a reset timestamp: epoch seconds, epoch milliseconds, or ISO-8601.
@@ -87,11 +97,14 @@ enum QuotaJSON {
     ///
     /// - Returns: `nil` when neither window is present at all.
     static func windows(in root: [String: Any]) -> (fiveHour: QuotaWindow, sevenDay: QuotaWindow)? {
-        // Unwrap one level if the windows live under a wrapper.
-        let container = nestedObject(in: root, keys: ["rate_limits", "rateLimits", "usage", "data"])
-            ?? root
-        let fiveHour = window(container["five_hour"]) ?? window(container["fiveHour"])
-        let sevenDay = window(container["seven_day"]) ?? window(container["sevenDay"])
+        // Prefer the root's own keys; fall back to a wrapper only for whichever
+        // window the root didn't have, so a root that already carries real
+        // windows can't be shadowed by an unrelated object under a wrapper key.
+        let wrapper = nestedObject(in: root, keys: ["rate_limits", "rateLimits", "usage", "data"])
+        let fiveHour = window(root["five_hour"]) ?? window(root["fiveHour"])
+            ?? wrapper.flatMap { window($0["five_hour"]) ?? window($0["fiveHour"]) }
+        let sevenDay = window(root["seven_day"]) ?? window(root["sevenDay"])
+            ?? wrapper.flatMap { window($0["seven_day"]) ?? window($0["sevenDay"]) }
         // Each window can be independently absent; require at least one.
         guard fiveHour != nil || sevenDay != nil else { return nil }
         return (fiveHour ?? .empty, sevenDay ?? .empty)

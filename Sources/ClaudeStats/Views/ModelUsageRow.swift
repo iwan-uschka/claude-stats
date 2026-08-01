@@ -16,7 +16,7 @@ struct ModelUsageRow: View {
             Text("\(DisplayFormat.tokens(usage.tokens)) tok")
                 .font(PopoverMetrics.valueFont)
                 .foregroundStyle(.secondary)
-                .frame(width: PopoverMetrics.valueColumnWidth + 24, alignment: .trailing)
+                .frame(width: PopoverMetrics.modelTokenColumnWidth, alignment: .trailing)
 
             Text(DisplayFormat.cost(usage.estimatedCostUSD))
                 .font(PopoverMetrics.valueFont)

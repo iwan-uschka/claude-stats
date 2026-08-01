@@ -37,6 +37,12 @@ public protocol UsageStoring: Sendable {
 
     /// Plan tier inferred from local history.
     func detectedPlanTier() throws -> PlanTier
+
+    /// Quota-weighted tokens (``TokenUsage/quotaWeightedTokens``) in the given
+    /// rolling window — the same metric ``detectedPlanTier()`` calibrates
+    /// against, so a local-estimate quota percentage divides like-for-like
+    /// instead of comparing raw tokens to a quota-weighted budget.
+    func quotaWeightedTokens(in window: TimeWindow) throws -> Int
 }
 
 /// Errors surfaced by the data layer.
