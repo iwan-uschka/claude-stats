@@ -69,11 +69,32 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
     }
 
     private func showPopover() {
-        guard let button = statusItem.button else { return }
+        guard statusItem.button != nil else { return }
+        // An `.accessory`-policy app never otherwise activates; without this,
+        // NSPopover's anchor math for a status-item button is unreliable and
+        // the popover can render overlapping the menu bar instead of below it.
+        // Activation is asynchronous — showing the popover on the same
+        // run-loop turn still sees pre-activation window-server state, so the
+        // actual `show` is deferred to the next tick.
+        NSApp.activate(ignoringOtherApps: true)
         model.refresh()
         clock.resume()
-        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-        popover.contentViewController?.view.window?.makeKey()
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let button = self.statusItem.button else { return }
+            // NSHostingController's fitting size isn't reliably ready the
+            // instant the popover is asked to show — `show()` can anchor
+            // using a stale/undersized layout and never re-anchor once
+            // SwiftUI's real size lands, leaving the window's top edge
+            // wherever the wrong size put it (observed: overlapping the menu
+            // bar). Forcing layout and handing NSPopover the real size first
+            // makes the anchor math correct from the first frame.
+            if let hostingView = self.popover.contentViewController?.view {
+                hostingView.layoutSubtreeIfNeeded()
+                self.popover.contentSize = hostingView.fittingSize
+            }
+            self.popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            self.popover.contentViewController?.view.window?.makeKey()
+        }
     }
 
     /// Fires for every dismissal path — the button, Escape, and clicking away

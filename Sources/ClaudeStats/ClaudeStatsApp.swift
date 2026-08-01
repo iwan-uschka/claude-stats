@@ -10,6 +10,10 @@ enum ClaudeStatsApp {
     private static var delegate: AppDelegate?
 
     static func main() {
+        // Unbuffered so `print()` diagnostics land immediately when stdout is
+        // redirected to a file — a killed (not `terminate()`d) process never
+        // runs libc's normal flush-on-exit, and buffered output is lost.
+        setvbuf(stdout, nil, _IONBF, 0)
         let app = NSApplication.shared
         let delegate = AppDelegate()
         Self.delegate = delegate
