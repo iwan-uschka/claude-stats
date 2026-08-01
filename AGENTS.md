@@ -119,3 +119,26 @@ source available, math from local logs only).
 - `assets/claude-mark.svg` is the source for both the status-item glyph and
   the generated `AppIcon.appiconset` — regenerate PNG sizes from it rather
   than hand-drawing a new mark.
+
+### Release commands
+
+- `bash make_app.sh <x.y.z>` — builds `.build/release/ClaudeStats`, assembles
+  `ClaudeStats.app`, runs `actool` over
+  `Sources/ClaudeStats/Assets.xcassets`, writes `Info.plist`, ad-hoc-signs.
+  Omit the version to take the newest released one from `CHANGELOG.md`.
+- `bash make_release.sh <x.y.z>` — stamps `[Unreleased]` in `CHANGELOG.md`,
+  calls `make_app.sh`, zips with a SHA-256 sidecar, prints the
+  `gh release create` command. Refuses to run on a dirty tree, an existing
+  tag, a non-semver version, or an empty `[Unreleased]`.
+- `bash scripts/make_icon.sh` — regenerates the `AppIcon.appiconset` PNGs
+  (16/32/64/128/256/512/1024) from `ClaudeMark.pathData`. Only needed after
+  the mark itself changes; the PNGs are committed. The renderer is compiled
+  against `SVGPathParser.swift` + `ClaudeMark.swift`, so the app icon and the
+  menu bar glyph cannot drift apart, and no rsvg/cairo toolchain is required.
+- `Sources/ClaudeStats/Assets.xcassets` is `exclude`d in `Package.swift`:
+  the SwiftPM CLI has no asset-catalog build rule, and declaring it as a
+  resource would ship a bundle nothing reads.
+- `Info.plist` sets `LSUIElement` even though `ClaudeStatsApp.swift` already
+  calls `setActivationPolicy(.accessory)` — launchd reads the key before any
+  of our code runs, so there is no Dock-tile flash on launch. The runtime call
+  stays authoritative for bundle-less `swift run` builds.
