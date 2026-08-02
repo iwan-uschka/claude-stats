@@ -131,10 +131,12 @@ source available, math from local logs only).
   `gh release create` command. Refuses to run on a dirty tree, an existing
   tag, a non-semver version, or an empty `[Unreleased]`.
 - `bash scripts/make_icon.sh` — regenerates the `AppIcon.appiconset` PNGs
-  (16/32/64/128/256/512/1024) from `ClaudeMark.pathData`. Only needed after
-  the mark itself changes; the PNGs are committed. The renderer is compiled
-  against `SVGPathParser.swift` + `ClaudeMark.swift`, so the app icon and the
-  menu bar glyph cannot drift apart, and no rsvg/cairo toolchain is required.
+  (16/32/64/128/256/512/1024) from `scripts/make_icon.swift`'s own drawing
+  code (three generic rounded bars, no Claude branding — deliberate, a
+  third-party app can't use Anthropic's logo as its own icon). Only needed
+  after that file changes; the PNGs are committed. Self-contained CoreGraphics,
+  no rsvg/cairo toolchain required. Unrelated to `assets/claude-mark.svg` /
+  `ClaudeMark.swift`, which is still the menu-bar glyph's own mark.
 - `Sources/ClaudeStats/Assets.xcassets` is `exclude`d in `Package.swift`:
   the SwiftPM CLI has no asset-catalog build rule, and declaring it as a
   resource would ship a bundle nothing reads.
