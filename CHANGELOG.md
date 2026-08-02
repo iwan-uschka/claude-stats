@@ -9,7 +9,7 @@
 - Live quota with a `statusline cache → OAuth usage endpoint → local estimate` fallback chain, each tier labelled with its confidence (`official`, `experimental`, `local_estimate`) and freshness in the popover
 - Plan tier (Pro / Max5 / Max20) auto-detection from known thresholds with a P90-of-recent-history fallback for custom tiers
 - FSEvents-based config directory watching with debouncing and change coalescing, so usage refreshes on write instead of on a poll timer
-- App icon generated from `assets/claude-mark.svg` via `scripts/make_icon.sh`, sharing the app's own SVG path parser so the icon and the menu bar glyph can never diverge
+- App icon generated via `scripts/make_icon.sh`: three generic rounded bars on a neutral background, deliberately not the Claude mark, which stays reserved for the menu bar glyph only
 - `make_app.sh` / `make_release.sh`: ad-hoc-signed `ClaudeStats.app` bundle, zipped with a SHA-256 checksum for direct download
 
 ### Changed
