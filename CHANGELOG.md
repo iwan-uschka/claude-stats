@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-08-02
+
 ### Added
 - Menu bar status item drawing the Claude mark plus two thin vertical bars for the 5-hour and 7-day quota windows, as a template image so it picks up the menu bar's light/dark, highlighted and background tints automatically
 - Popover with per-window usage and reset times, auto-detected plan tier, burn rate, a per-entrypoint (CLI / VS Code / SDK) breakdown across 5h/24h/7d, a per-model token and cost table, and estimated cost today
