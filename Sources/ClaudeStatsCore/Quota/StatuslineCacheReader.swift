@@ -16,8 +16,9 @@ import Foundation
 /// split is therefore: a tiny shell script is the hook and writes the payload to
 /// a cache file; this type reads that file. Installing that script into the
 /// user's real `~/.claude/settings.json` is deliberately **not** done
-/// automatically — see `scripts/claude-stats-statusline-cache.sh` for the script
-/// and the wiring instructions the app should surface in Settings.
+/// automatically — see `Sources/ClaudeStats/Resources/claude-stats-statusline-cache.sh`
+/// for the script (bundled into the app; revealed from Settings) and the wiring
+/// instructions in its header comment.
 ///
 /// ## Cache file
 ///
@@ -68,14 +69,17 @@ public struct StatuslineCacheReader: QuotaProviding {
 
     public let cacheURL: URL
     public let stalenessThreshold: TimeInterval
-    private let fileManager: FileManager
+    /// `FileManager` isn't marked `Sendable`, but `.default` and other instances
+    /// are documented thread-safe (Apple: "the methods of the shared FileManager
+    /// object can be called from multiple threads safely").
+    nonisolated(unsafe) private let fileManager: FileManager
     private let now: @Sendable () -> Date
 
     public init(
         cacheURL: URL = StatuslineCacheReader.defaultCacheURL,
         stalenessThreshold: TimeInterval = QuotaSnapshot.defaultStalenessThreshold,
         fileManager: FileManager = .default,
-        now: @escaping @Sendable () -> Date = Date.init
+        now: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.cacheURL = cacheURL
         self.stalenessThreshold = stalenessThreshold

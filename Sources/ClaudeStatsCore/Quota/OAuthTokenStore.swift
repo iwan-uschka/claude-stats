@@ -101,7 +101,10 @@ public struct FileOAuthTokenStore: OAuthTokenProviding {
     }
 
     public let urls: [URL]
-    private let fileManager: FileManager
+    /// `FileManager` isn't marked `Sendable`, but `.default` and other instances
+    /// are documented thread-safe (Apple: "the methods of the shared FileManager
+    /// object can be called from multiple threads safely").
+    nonisolated(unsafe) private let fileManager: FileManager
 
     public init(urls: [URL] = FileOAuthTokenStore.defaultURLs, fileManager: FileManager = .default) {
         self.urls = urls

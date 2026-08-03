@@ -51,7 +51,7 @@ public struct CompositeQuotaProvider: QuotaProviding {
         oauthSource: QuotaProviding? = nil,
         localEstimateSource: QuotaProviding? = nil,
         stalenessThreshold: TimeInterval = QuotaSnapshot.defaultStalenessThreshold,
-        now: @escaping @Sendable () -> Date = Date.init
+        now: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.statuslineSource = statuslineSource
         self.oauthSource = oauthSource
@@ -65,7 +65,7 @@ public struct CompositeQuotaProvider: QuotaProviding {
         statuslineSource: QuotaProviding? = nil,
         oauthSource: QuotaProviding? = nil,
         stalenessThreshold: TimeInterval = QuotaSnapshot.defaultStalenessThreshold,
-        now: @escaping @Sendable () -> Date = Date.init,
+        now: @escaping @Sendable () -> Date = { Date() },
         localEstimate: @escaping @Sendable () async throws -> QuotaSnapshot
     ) {
         self.init(

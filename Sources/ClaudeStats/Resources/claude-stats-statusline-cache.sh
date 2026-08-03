@@ -26,7 +26,9 @@
 #
 # INSTALL
 # -------
-#   cp scripts/claude-stats-statusline-cache.sh ~/.claude/
+# From the app: Settings > "Reveal Script in Finder", then copy it to ~/.claude/.
+# From a repo checkout:
+#   cp Sources/ClaudeStats/Resources/claude-stats-statusline-cache.sh ~/.claude/
 #   chmod +x ~/.claude/claude-stats-statusline-cache.sh
 #
 # Then edit ~/.claude/settings.json by hand. ClaudeStats does NOT write to your

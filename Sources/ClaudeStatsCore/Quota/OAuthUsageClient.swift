@@ -46,7 +46,7 @@ public struct OAuthUsageClient: QuotaProviding {
         tokenStore: OAuthTokenProviding = ClaudeOAuthTokenStore.makeDefault(),
         session: URLSession = .shared,
         endpoint: URL = OAuthUsageClient.defaultEndpoint,
-        now: @escaping @Sendable () -> Date = Date.init
+        now: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.tokenStore = tokenStore
         self.session = session
