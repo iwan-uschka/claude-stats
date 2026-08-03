@@ -36,7 +36,7 @@ struct SettingsView: View {
                 }
             }
             .labelsHidden()
-            Text("How often the live quota source is polled while the popover is closed. Manual Refresh always bypasses this.")
+            Text("Minimum time between live quota polls. Refreshes triggered by opening the popover or by new session activity are throttled to this; manual Refresh always bypasses it.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -83,38 +83,25 @@ struct SettingsView: View {
     /// `.app`-in-`.app` — no `Info.plist`/executable bit), so `NSWorkspace`
     /// selection is the only way to hand it to the user; it can't be launched.
     private func revealBundledScript() {
-        guard let url = Self.bundledScriptURL() else { return }
+        guard let url = Self.bundledScriptURL() else {
+            NSSound.beep()
+            return
+        }
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
-    /// Deliberately doesn't use SwiftPM's generated `Bundle.module` accessor:
-    /// that only checks `Bundle.main.bundleURL` (the `.app` bundle's own root,
-    /// *not* `Contents/Resources` — nothing ever copies the resource bundle
-    /// there) and a `.build/...` path baked in at compile time on whichever
-    /// machine built the release — never present on a machine that only
-    /// downloaded the zip. Worse, merely referencing `Bundle.module` crashes
-    /// the process outright if both candidates miss, rather than returning
-    /// `nil`. This checks the actual locations the resource bundle can be in:
+    /// Checks the actual locations the resource bundle can be in:
     /// `Contents/Resources` for a packaged `.app` (what `make_app.sh` writes,
     /// and the only one codesign's sealing covers), or next to the executable
-    /// for a `swift run`/`swift build` dev build.
+    /// for a `swift run`/`swift build` dev build. See
+    /// `BundledResourceLocator` for why `Bundle.module` isn't used.
     private static func bundledScriptURL() -> URL? {
-        let bundleName = "ClaudeStats_ClaudeStats.bundle"
-        let fileName = "claude-stats-statusline-cache.sh"
-        let candidateDirectories = [
-            Bundle.main.resourceURL,
-            Bundle.main.bundleURL,
-        ]
-        for directory in candidateDirectories {
-            guard let fileURL = directory?
-                .appendingPathComponent(bundleName)
-                .appendingPathComponent(fileName)
-            else { continue }
-            if FileManager.default.fileExists(atPath: fileURL.path) {
-                return fileURL
-            }
-        }
-        return nil
+        BundledResourceLocator.resolve(
+            bundleName: "ClaudeStats_ClaudeStats.bundle",
+            fileName: "claude-stats-statusline-cache.sh",
+            candidateDirectories: [Bundle.main.resourceURL, Bundle.main.bundleURL],
+            fileExists: { FileManager.default.fileExists(atPath: $0) }
+        )
     }
 }
 

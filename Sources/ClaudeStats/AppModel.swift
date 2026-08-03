@@ -35,8 +35,9 @@ final class AppModel: ObservableObject {
     private var refreshTask: Task<Void, Never>?
     private var lastQuotaPoll: Date?
 
-    /// How often the live quota source is polled while the popover is closed;
-    /// manual "Refresh" always bypasses this. User-configurable in Settings.
+    /// Minimum time between live quota polls. Refreshes are triggered by opening
+    /// the popover or by new session activity, not by a repeating timer; manual
+    /// "Refresh" always bypasses this. User-configurable in Settings.
     @Published private(set) var quotaPollInterval: TimeInterval
 
     /// Selectable cadences shown in the Settings poll-interval picker.
@@ -68,7 +69,7 @@ final class AppModel: ObservableObject {
     }
 
     /// Reload everything. The quota network poll is throttled to
-    /// `minimumQuotaPollInterval` unless `force` is set (manual "Refresh").
+    /// `quotaPollInterval` unless `force` is set (manual "Refresh").
     func refresh(force: Bool = false) {
         reloadLocalStats()
         reloadBreakdown()

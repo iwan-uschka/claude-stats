@@ -24,14 +24,17 @@ enum SettingsWindowController {
     private static func makeWindow(model: AppModel) -> NSWindow {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 380, height: 220),
-            styleMask: [.titled, .closable, .miniaturizable],
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
         window.title = "Claude Stats Settings"
         window.isReleasedWhenClosed = false
         window.center()
-        window.contentView = NSHostingView(rootView: SettingsView(model: model))
+        // `contentViewController` (not `contentView`) so the window adopts the
+        // hosting controller's fitting size instead of squeezing dynamic
+        // SwiftUI content into the fixed `contentRect` height above.
+        window.contentViewController = NSHostingController(rootView: SettingsView(model: model))
         return window
     }
 }
