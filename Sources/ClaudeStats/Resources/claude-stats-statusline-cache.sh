@@ -26,7 +26,9 @@
 #
 # INSTALL
 # -------
-#   cp scripts/claude-stats-statusline-cache.sh ~/.claude/
+# From the app: Settings > "Reveal Script in Finder", then copy it to ~/.claude/.
+# From a repo checkout:
+#   cp Sources/ClaudeStats/Resources/claude-stats-statusline-cache.sh ~/.claude/
 #   chmod +x ~/.claude/claude-stats-statusline-cache.sh
 #
 # Then edit ~/.claude/settings.json by hand. ClaudeStats does NOT write to your
@@ -74,7 +76,7 @@
 
 set -uo pipefail
 
-cache_dir="${CLAUDE_STATS_CACHE_DIR:-$HOME/Library/Application Support/ClaudeStats}"
+cache_dir="${CLAUDE_STATS_CACHE_DIR:-${HOME:-/tmp}/Library/Application Support/ClaudeStats}"
 cache_file="$cache_dir/statusline-cache.json"
 
 # Claude Code hands the payload over on stdin.
@@ -87,6 +89,7 @@ write_cache() {
   mkdir -p "$cache_dir" || return 1
   local tmp
   tmp=$(mktemp "${cache_file}.XXXXXX") || return 1
+  trap 'rm -f "$tmp"' EXIT
 
   if command -v jq >/dev/null 2>&1; then
     if ! printf '%s' "$input" | jq -c \
@@ -97,7 +100,15 @@ write_cache() {
       return 1
     fi
   else
-    printf '%s' "$input" >"$tmp" || { rm -f "$tmp"; return 1; }
+    # Mirror the jq path's "null/absent .rate_limits is falsy" rule, so a
+    # payload without it never clobbers a previously-good cache here either.
+    if printf '%s' "$input" | grep -q '"rate_limits"' \
+        && ! printf '%s' "$input" | grep -Eq '"rate_limits"[[:space:]]*:[[:space:]]*null'; then
+      printf '%s' "$input" >"$tmp" || { rm -f "$tmp"; return 1; }
+    else
+      rm -f "$tmp"
+      return 0
+    fi
   fi
 
   # jq emits nothing when .rate_limits is absent; don't overwrite a good cache

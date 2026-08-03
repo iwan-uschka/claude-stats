@@ -26,6 +26,20 @@ mkdir -p ClaudeStats.app/Contents/Resources
 
 cp .build/release/ClaudeStats ClaudeStats.app/Contents/MacOS/ClaudeStats
 
+# SettingsView resolves this itself (doesn't use SwiftPM's generated
+# Bundle.module accessor — it only checks Bundle.main.bundleURL, the .app's
+# own root, and a baked-in `.build/...` path that only exists on this
+# machine). Contents/Resources is the conventional, codesign-sealed location.
+# Keep in sync with SettingsView.bundledScriptURL()'s `bundleName` — SwiftPM
+# derives this name from the package/target names in Package.swift.
+RESOURCE_BUNDLE=".build/release/ClaudeStats_ClaudeStats.bundle"
+if [ ! -d "$RESOURCE_BUNDLE" ]; then
+  echo "error: $RESOURCE_BUNDLE missing — Settings' script reveal would ship broken"
+  exit 1
+fi
+echo "→ Bundling resources..."
+cp -R "$RESOURCE_BUNDLE" ClaudeStats.app/Contents/Resources/
+
 echo "→ Compiling asset catalog..."
 xcrun actool \
   --output-format human-readable-text \

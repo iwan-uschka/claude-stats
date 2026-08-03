@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Added
+- Settings window: quota poll interval picker (30s / 1m / 2m / 5m, persisted in UserDefaults), active quota-source tier, and "Reveal Script in Finder" for the statusline hook script
+- The statusline cache script ships as a bundled app resource, so it's reachable from a downloaded release rather than a repo checkout only
+
+### Changed
+- The live-quota poll throttle is user-configurable (default 60s) instead of a fixed 60-second minimum
+
 ## [0.1.0] - 2026-08-02
 
 ### Added

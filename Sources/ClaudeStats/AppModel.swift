@@ -34,12 +34,29 @@ final class AppModel: ObservableObject {
     private var usageStore: any UsageStoring
     private var refreshTask: Task<Void, Never>?
     private var lastQuotaPoll: Date?
-    private let minimumQuotaPollInterval: TimeInterval = 60
+
+    /// Minimum time between live quota polls. Refreshes are triggered by opening
+    /// the popover or by new session activity, not by a repeating timer; manual
+    /// "Refresh" always bypasses this. User-configurable in Settings.
+    @Published private(set) var quotaPollInterval: TimeInterval
+
+    /// Selectable cadences shown in the Settings poll-interval picker.
+    static let pollIntervalOptions: [TimeInterval] = [30, 60, 120, 300]
+    private static let pollIntervalDefaultsKey = "de.bitgrip.claude-stats.quotaPollInterval"
 
     init(quotaProvider: any QuotaProviding, usageStore: any UsageStoring, usingSampleData: Bool = false) {
         self.quotaProvider = quotaProvider
         self.usageStore = usageStore
         self.usingSampleData = usingSampleData
+
+        let stored = UserDefaults.standard.double(forKey: Self.pollIntervalDefaultsKey)
+        self.quotaPollInterval = Self.pollIntervalOptions.contains(stored) ? stored : 60
+    }
+
+    /// Persists the new cadence immediately so it survives the next launch.
+    func setQuotaPollInterval(_ interval: TimeInterval) {
+        quotaPollInterval = interval
+        UserDefaults.standard.set(interval, forKey: Self.pollIntervalDefaultsKey)
     }
 
     /// Swaps in a freshly-rebuilt store (the FSEvents-triggered refresh path)
@@ -52,13 +69,13 @@ final class AppModel: ObservableObject {
     }
 
     /// Reload everything. The quota network poll is throttled to
-    /// `minimumQuotaPollInterval` unless `force` is set (manual "Refresh").
+    /// `quotaPollInterval` unless `force` is set (manual "Refresh").
     func refresh(force: Bool = false) {
         reloadLocalStats()
         reloadBreakdown()
 
         let shouldPollQuota = force || lastQuotaPoll.map {
-            Date().timeIntervalSince($0) >= minimumQuotaPollInterval
+            Date().timeIntervalSince($0) >= quotaPollInterval
         } ?? true
         guard shouldPollQuota else { return }
         lastQuotaPoll = Date()
@@ -98,11 +115,8 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// Placeholder for the settings window. Settings UI is out of scope for this
-    /// pass; the popover button is wired now so the layout is final.
-    // TODO: open a real settings window (refresh interval, quota source opt-ins).
     func openSettings() {
-        print("[ClaudeStats] Settings requested — not implemented yet.")
+        SettingsWindowController.show(model: self)
     }
 }
 
