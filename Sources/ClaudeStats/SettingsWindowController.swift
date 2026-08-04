@@ -14,6 +14,14 @@ enum SettingsWindowController {
     static func show(model: AppModel) {
         let target = window ?? makeWindow(model: model)
         window = target
+        // `makeKeyAndOrderFront` alone doesn't reliably restore a miniaturized
+        // window across macOS versions — since this window is kept alive and
+        // reused (not recreated), a user who minimized it in a prior session
+        // can reopen "Settings" and get a window that looks ordered front but
+        // stays non-interactive. Deminiaturize explicitly first.
+        if target.isMiniaturized {
+            target.deminiaturize(nil)
+        }
         // Same reasoning as the popover's `NSApp.activate` call: an
         // `.accessory`-policy app has no Dock icon to click, so nothing else
         // brings this window to the front or gives it key status.
@@ -24,7 +32,7 @@ enum SettingsWindowController {
     private static func makeWindow(model: AppModel) -> NSWindow {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 380, height: 220),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
         )

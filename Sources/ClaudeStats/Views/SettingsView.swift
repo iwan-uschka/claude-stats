@@ -83,11 +83,35 @@ struct SettingsView: View {
     /// `.app`-in-`.app` — no `Info.plist`/executable bit), so `NSWorkspace`
     /// selection is the only way to hand it to the user; it can't be launched.
     private func revealBundledScript() {
-        guard let url = Self.bundledScriptURL() else {
+        guard let bundledURL = Self.bundledScriptURL() else {
             NSSound.beep()
             return
         }
-        NSWorkspace.shared.activateFileViewerSelecting([url])
+        // `ClaudeStats_ClaudeStats.bundle`'s `.bundle` extension makes
+        // LaunchServices type its parent folder as `com.apple.package`
+        // (`com.apple.generic-bundle`), so Finder treats it as opaque and
+        // won't browse inside to select a contained file — it just reveals
+        // the package itself, not the script. Copy the script out to a plain
+        // (non-package) temp location first so selection isn't blocked.
+        let destination = FileManager.default.temporaryDirectory
+            .appendingPathComponent(bundledURL.lastPathComponent)
+        do {
+            if FileManager.default.fileExists(atPath: destination.path) {
+                try FileManager.default.removeItem(at: destination)
+            }
+            try FileManager.default.copyItem(at: bundledURL, to: destination)
+        } catch {
+            NSSound.beep()
+            return
+        }
+        // Deferred past the current run-loop turn: calling this synchronously
+        // from within the button's mouse-up handling gets silently dropped —
+        // WindowServer's focus-stealing suppression blocks the Finder
+        // activation request while this `.accessory`-policy app is still
+        // mid-event. Letting the click finish first avoids that.
+        DispatchQueue.main.async {
+            NSWorkspace.shared.activateFileViewerSelecting([destination])
+        }
     }
 
     /// Checks the actual locations the resource bundle can be in:
