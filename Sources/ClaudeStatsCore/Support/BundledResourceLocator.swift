@@ -28,4 +28,22 @@ public enum BundledResourceLocator {
         }
         return nil
     }
+
+    /// Copies `source` into `directory`, replacing any existing file at the
+    /// destination. Pure and injectable so the replace-then-copy branch is
+    /// testable without touching the filesystem.
+    public static func stage(
+        _ source: URL,
+        into directory: URL,
+        fileExists: (String) -> Bool,
+        remove: (URL) throws -> Void,
+        copy: (URL, URL) throws -> Void
+    ) throws -> URL {
+        let destination = directory.appendingPathComponent(source.lastPathComponent)
+        if fileExists(destination.path) {
+            try remove(destination)
+        }
+        try copy(source, destination)
+        return destination
+    }
 }

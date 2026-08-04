@@ -42,4 +42,51 @@ final class BundledResourceLocatorTests: XCTestCase {
         )
         XCTAssertNil(url)
     }
+
+    func testStageCopiesSourceIntoDirectoryWhenDestinationIsFree() throws {
+        let source = URL(fileURLWithPath: "/bundle/script.sh")
+        let directory = URL(fileURLWithPath: "/tmp")
+        var removed = false
+        var copied: (URL, URL)?
+        let destination = try BundledResourceLocator.stage(
+            source,
+            into: directory,
+            fileExists: { _ in false },
+            remove: { _ in removed = true },
+            copy: { from, to in copied = (from, to) }
+        )
+        XCTAssertEqual(destination, directory.appendingPathComponent("script.sh"))
+        XCTAssertFalse(removed)
+        XCTAssertEqual(copied?.0, source)
+        XCTAssertEqual(copied?.1, destination)
+    }
+
+    func testStageRemovesExistingDestinationBeforeCopying() throws {
+        let source = URL(fileURLWithPath: "/bundle/script.sh")
+        let directory = URL(fileURLWithPath: "/tmp")
+        var removed = false
+        _ = try BundledResourceLocator.stage(
+            source,
+            into: directory,
+            fileExists: { _ in true },
+            remove: { _ in removed = true },
+            copy: { _, _ in }
+        )
+        XCTAssertTrue(removed)
+    }
+
+    func testStagePropagatesCopyFailure() {
+        struct CopyError: Error {}
+        let source = URL(fileURLWithPath: "/bundle/script.sh")
+        let directory = URL(fileURLWithPath: "/tmp")
+        XCTAssertThrowsError(
+            try BundledResourceLocator.stage(
+                source,
+                into: directory,
+                fileExists: { _ in false },
+                remove: { _ in },
+                copy: { _, _ in throw CopyError() }
+            )
+        )
+    }
 }

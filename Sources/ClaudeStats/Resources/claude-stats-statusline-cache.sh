@@ -26,7 +26,8 @@
 #
 # INSTALL
 # -------
-# From the app: Settings > "Reveal Script in Finder", then copy it to ~/.claude/.
+# From the app: Settings > "Reveal Script in Finder" reveals a temporary copy —
+# move it to ~/.claude/ (the temp copy is not a stable path).
 # From a repo checkout:
 #   cp Sources/ClaudeStats/Resources/claude-stats-statusline-cache.sh ~/.claude/
 #   chmod +x ~/.claude/claude-stats-statusline-cache.sh

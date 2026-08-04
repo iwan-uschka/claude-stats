@@ -67,7 +67,7 @@ struct SettingsView: View {
 
             if model.snapshot?.confidence != .official {
                 Text(
-                    "For live 5-hour/7-day percentages straight from Claude Code (the \"official\" tier), install the statusline hook: reveal the bundled script below, copy it to ~/.claude/, then point statusLine at it in ~/.claude/settings.json. The script's header comment has the exact command."
+                    "For live 5-hour/7-day percentages straight from Claude Code (the \"official\" tier), install the statusline hook: reveal the script below (a copy is placed in a temporary folder), move it to ~/.claude/, then point statusLine at it in ~/.claude/settings.json. The script's header comment has the exact command."
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -93,14 +93,17 @@ struct SettingsView: View {
         // won't browse inside to select a contained file — it just reveals
         // the package itself, not the script. Copy the script out to a plain
         // (non-package) temp location first so selection isn't blocked.
-        let destination = FileManager.default.temporaryDirectory
-            .appendingPathComponent(bundledURL.lastPathComponent)
+        let destination: URL
         do {
-            if FileManager.default.fileExists(atPath: destination.path) {
-                try FileManager.default.removeItem(at: destination)
-            }
-            try FileManager.default.copyItem(at: bundledURL, to: destination)
+            destination = try BundledResourceLocator.stage(
+                bundledURL,
+                into: FileManager.default.temporaryDirectory,
+                fileExists: { FileManager.default.fileExists(atPath: $0) },
+                remove: { try FileManager.default.removeItem(at: $0) },
+                copy: { try FileManager.default.copyItem(at: $0, to: $1) }
+            )
         } catch {
+            NSLog("revealBundledScript: copy failed: \(error)")
             NSSound.beep()
             return
         }
@@ -111,6 +114,13 @@ struct SettingsView: View {
         // mid-event. Letting the click finish first avoids that.
         DispatchQueue.main.async {
             NSWorkspace.shared.activateFileViewerSelecting([destination])
+        }
+        // The temp copy has a fixed filename (see comment above), so it's
+        // overwritten on the next reveal rather than accumulating — but clean
+        // it up once Finder has had time to select it, rather than leaving it
+        // parked in the user's temp dir indefinitely between reveals.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30) {
+            try? FileManager.default.removeItem(at: destination)
         }
     }
 
