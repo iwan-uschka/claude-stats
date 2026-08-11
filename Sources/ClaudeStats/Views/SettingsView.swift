@@ -13,6 +13,8 @@ struct SettingsView: View {
             refreshSection
             Divider()
             quotaSourceSection
+            Divider()
+            aboutSection
             Spacer(minLength: 0)
         }
         .padding(20)
@@ -121,6 +123,17 @@ struct SettingsView: View {
         // parked in the user's temp dir indefinitely between reveals.
         DispatchQueue.main.asyncAfter(deadline: .now() + 30) {
             try? FileManager.default.removeItem(at: destination)
+        }
+    }
+
+    // MARK: - About
+
+    private var aboutSection: some View {
+        HStack {
+            Text("About").font(.headline)
+            Spacer()
+            Button("Check for Updates…") { UpdateChecker.shared.check(silent: false) }
+                .controlSize(.small)
         }
     }
 
