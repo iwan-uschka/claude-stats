@@ -19,10 +19,51 @@ Pre-built releases (macOS app bundle, zipped) are available on the
 - Popover with per-window usage and reset countdowns, auto-detected plan tier (Pro / Max5 / Max20 / custom), and current burn rate
 - Per-source breakdown (CLI / VS Code / SDK-agents) across 5h/24h/7d windows, and per-model token/cost totals
 - Local session-log parsing (`~/.claude/projects/*/*.jsonl`) — token counts, cost, burn rate always available, no network or credentials needed
-- Optional live quota percentage layered on top (Claude Code's `statusLine` hook, or a usage-API poll), falling back to a local estimate when neither is available
+- Optional live quota percentage layered on top (Claude Code's `statusLine` hook, or a usage-API poll), falling back to a local estimate when neither is available — see [Quota sources](#quota-sources)
 - FSEvents-driven refresh — updates on write, not on a poll timer
 
 Full architecture and data-source design: see [AGENTS.md](AGENTS.md).
+
+## Quota sources
+
+The popover's 5-hour/7-day percentage bars come from one of three tiers, tried
+in order — the freshness tag in the popover shows which one won:
+
+| Tag | Source | Setup |
+|---|---|---|
+| `official` | Claude Code's `statusLine` hook, cached to disk (stale after ~10 min) | Manual — see below |
+| `experimental` | Polls the undocumented `oauth/usage` endpoint directly | None — reads your existing Claude Code login |
+| `local_estimate` | Math over local session logs (known plan-tier thresholds + your recent usage) | None — always available |
+
+**`official` — statusline hook.** Claude Code's `statusLine` feature can emit
+live rate-limit data, but only while a terminal is actively rendering a status
+line, and only if something is registered to receive it. This app is a menu
+bar app, not a shell hook, so a small script bridges the two: it's the actual
+`statusLine` command and writes what it receives to a cache file this app
+reads. Installing it is a deliberate manual step (not done automatically) —
+open **Settings → About**, click **Reveal Script in Finder**, then follow the
+wiring instructions in the script's header comment (move it into `~/.claude/`
+and point `statusLine` at it in `~/.claude/settings.json`).
+
+**`experimental` — OAuth usage poll.** Reads the same OAuth token Claude Code
+itself uses, from the `Claude Code-credentials` login-Keychain item (the
+first Keychain read will prompt for access, click "Always Allow") and polls
+Anthropic's undocumented usage endpoint directly, independent of whether a
+terminal is open. No setup beyond already being logged into Claude Code, but
+since the endpoint is undocumented it can change or get rate-limited without
+notice — that's what the "experimental" label is warning about, not anything
+you did wrong.
+
+**`local_estimate` — fallback.** When neither live tier has a usable reading
+(nothing installed, or both stale/unreachable), usage is estimated from the
+same local session logs used for token/cost tracking, against known per-tier
+thresholds (Pro / Max5 / Max20) or a P90-of-recent-history fallback for custom
+tiers. Always available, never requires network or credentials, but it's an
+estimate — not the account's authoritative rate-limit window.
+
+Only the live tiers (`official`, `experimental`) are account-wide; both
+reflect usage from other machines/containers on the same Anthropic account
+automatically. `local_estimate` only sees activity logged on the system.
 
 ## Building a release app
 
