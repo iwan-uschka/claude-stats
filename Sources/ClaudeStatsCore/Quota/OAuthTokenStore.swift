@@ -128,12 +128,32 @@ public struct FileOAuthTokenStore: OAuthTokenProviding {
 
 // MARK: - Keychain-backed store
 
+/// Remembers a hard Keychain-access denial for the lifetime of the owning
+/// `KeychainOAuthTokenStore`, so a user who clicks "Deny" is not re-prompted
+/// on every poll. A class (not a struct property) because ``accessToken()``
+/// is non-mutating but still needs to record state across calls.
+private final class KeychainDenialMemo: @unchecked Sendable {
+    private let lock = NSLock()
+    private var denied = false
+
+    var isDenied: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return denied
+    }
+
+    func markDenied() {
+        lock.lock(); defer { lock.unlock() }
+        denied = true
+    }
+}
+
 /// Reads the token from the macOS login Keychain.
 ///
 /// Claude Code stores the same JSON blob as the credentials file in a
 /// generic-password item under the service name `Claude Code-credentials`
 /// (verified present on this machine, where no `.credentials.json` exists). The
-/// account name is not constrained, so the first matching item wins.
+/// account name is not constrained, so the most recently modified matching
+/// item wins.
 ///
 /// The first read prompts the user for Keychain access, since this app is a
 /// different binary from the one that created the item.
@@ -141,12 +161,16 @@ public struct KeychainOAuthTokenStore: OAuthTokenProviding {
     public static let defaultService = "Claude Code-credentials"
 
     public let service: String
+    private let denialMemo = KeychainDenialMemo()
 
     public init(service: String = KeychainOAuthTokenStore.defaultService) {
         self.service = service
     }
 
     public func accessToken() throws -> String {
+        guard !denialMemo.isDenied else {
+            throw ClaudeStatsError.missingCredentials
+        }
         guard let ref = newestItemPersistentRef() else {
             throw ClaudeStatsError.missingCredentials
         }
@@ -161,9 +185,12 @@ public struct KeychainOAuthTokenStore: OAuthTokenProviding {
         ]
         var result: CFTypeRef?
         let status = SecItemCopyMatching(dataQuery as CFDictionary, &result)
+        if status == errSecAuthFailed || status == errSecUserCanceled {
+            denialMemo.markDenied()
+        }
         guard status == errSecSuccess, let data = result as? Data,
               let token = OAuthCredentialsJSON.accessToken(from: data) else {
-            print("[ClaudeStats] Keychain data fetch for \"\(service)\" failed: OSStatus \(status)")
+            logKeychainFailure("data fetch", status: status)
             throw ClaudeStatsError.missingCredentials
         }
         return token
@@ -188,7 +215,7 @@ public struct KeychainOAuthTokenStore: OAuthTokenProviding {
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         guard status == errSecSuccess, let items = result as? [[String: Any]] else {
-            print("[ClaudeStats] Keychain lookup for \"\(service)\" failed: OSStatus \(status)")
+            logKeychainFailure("lookup", status: status)
             return nil
         }
         let newest = items.max { lhs, rhs in
@@ -197,6 +224,14 @@ public struct KeychainOAuthTokenStore: OAuthTokenProviding {
             return lhsDate < rhsDate
         }
         return newest?[kSecValuePersistentRef as String] as? Data
+    }
+
+    /// `errSecItemNotFound` is the expected status when no Keychain item is
+    /// present yet (or the file store handles credentials instead) — only
+    /// genuine failures are worth logging.
+    private func logKeychainFailure(_ context: String, status: OSStatus) {
+        guard status != errSecItemNotFound else { return }
+        print("[ClaudeStats] Keychain \(context) for \"\(service)\" failed: OSStatus \(status)")
     }
 }
 
@@ -212,6 +247,11 @@ public struct ChainedOAuthTokenStore: OAuthTokenProviding {
 
     public func accessToken() throws -> String {
         for store in stores {
+            // One retry per store: a `missingCredentials` can be a genuine
+            // absence, or the losing side of the narrow TOCTOU window between
+            // a Keychain store's lookup and data-fetch queries — a second
+            // attempt costs little and resolves the latter.
+            if let token = try? store.accessToken() { return token }
             if let token = try? store.accessToken() { return token }
         }
         throw ClaudeStatsError.missingCredentials

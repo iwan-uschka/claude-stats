@@ -21,8 +21,8 @@ public struct ClosureQuotaProvider: QuotaProviding {
 ///
 /// Order is fixed: fresh statusline cache (`.official`) → `oauth/usage` poll
 /// (`.experimental`) → local-log estimate (`.localEstimate`). The first source
-/// that returns a usable snapshot wins; every failure is swallowed and the next
-/// tier is tried.
+/// that returns a usable snapshot wins; a tier not being configured is expected
+/// and silent, but any other failure is logged before moving to the next tier.
 ///
 /// "Usable" means non-stale for the two live tiers: a snapshot older than
 /// ``stalenessThreshold`` is discarded even if the source handed it over, because
@@ -97,7 +97,9 @@ public struct CompositeQuotaProvider: QuotaProviding {
             do {
                 snapshot = try await source.currentSnapshot()
             } catch {
-                print("[ClaudeStats] quota source \(type(of: source)) unavailable: \(error)")
+                if !Self.isExpectedTierAbsence(error) {
+                    print("[ClaudeStats] quota source \(type(of: source)) unavailable: \(error)")
+                }
                 continue
             }
             guard !snapshot.isStale(asOf: now(), threshold: stalenessThreshold) else {
@@ -107,10 +109,25 @@ public struct CompositeQuotaProvider: QuotaProviding {
             return snapshot
         }
 
-        if let localEstimateSource, let snapshot = try? await localEstimateSource.currentSnapshot() {
-            return snapshot
+        if let localEstimateSource {
+            do {
+                return try await localEstimateSource.currentSnapshot()
+            } catch {
+                print("[ClaudeStats] local-estimate quota source unavailable: \(error)")
+            }
         }
 
         throw ClaudeStatsError.noQuotaSourceAvailable
+    }
+
+    /// `.noQuotaSourceAvailable` / `.missingCredentials` are the documented
+    /// "tier not configured" sentinels — expected, not diagnostic.
+    private static func isExpectedTierAbsence(_ error: Error) -> Bool {
+        switch error {
+        case ClaudeStatsError.noQuotaSourceAvailable, ClaudeStatsError.missingCredentials:
+            return true
+        default:
+            return false
+        }
     }
 }

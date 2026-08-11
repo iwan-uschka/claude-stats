@@ -9,6 +9,10 @@
 ### Changed
 - The live-quota poll throttle is user-configurable (default 60s) instead of a fixed 60-second minimum
 
+### Fixed
+- The OAuth usage tier (`experimental` confidence) never worked on macOS: the Keychain query combined `kSecReturnData` with `kSecMatchLimitAll` and failed with `errSecParam`, so every install silently fell through to the local-log estimate and no Keychain access prompt was ever shown
+- Quota-source fallthroughs are logged instead of silently swallowed, except for the expected "tier not configured" case
+
 ## [0.1.0] - 2026-08-02
 
 ### Added
