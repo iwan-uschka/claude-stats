@@ -3,6 +3,9 @@
 ## [Unreleased]
 
 ### Added
+- Update check against the GitHub releases API: silent once on launch, plus an
+  on-demand "Check for Updates…" button in Settings → About. Only https
+  github.com release URLs are opened.
 - Settings window: quota poll interval picker (30s / 1m / 2m / 5m, persisted in UserDefaults), active quota-source tier, and "Reveal Script in Finder" for the statusline hook script
 - The statusline cache script ships as a bundled app resource, so it's reachable from a downloaded release rather than a repo checkout only
 
