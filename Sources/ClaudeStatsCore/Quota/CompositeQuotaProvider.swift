@@ -93,8 +93,17 @@ public struct CompositeQuotaProvider: QuotaProviding {
     public func currentSnapshot() async throws -> QuotaSnapshot {
         for source in [statuslineSource, oauthSource] {
             guard let source else { continue }
-            guard let snapshot = try? await source.currentSnapshot() else { continue }
-            guard !snapshot.isStale(asOf: now(), threshold: stalenessThreshold) else { continue }
+            let snapshot: QuotaSnapshot
+            do {
+                snapshot = try await source.currentSnapshot()
+            } catch {
+                print("[ClaudeStats] quota source \(type(of: source)) unavailable: \(error)")
+                continue
+            }
+            guard !snapshot.isStale(asOf: now(), threshold: stalenessThreshold) else {
+                print("[ClaudeStats] quota source \(type(of: source)) returned a stale snapshot (captured \(snapshot.capturedAt))")
+                continue
+            }
             return snapshot
         }
 

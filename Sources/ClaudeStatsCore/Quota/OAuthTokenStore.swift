@@ -147,33 +147,56 @@ public struct KeychainOAuthTokenStore: OAuthTokenProviding {
     }
 
     public func accessToken() throws -> String {
-        // Fetch every matching item with its modification date rather than
-        // relying on `kSecMatchLimitOne` to pick a sensible one — Keychain
-        // gives no ordering guarantee across multiple generic-password items
-        // under the same service, so without this a stale leftover item could
-        // silently win over the current one.
+        guard let ref = newestItemPersistentRef() else {
+            throw ClaudeStatsError.missingCredentials
+        }
+
+        // `kSecReturnData` combined with `kSecMatchLimitAll` fails with
+        // errSecParam on macOS — the data payload can only be fetched one
+        // item at a time. This second query, filtered to the exact item
+        // found above by persistent ref, fetches just that item's data.
+        let dataQuery: [String: Any] = [
+            kSecValuePersistentRef as String: ref,
+            kSecReturnData as String: true,
+        ]
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(dataQuery as CFDictionary, &result)
+        guard status == errSecSuccess, let data = result as? Data,
+              let token = OAuthCredentialsJSON.accessToken(from: data) else {
+            print("[ClaudeStats] Keychain data fetch for \"\(service)\" failed: OSStatus \(status)")
+            throw ClaudeStatsError.missingCredentials
+        }
+        return token
+    }
+
+    /// Finds the most recently modified matching item and returns a
+    /// persistent reference to it (not its data — see ``accessToken()``).
+    ///
+    /// Fetches every matching item's attributes rather than relying on
+    /// `kSecMatchLimitOne` to pick a sensible one — Keychain gives no
+    /// ordering guarantee across multiple generic-password items under the
+    /// same service, so without this a stale leftover item could silently
+    /// win over the current one.
+    private func newestItemPersistentRef() -> Data? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecMatchLimit as String: kSecMatchLimitAll,
-            kSecReturnData as String: true,
             kSecReturnAttributes as String: true,
+            kSecReturnPersistentRef as String: true,
         ]
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         guard status == errSecSuccess, let items = result as? [[String: Any]] else {
-            throw ClaudeStatsError.missingCredentials
+            print("[ClaudeStats] Keychain lookup for \"\(service)\" failed: OSStatus \(status)")
+            return nil
         }
         let newest = items.max { lhs, rhs in
             let lhsDate = lhs[kSecAttrModificationDate as String] as? Date ?? .distantPast
             let rhsDate = rhs[kSecAttrModificationDate as String] as? Date ?? .distantPast
             return lhsDate < rhsDate
         }
-        guard let data = newest?[kSecValueData as String] as? Data,
-              let token = OAuthCredentialsJSON.accessToken(from: data) else {
-            throw ClaudeStatsError.missingCredentials
-        }
-        return token
+        return newest?[kSecValuePersistentRef as String] as? Data
     }
 }
 
