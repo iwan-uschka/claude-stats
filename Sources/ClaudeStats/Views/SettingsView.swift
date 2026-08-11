@@ -7,9 +7,12 @@ import SwiftUI
 /// `SettingsWindowController`).
 struct SettingsView: View {
     @ObservedObject var model: AppModel
+    @State private var launchAtLoginEnabled = LaunchAtLogin.isEnabled
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
+            generalSection
+            Divider()
             refreshSection
             Divider()
             quotaSourceSection
@@ -19,6 +22,26 @@ struct SettingsView: View {
         }
         .padding(20)
         .frame(width: 380)
+    }
+
+    // MARK: - General
+
+    private var generalSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("General").font(.headline)
+            Toggle(
+                "Launch at login",
+                isOn: Binding(
+                    get: { launchAtLoginEnabled },
+                    set: { newValue in
+                        LaunchAtLogin.setEnabled(newValue)
+                        // Re-read the actual system state rather than trusting
+                        // the requested value — registration can silently fail.
+                        launchAtLoginEnabled = LaunchAtLogin.isEnabled
+                    }
+                )
+            )
+        }
     }
 
     // MARK: - Refresh
