@@ -128,12 +128,32 @@ public struct FileOAuthTokenStore: OAuthTokenProviding {
 
 // MARK: - Keychain-backed store
 
+/// Remembers a hard Keychain-access denial for the lifetime of the owning
+/// `KeychainOAuthTokenStore`, so a user who clicks "Deny" is not re-prompted
+/// on every poll. A class (not a struct property) because ``accessToken()``
+/// is non-mutating but still needs to record state across calls.
+private final class KeychainDenialMemo: @unchecked Sendable {
+    private let lock = NSLock()
+    private var denied = false
+
+    var isDenied: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return denied
+    }
+
+    func markDenied() {
+        lock.lock(); defer { lock.unlock() }
+        denied = true
+    }
+}
+
 /// Reads the token from the macOS login Keychain.
 ///
 /// Claude Code stores the same JSON blob as the credentials file in a
 /// generic-password item under the service name `Claude Code-credentials`
 /// (verified present on this machine, where no `.credentials.json` exists). The
-/// account name is not constrained, so the first matching item wins.
+/// account name is not constrained, so the most recently modified matching
+/// item wins.
 ///
 /// The first read prompts the user for Keychain access, since this app is a
 /// different binary from the one that created the item.
@@ -141,39 +161,77 @@ public struct KeychainOAuthTokenStore: OAuthTokenProviding {
     public static let defaultService = "Claude Code-credentials"
 
     public let service: String
+    private let denialMemo = KeychainDenialMemo()
 
     public init(service: String = KeychainOAuthTokenStore.defaultService) {
         self.service = service
     }
 
     public func accessToken() throws -> String {
-        // Fetch every matching item with its modification date rather than
-        // relying on `kSecMatchLimitOne` to pick a sensible one — Keychain
-        // gives no ordering guarantee across multiple generic-password items
-        // under the same service, so without this a stale leftover item could
-        // silently win over the current one.
+        guard !denialMemo.isDenied else {
+            throw ClaudeStatsError.missingCredentials
+        }
+        guard let ref = newestItemPersistentRef() else {
+            throw ClaudeStatsError.missingCredentials
+        }
+
+        // `kSecReturnData` combined with `kSecMatchLimitAll` fails with
+        // errSecParam on macOS — the data payload can only be fetched one
+        // item at a time. This second query, filtered to the exact item
+        // found above by persistent ref, fetches just that item's data.
+        let dataQuery: [String: Any] = [
+            kSecValuePersistentRef as String: ref,
+            kSecReturnData as String: true,
+        ]
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(dataQuery as CFDictionary, &result)
+        if status == errSecAuthFailed || status == errSecUserCanceled {
+            denialMemo.markDenied()
+        }
+        guard status == errSecSuccess, let data = result as? Data,
+              let token = OAuthCredentialsJSON.accessToken(from: data) else {
+            logKeychainFailure("data fetch", status: status)
+            throw ClaudeStatsError.missingCredentials
+        }
+        return token
+    }
+
+    /// Finds the most recently modified matching item and returns a
+    /// persistent reference to it (not its data — see ``accessToken()``).
+    ///
+    /// Fetches every matching item's attributes rather than relying on
+    /// `kSecMatchLimitOne` to pick a sensible one — Keychain gives no
+    /// ordering guarantee across multiple generic-password items under the
+    /// same service, so without this a stale leftover item could silently
+    /// win over the current one.
+    private func newestItemPersistentRef() -> Data? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecMatchLimit as String: kSecMatchLimitAll,
-            kSecReturnData as String: true,
             kSecReturnAttributes as String: true,
+            kSecReturnPersistentRef as String: true,
         ]
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         guard status == errSecSuccess, let items = result as? [[String: Any]] else {
-            throw ClaudeStatsError.missingCredentials
+            logKeychainFailure("lookup", status: status)
+            return nil
         }
         let newest = items.max { lhs, rhs in
             let lhsDate = lhs[kSecAttrModificationDate as String] as? Date ?? .distantPast
             let rhsDate = rhs[kSecAttrModificationDate as String] as? Date ?? .distantPast
             return lhsDate < rhsDate
         }
-        guard let data = newest?[kSecValueData as String] as? Data,
-              let token = OAuthCredentialsJSON.accessToken(from: data) else {
-            throw ClaudeStatsError.missingCredentials
-        }
-        return token
+        return newest?[kSecValuePersistentRef as String] as? Data
+    }
+
+    /// `errSecItemNotFound` is the expected status when no Keychain item is
+    /// present yet (or the file store handles credentials instead) — only
+    /// genuine failures are worth logging.
+    private func logKeychainFailure(_ context: String, status: OSStatus) {
+        guard status != errSecItemNotFound else { return }
+        print("[ClaudeStats] Keychain \(context) for \"\(service)\" failed: OSStatus \(status)")
     }
 }
 
@@ -189,6 +247,11 @@ public struct ChainedOAuthTokenStore: OAuthTokenProviding {
 
     public func accessToken() throws -> String {
         for store in stores {
+            // One retry per store: a `missingCredentials` can be a genuine
+            // absence, or the losing side of the narrow TOCTOU window between
+            // a Keychain store's lookup and data-fetch queries — a second
+            // attempt costs little and resolves the latter.
+            if let token = try? store.accessToken() { return token }
             if let token = try? store.accessToken() { return token }
         }
         throw ClaudeStatsError.missingCredentials

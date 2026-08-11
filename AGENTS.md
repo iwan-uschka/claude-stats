@@ -38,10 +38,12 @@ Two independent tiers, deliberately decoupled:
      line in a terminal. Cache to disk, treat as stale after ~10 min.
    - Poll `https://api.anthropic.com/api/oauth/usage` (undocumented,
      `anthropic-beta: oauth-2025-04-20`, Bearer token from
-     `~/.claude/.credentials.json`) directly, independent of whether Claude
-     Code is running. Undocumented endpoint — can break or get revoked
-     without notice; token refresh mechanics unverified. Spike before
-     building, don't block v1 on it.
+     `~/.claude/.credentials.json` on Linux, or the `Claude Code-credentials`
+     login-Keychain item on macOS, where Claude Code generally doesn't write
+     the plaintext file) directly, independent of whether Claude Code is
+     running. Undocumented endpoint — can break or get revoked without
+     notice; token refresh mechanics unverified. Spike before building,
+     don't block v1 on it.
    - **This tier is account-wide, not machine-wide** — it already reflects
      AFK docker-loop usage automatically, *because* those containers
      reauthenticate as the same Anthropic account (confirmed: no separate
