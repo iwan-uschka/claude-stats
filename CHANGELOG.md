@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-11
+
 ### Added
 - Update check against the GitHub releases API: silent once on launch, plus an
   on-demand "Check for Updates…" button in Settings → About. Only https
