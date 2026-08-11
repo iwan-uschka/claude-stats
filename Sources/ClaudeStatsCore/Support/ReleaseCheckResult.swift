@@ -18,8 +18,16 @@ public func decodeReleaseCheck(data: Data, httpStatus: Int, localVersion: String
     guard (200...299).contains(httpStatus) else {
         return .httpError(httpStatus)
     }
+    let json: [String: Any]
+    do {
+        guard let parsed = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return .malformedResponse
+        }
+        json = parsed
+    } catch {
+        return .malformedResponse
+    }
     guard
-        let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
         let tag = json["tag_name"] as? String,
         let releaseURL = json["html_url"] as? String
     else {

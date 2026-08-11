@@ -17,4 +17,8 @@ final class ReleaseURLValidationTests: XCTestCase {
         XCTAssertFalse(isTrustedReleaseURL(URL(string: "https://github.com.evil.com/x")!))
         XCTAssertFalse(isTrustedReleaseURL(URL(string: "https://evil.com/github.com")!))
     }
+
+    func testRejectsUserinfoHostSpoof() {
+        XCTAssertFalse(isTrustedReleaseURL(URL(string: "https://github.com@evil.com/x")!))
+    }
 }

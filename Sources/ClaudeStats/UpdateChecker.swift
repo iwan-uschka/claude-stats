@@ -9,10 +9,16 @@ final class UpdateChecker {
     private let apiURL = URL(string: "https://api.github.com/repos/iwan-uschka/claude-stats/releases/latest")!
 
     private var didRunSilentCheck = false
+    private var isChecking = false
 
     private init() {}
 
     func check(silent: Bool) {
+        // Prevents overlapping network requests / stacked alerts if the launch
+        // silent check and an explicit "Check for Updates…" click race. Checked
+        // before touching didRunSilentCheck so a silent check that loses the
+        // race isn't permanently marked as having run.
+        guard !isChecking else { return }
         // Only the first silent check (on launch) runs; explicit checks (from
         // Settings) always run regardless of how many already happened.
         if silent {
@@ -21,9 +27,12 @@ final class UpdateChecker {
         }
         guard let local = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String else {
             print("[ClaudeStats] skipping update check: no bundle version (development build)")
+            if !silent { presentCheckFailed("Update checks aren't available in development builds.") }
             return
         }
+        isChecking = true
         Task {
+            defer { isChecking = false }
             do {
                 let (data, response) = try await URLSession.shared.data(from: apiURL)
                 let httpStatus = (response as? HTTPURLResponse)?.statusCode ?? 200

@@ -38,4 +38,9 @@ final class ReleaseCheckResultTests: XCTestCase {
         let data = Data("not json".utf8)
         XCTAssertEqual(decodeReleaseCheck(data: data, httpStatus: 200, localVersion: "1.0.0"), .malformedResponse)
     }
+
+    func testMalformedResponseWhenBodyIsNotAnObject() {
+        let data = Data("[1,2,3]".utf8)
+        XCTAssertEqual(decodeReleaseCheck(data: data, httpStatus: 200, localVersion: "1.0.0"), .malformedResponse)
+    }
 }
