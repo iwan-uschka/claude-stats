@@ -9,6 +9,9 @@ import SwiftUI
 /// window bars) and is redrawn whenever ``AppModel`` publishes a new snapshot.
 @MainActor
 final class StatusItemController: NSObject, NSPopoverDelegate {
+    /// Diameter of the dev-build indicator dot — see ``addDevBuildIndicator``.
+    private static let devDotDiameter: CGFloat = 6
+
     private let statusItem: NSStatusItem
     private let popover = NSPopover()
     private let model: AppModel
@@ -24,9 +27,13 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
         if let button = statusItem.button {
             button.image = MenuBarGlyph.image(for: model.snapshot)
             button.imagePosition = .imageOnly
-            button.toolTip = "Claude Stats"
+            button.toolTip = MenuBarGlyph.isDevelopmentBuild ? "Claude Stats (dev)" : "Claude Stats"
             button.target = self
             button.action = #selector(togglePopover(_:))
+
+            if MenuBarGlyph.isDevelopmentBuild {
+                addDevBuildIndicator(to: button)
+            }
         }
 
         popover.behavior = .transient
@@ -58,6 +65,25 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
 
     private func updateGlyph(for snapshot: QuotaSnapshot?) {
         statusItem.button?.image = MenuBarGlyph.image(for: snapshot)
+    }
+
+    /// Overlays a small colored dot on the status item's top-left corner.
+    ///
+    /// The glyph itself is a template `NSImage` — macOS strips any color it
+    /// contains and renders it monochrome, so a colored dev-build marker has
+    /// to live outside the image, as a real subview on the button.
+    private func addDevBuildIndicator(to button: NSStatusBarButton) {
+        let dot = NSView(frame: CGRect(
+            x: 0,
+            y: MenuBarGlyph.height - Self.devDotDiameter,
+            width: Self.devDotDiameter,
+            height: Self.devDotDiameter
+        ))
+        dot.wantsLayer = true
+        dot.layer?.backgroundColor = NSColor.systemOrange.cgColor
+        dot.layer?.cornerRadius = Self.devDotDiameter / 2
+        dot.autoresizingMask = [.maxXMargin, .minYMargin]
+        button.addSubview(dot)
     }
 
     @objc private func togglePopover(_ sender: Any?) {
