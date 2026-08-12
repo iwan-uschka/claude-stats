@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+- Dev builds (`swift run` / `swift build`, no `.app` bundle) mark the menu bar
+  item with a small orange dot and a "Claude Stats (dev)" tooltip, so a dev
+  binary is distinguishable from the installed release when both are running
+
 ## [0.3.0] - 2026-08-12
 
 ### Added

@@ -48,7 +48,8 @@ enum MenuBarGlyph {
             return true
         }
         image.isTemplate = true
-        image.accessibilityDescription = "Claude Stats: \(Int(fractions[0] * 100))% five-hour, \(Int(fractions[1] * 100))% seven-day usage"
+        let devSuffix = BuildEnvironment.isDevelopmentBuild ? BuildEnvironment.devBuildSuffix : ""
+        image.accessibilityDescription = "Claude Stats\(devSuffix): \(Int(fractions[0] * 100))% five-hour, \(Int(fractions[1] * 100))% seven-day usage"
         return image
     }
 

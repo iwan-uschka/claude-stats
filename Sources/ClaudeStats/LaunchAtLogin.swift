@@ -18,10 +18,9 @@ enum LaunchAtLogin {
     }
 
     /// `SMAppService.mainApp` needs a real `.app` bundle to register as a
-    /// login item; a bundle-less `swift build` dev binary can't. Mirrors
-    /// `UpdateChecker`'s development-build guard.
+    /// login item; a bundle-less `swift build` dev binary can't.
     static var isSupported: Bool {
-        Bundle.main.bundleURL.pathExtension == "app"
+        !BuildEnvironment.isDevelopmentBuild
     }
 
     @discardableResult
