@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-13
+
 ### Added
 - Settings → Quota source: "Set Up Automatically" installs (and "Remove"
   uninstalls) the `statusLine` hook in `~/.claude/settings.json`, wrapping an
