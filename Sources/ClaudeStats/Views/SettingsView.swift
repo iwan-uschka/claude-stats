@@ -8,6 +8,21 @@ import SwiftUI
 struct SettingsView: View {
     @ObservedObject var model: AppModel
     @State private var launchAtLoginEnabled = LaunchAtLogin.isEnabled
+    @State private var hookState: StatuslineHookInstaller.State?
+    @State private var hookActionFailed = false
+    @State private var pendingHookAction: PendingHookAction?
+
+    /// A confirmation sheet in flight, carrying what it'll show and what to run
+    /// on confirm. `Identifiable` so `.sheet(item:)` can drive it. `fileprivate`
+    /// so `HookConfirmationSheet` below can reference `Kind`.
+    fileprivate struct PendingHookAction: Identifiable {
+        enum Kind {
+            case install(before: String?, after: String)
+            case uninstall(StatuslineHookInstaller.UninstallPreview)
+        }
+        let id = UUID()
+        let kind: Kind
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -27,9 +42,28 @@ struct SettingsView: View {
         // reinitializes — resync on every appearance and every reactivation,
         // since the login item can also change from System Settings behind
         // our back.
-        .onAppear { launchAtLoginEnabled = LaunchAtLogin.isEnabled }
+        .onAppear {
+            launchAtLoginEnabled = LaunchAtLogin.isEnabled
+            refreshHookState()
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             launchAtLoginEnabled = LaunchAtLogin.isEnabled
+            refreshHookState()
+        }
+        .sheet(item: $pendingHookAction) { pending in
+            HookConfirmationSheet(
+                kind: pending.kind,
+                onCancel: { pendingHookAction = nil },
+                onConfirm: {
+                    pendingHookAction = nil
+                    performHookAction(pending.kind)
+                }
+            )
+        }
+        .alert("Couldn't update statusline hook", isPresented: $hookActionFailed) {
+            Button("OK") {}
+        } message: {
+            Text("Nothing was changed. Use the manual steps in the script's header comment instead.")
         }
     }
 
@@ -123,17 +157,132 @@ struct SettingsView: View {
             }
             .font(.system(size: 12))
 
-            if model.snapshot?.confidence != .official {
-                Text(
-                    "For live 5-hour/7-day percentages straight from Claude Code (the \"official\" tier), install the statusline hook: reveal the script below (a copy is placed in a temporary folder), move it to ~/.claude/, then point statusLine at it in ~/.claude/settings.json. The script's header comment has the exact command."
-                )
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            hookStatusView
 
+            if model.snapshot?.confidence != .official {
                 Button("Reveal Script in Finder") { revealBundledScript() }
                     .controlSize(.small)
             }
+        }
+    }
+
+    @ViewBuilder
+    private var hookStatusView: some View {
+        switch hookState {
+        case nil, .notInstalled:
+            Text(
+                "For live 5-hour/7-day percentages straight from Claude Code (the \"official\" tier), install the statusline hook. This edits ~/.claude/settings.json — you'll see exactly what changes before anything is written."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            Button("Set Up Automatically") { beginInstall() }
+                .controlSize(.small)
+
+        case .installed(let wrapping):
+            HStack(spacing: 6) {
+                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                Text("Official tier installed")
+                    .font(.caption)
+            }
+            if let wrapping {
+                Text("Your existing statusline (`\(wrapping)`) is preserved and still runs.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Button("Remove") { beginUninstall() }
+                .controlSize(.small)
+
+        case .installedStale(let wrapping):
+            Text("The installed hook script is out of date.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                Button("Update Script") { updateStaleScript() }
+                    .controlSize(.small)
+                Button("Remove") { beginUninstall() }
+                    .controlSize(.small)
+            }
+            if let wrapping {
+                Text("Wraps: `\(wrapping)`")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func installer() -> StatuslineHookInstaller? {
+        StatuslineHookInstaller.standard()
+    }
+
+    private func bundledScriptData() -> Data? {
+        guard let url = Self.bundledScriptURL() else { return nil }
+        return try? Data(contentsOf: url)
+    }
+
+    private func refreshHookState() {
+        guard let installer = installer() else {
+            hookState = nil
+            return
+        }
+        hookState = try? installer.detectState(bundledScript: bundledScriptData())
+    }
+
+    private func beginInstall() {
+        guard let installer = installer(),
+              let preview = try? installer.previewInstallCommand()
+        else {
+            hookActionFailed = true
+            return
+        }
+        pendingHookAction = PendingHookAction(kind: .install(before: preview.before, after: preview.after))
+    }
+
+    private func beginUninstall() {
+        guard let installer = installer(),
+              let preview = try? installer.previewUninstall()
+        else {
+            hookActionFailed = true
+            return
+        }
+        pendingHookAction = PendingHookAction(kind: .uninstall(preview))
+    }
+
+    private func updateStaleScript() {
+        guard let installer = installer(), let script = bundledScriptData() else {
+            hookActionFailed = true
+            return
+        }
+        do {
+            try installer.updateScriptContentOnly(bundledScript: script)
+            refreshHookState()
+        } catch {
+            NSLog("updateStaleScript failed: \(error)")
+            hookActionFailed = true
+        }
+    }
+
+    private func performHookAction(_ kind: PendingHookAction.Kind) {
+        guard let installer = installer() else {
+            hookActionFailed = true
+            return
+        }
+        do {
+            switch kind {
+            case .install:
+                guard let script = bundledScriptData() else {
+                    hookActionFailed = true
+                    return
+                }
+                _ = try installer.install(bundledScript: script)
+            case .uninstall:
+                try installer.uninstall()
+            }
+            refreshHookState()
+        } catch {
+            NSLog("performHookAction failed: \(error)")
+            hookActionFailed = true
         }
     }
 
@@ -205,6 +354,88 @@ struct SettingsView: View {
             candidateDirectories: [Bundle.main.resourceURL, Bundle.main.bundleURL],
             fileExists: { FileManager.default.fileExists(atPath: $0) }
         )
+    }
+}
+
+/// Before/after confirmation shown ahead of any `install`/`uninstall` call —
+/// these mutate the user's real `~/.claude/settings.json`, so nothing happens
+/// without an explicit look at the diff first.
+private struct HookConfirmationSheet: View {
+    let kind: SettingsView.PendingHookAction.Kind
+    let onCancel: () -> Void
+    let onConfirm: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title).font(.headline)
+            Text("This changes `statusLine` in ~/.claude/settings.json. A timestamped backup of the file is kept alongside it first.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Before").font(.caption).foregroundStyle(.secondary)
+                Text(beforeText)
+                    .font(.system(.caption, design: .monospaced))
+                    .textSelection(.enabled)
+                Text("After").font(.caption).foregroundStyle(.secondary)
+                Text(afterText)
+                    .font(.system(.caption, design: .monospaced))
+                    .textSelection(.enabled)
+            }
+            .padding(8)
+            .background(Color.gray.opacity(0.1))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+
+            HStack {
+                Spacer()
+                Button("Cancel", action: onCancel)
+                Button(confirmLabel, action: onConfirm)
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20)
+        .frame(width: 380)
+    }
+
+    private var title: String {
+        switch kind {
+        case .install: return "Install the statusline hook?"
+        case .uninstall: return "Remove the statusline hook?"
+        }
+    }
+
+    private var confirmLabel: String {
+        switch kind {
+        case .install: return "Install"
+        case .uninstall: return "Remove"
+        }
+    }
+
+    private var beforeText: String {
+        switch kind {
+        case .install(let before, _):
+            return before ?? "(no statusLine configured)"
+        case .uninstall(let preview):
+            switch preview {
+            case .notInstalled: return "(not installed)"
+            case .willRemoveStatusLine, .willRestore:
+                return "ClaudeStats' statusline hook"
+            }
+        }
+    }
+
+    private var afterText: String {
+        switch kind {
+        case .install(_, let after):
+            return after
+        case .uninstall(let preview):
+            switch preview {
+            case .notInstalled: return "(no change)"
+            case .willRemoveStatusLine: return "(no statusLine configured)"
+            case .willRestore(let original): return original
+            }
+        }
     }
 }
 
