@@ -26,15 +26,18 @@
 #
 # INSTALL
 # -------
-# From the app: Settings > "Reveal Script in Finder" reveals a temporary copy —
-# move it to ~/.claude/ (the temp copy is not a stable path).
-# From a repo checkout:
+# From the app (recommended): Settings > Quota source > "Set Up Automatically".
+# It copies this script next to settings.json, points `statusLine` at it, wraps
+# any existing statusline command, and shows the exact before/after first.
+#
+# By hand (Settings > "Reveal Script in Finder" reveals a temp copy — move it to
+# ~/.claude/, it is not a stable path):
 #   cp Sources/ClaudeStats/Resources/claude-stats-statusline-cache.sh ~/.claude/
 #   chmod +x ~/.claude/claude-stats-statusline-cache.sh
-#
-# Then edit ~/.claude/settings.json by hand. ClaudeStats does NOT write to your
-# settings.json for you — that file is yours, and clobbering an existing status
-# line would be a rude surprise.
+# ... then edit ~/.claude/settings.json yourself, per Case A / Case B below.
+# (The automatic install writes Case B as
+# `bash "$HOME/.claude/claude-stats-statusline-cache.sh" bash -c '<your command>'`;
+# both shapes are recognized on detect/uninstall.)
 #
 # Case A — you have no status line yet:
 #
