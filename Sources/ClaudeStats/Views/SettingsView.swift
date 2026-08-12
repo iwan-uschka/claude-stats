@@ -9,7 +9,16 @@ struct SettingsView: View {
     @ObservedObject var model: AppModel
     @State private var launchAtLoginEnabled = LaunchAtLogin.isEnabled
     @State private var hookState: StatuslineHookInstaller.State?
+    @State private var hookDetectError: StatuslineHookInstaller.Error?
+    /// Set when the bundled `claude-stats-statusline-cache.sh` resource
+    /// couldn't be located (dev/`swift run` layouts, a re-signed/repackaged
+    /// `.app`) — ``StatuslineHookInstaller/detectState(bundledScript:)`` still
+    /// runs (so installed/not-installed stays accurate off `settings.json`
+    /// alone), it just can't compare script bytes, so a genuinely stale
+    /// script would go undetected.
+    @State private var bundledScriptUnavailable = false
     @State private var hookActionFailed = false
+    @State private var hookActionStale = false
     @State private var pendingHookAction: PendingHookAction?
 
     /// A confirmation sheet in flight, carrying what it'll show and what to run
@@ -22,6 +31,11 @@ struct SettingsView: View {
         }
         let id = UUID()
         let kind: Kind
+        /// `settings.json`'s modification date when this preview was computed
+        /// — re-checked at confirm time so an external edit made while the
+        /// sheet is open (e.g. by Claude Code itself, or the user in a text
+        /// editor) aborts the action instead of applying a stale before/after.
+        let settingsSnapshotDate: Date?
     }
 
     var body: some View {
@@ -56,7 +70,7 @@ struct SettingsView: View {
                 onCancel: { pendingHookAction = nil },
                 onConfirm: {
                     pendingHookAction = nil
-                    performHookAction(pending.kind)
+                    performHookAction(pending)
                 }
             )
         }
@@ -64,6 +78,11 @@ struct SettingsView: View {
             Button("OK") {}
         } message: {
             Text("Nothing was changed. Use the manual steps in the script's header comment instead.")
+        }
+        .alert("settings.json changed", isPresented: $hookActionStale) {
+            Button("OK") {}
+        } message: {
+            Text("~/.claude/settings.json was modified while this dialog was open, so nothing was changed. Try again to see the current state.")
         }
     }
 
@@ -159,9 +178,13 @@ struct SettingsView: View {
 
             hookStatusView
 
-            if model.snapshot?.confidence != .official {
+            if model.snapshot?.confidence != .official, hookState == nil || hookState == .notInstalled {
                 Button("Reveal Script in Finder") { revealBundledScript() }
                     .controlSize(.small)
+                Text("Prefer to wire it up yourself? The script's header comment has the exact steps.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -169,6 +192,12 @@ struct SettingsView: View {
     @ViewBuilder
     private var hookStatusView: some View {
         switch hookState {
+        case nil where hookDetectError != nil:
+            Text(hookDetectErrorMessage)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
         case nil, .notInstalled:
             Text(
                 "For live 5-hour/7-day percentages straight from Claude Code (the \"official\" tier), install the statusline hook. This edits ~/.claude/settings.json — you'll see exactly what changes before anything is written."
@@ -187,6 +216,12 @@ struct SettingsView: View {
             }
             if let wrapping {
                 Text("Your existing statusline (`\(wrapping)`) is preserved and still runs.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if bundledScriptUnavailable {
+                Text("Couldn't verify the installed script is up to date — the app's bundled copy wasn't found.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -212,6 +247,17 @@ struct SettingsView: View {
         }
     }
 
+    private var hookDetectErrorMessage: String {
+        switch hookDetectError {
+        case .malformedSettings:
+            return "Couldn't read ~/.claude/settings.json — it isn't valid JSON."
+        case .unsupportedStatuslineType(let type):
+            return "statusLine uses an unsupported type (\"\(type)\") — left untouched."
+        case .scriptWriteFailed, nil:
+            return "Couldn't read ~/.claude/settings.json."
+        }
+    }
+
     private func installer() -> StatuslineHookInstaller? {
         StatuslineHookInstaller.standard()
     }
@@ -224,9 +270,22 @@ struct SettingsView: View {
     private func refreshHookState() {
         guard let installer = installer() else {
             hookState = nil
+            hookDetectError = nil
+            bundledScriptUnavailable = false
             return
         }
-        hookState = try? installer.detectState(bundledScript: bundledScriptData())
+        let script = bundledScriptData()
+        bundledScriptUnavailable = script == nil
+        do {
+            hookState = try installer.detectState(bundledScript: script)
+            hookDetectError = nil
+        } catch let error as StatuslineHookInstaller.Error {
+            hookState = nil
+            hookDetectError = error
+        } catch {
+            hookState = nil
+            hookDetectError = nil
+        }
     }
 
     private func beginInstall() {
@@ -236,7 +295,10 @@ struct SettingsView: View {
             hookActionFailed = true
             return
         }
-        pendingHookAction = PendingHookAction(kind: .install(before: preview.before, after: preview.after))
+        pendingHookAction = PendingHookAction(
+            kind: .install(before: preview.before, after: preview.after),
+            settingsSnapshotDate: settingsModificationDate(installer)
+        )
     }
 
     private func beginUninstall() {
@@ -246,7 +308,16 @@ struct SettingsView: View {
             hookActionFailed = true
             return
         }
-        pendingHookAction = PendingHookAction(kind: .uninstall(preview))
+        pendingHookAction = PendingHookAction(
+            kind: .uninstall(preview),
+            settingsSnapshotDate: settingsModificationDate(installer)
+        )
+    }
+
+    /// `nil` if `settings.json` doesn't exist (or its attributes can't be
+    /// read) — a real, comparable state distinct from any actual timestamp.
+    private func settingsModificationDate(_ installer: StatuslineHookInstaller) -> Date? {
+        (try? FileManager.default.attributesOfItem(atPath: installer.settingsURL.path))?[.modificationDate] as? Date
     }
 
     private func updateStaleScript() {
@@ -263,13 +334,19 @@ struct SettingsView: View {
         }
     }
 
-    private func performHookAction(_ kind: PendingHookAction.Kind) {
+    private func performHookAction(_ pending: PendingHookAction) {
         guard let installer = installer() else {
             hookActionFailed = true
             return
         }
+        guard settingsModificationDate(installer) == pending.settingsSnapshotDate else {
+            NSLog("performHookAction: settings.json changed since the confirmation sheet was shown, aborting")
+            hookActionStale = true
+            refreshHookState()
+            return
+        }
         do {
-            switch kind {
+            switch pending.kind {
             case .install:
                 guard let script = bundledScriptData() else {
                     hookActionFailed = true
@@ -283,6 +360,7 @@ struct SettingsView: View {
         } catch {
             NSLog("performHookAction failed: \(error)")
             hookActionFailed = true
+            refreshHookState() // reflect any partial on-disk change instead of asserting none occurred
         }
     }
 
@@ -390,6 +468,7 @@ private struct HookConfirmationSheet: View {
             HStack {
                 Spacer()
                 Button("Cancel", action: onCancel)
+                    .keyboardShortcut(.cancelAction)
                 Button(confirmLabel, action: onConfirm)
                     .keyboardShortcut(.defaultAction)
             }

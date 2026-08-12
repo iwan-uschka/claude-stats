@@ -71,6 +71,13 @@ final class JSONObjectSurgeryTests: XCTestCase {
         XCTAssertTrue(result.contains(#""cleanupPeriodDays": 90"#))
         XCTAssertTrue(result.contains(#""additionalDirectories": []"#))
         XCTAssertTrue(result.contains(#""model": "sonnet""#))
+        // The untouched span between the replaced member and "theme" (i.e.
+        // the whole extraKnownMarketplaces block) is byte-for-byte identical,
+        // not merely present via scattered .contains() checks above.
+        let extraKnownMarketplacesStart = realisticSettings.range(of: #""extraKnownMarketplaces":"#)!.lowerBound
+        let themeStart = realisticSettings.range(of: #""theme":"#)!.lowerBound
+        let originalMiddle = String(realisticSettings[extraKnownMarketplacesStart..<themeStart])
+        XCTAssertTrue(result.contains(originalMiddle))
 
         // Round-trips as valid JSON with everything still present.
         let data = try XCTUnwrap(result.data(using: .utf8))
@@ -115,6 +122,11 @@ final class JSONObjectSurgeryTests: XCTestCase {
     func testInsertsIntoEmptyObject() throws {
         let result = try JSONObjectSurgery.settingTopLevelValue(#"{"type": "command"}"#, forKey: "statusLine", in: "{}")
         XCTAssertEqual(result, "{\n  \"statusLine\": {\"type\": \"command\"}\n}")
+    }
+
+    func testInsertsNewKeyIntoSingleLineObjectFallsBackToTwoSpaceIndent() throws {
+        let result = try JSONObjectSurgery.settingTopLevelValue("2", forKey: "bar", in: #"{"foo": 1}"#)
+        XCTAssertEqual(result, "{\"foo\": 1,\n  \"bar\": 2}")
     }
 
     func testThrowsWhenRootIsNotAnObject() {
@@ -168,10 +180,14 @@ final class JSONObjectSurgeryTests: XCTestCase {
         }
         """
         let result = try JSONObjectSurgery.removingTopLevelValue(forKey: "statusLine", in: text)
-        let data = try XCTUnwrap(result.data(using: .utf8))
-        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
-        XCTAssertEqual(root.count, 1)
-        XCTAssertEqual(root["a"] as? Int, 1)
+        XCTAssertEqual(
+            result,
+            """
+            {
+              "a": 1
+            }
+            """
+        )
     }
 
     func testRemovesSoleMemberLeavingEmptyObject() throws {

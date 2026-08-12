@@ -19,7 +19,16 @@ final class StatuslineHookInstallerTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         settingsURL = directory.appendingPathComponent("settings.json")
         scriptURL = directory.appendingPathComponent(StatuslineHookInstaller.scriptFileName)
-        installer = StatuslineHookInstaller(settingsURL: settingsURL, installedScriptURL: scriptURL)
+        // Explicit, guaranteed-non-home directory: every test but the two
+        // $HOME-relative-path tests below expects an absolute scriptURL path
+        // in statusLine.command. Relying on the real home directory here
+        // would flip that output (and break ~15 assertions at once) if
+        // $TMPDIR/temp base ever falls under $HOME (e.g. containerized CI).
+        installer = StatuslineHookInstaller(
+            settingsURL: settingsURL,
+            installedScriptURL: scriptURL,
+            homeDirectory: URL(fileURLWithPath: "/nonexistent-home-for-tests")
+        )
     }
 
     override func tearDownWithError() throws {
@@ -27,8 +36,8 @@ final class StatuslineHookInstallerTests: XCTestCase {
         try super.tearDownWithError()
     }
 
-    private func write(_ json: String, to url: URL? = nil) throws {
-        try Data(json.utf8).write(to: url ?? settingsURL)
+    private func write(_ json: String) throws {
+        try Data(json.utf8).write(to: settingsURL)
     }
 
     private func readSettings() throws -> [String: Any] {
@@ -167,6 +176,15 @@ final class StatuslineHookInstallerTests: XCTestCase {
         }
     }
 
+    /// When a matched command's remainder doesn't match the exact `bash -c
+    /// '...'` shape this installer generates (e.g. hand-edited or modified by
+    /// another tool), the raw remainder is surfaced verbatim rather than
+    /// guessed at.
+    func testDetectStateSurfacesForeignWrapShapeVerbatim() throws {
+        try write(#"{"statusLine": {"type": "command", "command": "bash \"$HOME/.claude/claude-stats-statusline-cache.sh\" && echo hi"}}"#)
+        XCTAssertEqual(try installer.detectState(), .installed(wrapping: "&& echo hi"))
+    }
+
     // MARK: - Install: fresh
 
     func testInstallWithNoExistingStatusLineWritesBareCommand() throws {
@@ -199,6 +217,16 @@ final class StatuslineHookInstallerTests: XCTestCase {
         let backups = try FileManager.default.contentsOfDirectory(atPath: directory.path)
             .filter { $0.hasPrefix("settings.json.bak-") }
         XCTAssertEqual(backups.count, 1)
+    }
+
+    func testBackupsDoNotCollideOnRapidSuccessiveMutations() throws {
+        try write(#"{"statusLine": {"type": "command", "command": "echo hi"}}"#)
+        _ = try installer.install(bundledScript: bundledScript)
+        _ = try installer.install(bundledScript: updatedBundledScript)
+
+        let backups = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+            .filter { $0.hasPrefix("settings.json.bak-") }
+        XCTAssertEqual(backups.count, 2, "each backup-worthy mutation should produce its own backup file")
     }
 
     func testInstallScriptIsExecutable() throws {
@@ -273,6 +301,19 @@ final class StatuslineHookInstallerTests: XCTestCase {
         XCTAssertEqual(
             try installer.detectState(bundledScript: bundledScript),
             .installed(wrapping: nil)
+        )
+    }
+
+    /// A missing script is the most stale state possible — reporting it as
+    /// `.installed` would tell the user everything is fine while Claude Code
+    /// silently runs a nonexistent script, with no repair path short of
+    /// Remove-then-reinstall.
+    func testDetectStateReportsStaleWhenScriptFileIsMissing() throws {
+        _ = try installer.install(bundledScript: bundledScript)
+        try FileManager.default.removeItem(at: scriptURL)
+        XCTAssertEqual(
+            try installer.detectState(bundledScript: bundledScript),
+            .installedStale(wrapping: nil)
         )
     }
 
@@ -365,7 +406,7 @@ final class StatuslineHookInstallerTests: XCTestCase {
 
     /// The bug this guards: an earlier implementation parsed the whole file
     /// into `[String: Any]` and reserialized it with `.sortedKeys`, which
-    /// alphabetized every top-level key and slash-escaped `warpdotdev/caveman`
+    /// alphabetized every top-level key and slash-escaped `JuliusBrussee/caveman`
     /// style values — a much bigger diff than "changed statusLine", on a file
     /// the user hand-edits and shares with other tools.
     func testUninstallDoesNotReorderOrReformatUnrelatedKeys() throws {

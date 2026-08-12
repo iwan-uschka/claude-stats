@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Added
+- Settings → Quota source: "Set Up Automatically" installs (and "Remove"
+  uninstalls) the `statusLine` hook in `~/.claude/settings.json`, wrapping an
+  existing statusline instead of replacing it, after a before/after confirmation
+  and a timestamped backup. Only the `statusLine` member's text is rewritten —
+  key order, formatting and escaping of every other setting are preserved.
+
 ## [0.4.0] - 2026-08-12
 
 ### Added

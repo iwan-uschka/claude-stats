@@ -41,6 +41,9 @@ public struct StatuslineHookInstaller {
         /// shape this installer doesn't understand. Left untouched rather
         /// than guessed at.
         case unsupportedStatuslineType(String)
+        /// The installed script couldn't be written to disk (disk full,
+        /// permission denied, etc.).
+        case scriptWriteFailed
     }
 
     /// File name the script is installed under, alongside `settings.json`.
@@ -73,12 +76,15 @@ public struct StatuslineHookInstaller {
     }
 
     /// `~/.claude/settings.json` and `~/.claude/claude-stats-statusline-cache.sh`
-    /// (honoring `$CLAUDE_CONFIG_DIR`, like the rest of the data layer) — `nil`
-    /// if the config directory can't be resolved at all.
-    public static func standard(fileManager: FileManager = .default) -> StatuslineHookInstaller? {
-        guard let configDir = try? ClaudeConfigDirectory.resolve(fileManager: fileManager) else {
-            return nil
-        }
+    /// (honoring `$CLAUDE_CONFIG_DIR`, like the rest of the data layer). Uses
+    /// ``ClaudeConfigDirectory/candidate()`` rather than
+    /// ``ClaudeConfigDirectory/resolve()`` — this type's own mutating calls
+    /// (``install(bundledScript:)``) already create the directory if it's
+    /// missing, so requiring it to pre-exist here would only make a
+    /// fresh-install user's "Set Up Automatically" button fail for no
+    /// user-visible reason.
+    public static func standard(fileManager: FileManager = .default) -> StatuslineHookInstaller {
+        let configDir = ClaudeConfigDirectory.candidate()
         return StatuslineHookInstaller(
             settingsURL: configDir.appendingPathComponent("settings.json", isDirectory: false),
             installedScriptURL: configDir.appendingPathComponent(scriptFileName, isDirectory: false),
@@ -118,11 +124,10 @@ public struct StatuslineHookInstaller {
     /// see ``JSONObjectSurgery``.
     @discardableResult
     public func install(bundledScript: Data) throws -> State {
-        try writeScript(bundledScript)
-
         let existingCommand = try currentCommand()
         let commandToWrap = resolvedCommandToWrap(existingCommand: existingCommand)
 
+        try writeScript(bundledScript)
         try backupSettingsIfPresent()
 
         let newCommand = commandLine(wrapping: commandToWrap)
@@ -262,13 +267,30 @@ public struct StatuslineHookInstaller {
     ///   is configured with a type this installer doesn't recognize.
     private func currentCommand() throws -> String? {
         guard let root = try readSettingsObject() else { return nil }
-        guard let statusLine = root[Self.statusLineKey] as? [String: Any] else { return nil }
+        guard let rawStatusLine = root[Self.statusLineKey] else { return nil }
+        guard let statusLine = rawStatusLine as? [String: Any] else {
+            throw Error.unsupportedStatuslineType(Self.jsonTypeDescription(of: rawStatusLine))
+        }
 
         let type = statusLine[Self.typeKey] as? String ?? Self.commandTypeValue
         guard type == Self.commandTypeValue else {
             throw Error.unsupportedStatuslineType(type)
         }
         return statusLine[Self.commandKey] as? String
+    }
+
+    /// Describes a `JSONSerialization`-decoded value's shape for
+    /// ``Error/unsupportedStatuslineType(_:)`` when it isn't the expected
+    /// `{"type": ...}` object — e.g. a hand-edited `"statusLine": "foo"` or
+    /// `"statusLine": null`.
+    private static func jsonTypeDescription(of value: Any) -> String {
+        switch value {
+        case is NSNull: return "null"
+        case is String: return "string"
+        case is [Any]: return "array"
+        case is NSNumber: return "number"
+        default: return "\(Swift.type(of: value))"
+        }
     }
 
     private func readSettingsObject() throws -> [String: Any]? {
@@ -285,7 +307,7 @@ public struct StatuslineHookInstaller {
     /// Raw text of `settings.json`, or `"{}"` if it doesn't exist yet (so
     /// ``JSONObjectSurgery`` has a root object to insert into).
     private func readSettingsText() -> String {
-        guard let data = fileManager.contents(atPath: settingsURL.path),
+        guard let data = fileManager.contents(atPath: settingsURL.path), !data.isEmpty,
               let text = String(data: data, encoding: .utf8)
         else { return "{}" }
         return text
@@ -332,8 +354,12 @@ public struct StatuslineHookInstaller {
 
     private func backupSettingsIfPresent() throws {
         guard fileManager.fileExists(atPath: settingsURL.path) else { return }
+        // UUID suffix guarantees uniqueness even when two backup-worthy
+        // mutations land in the same wall-clock second (e.g. install then
+        // uninstall in quick succession); the timestamp prefix keeps backups
+        // sortable/scannable by name.
         let backupURL = settingsURL.deletingLastPathComponent()
-            .appendingPathComponent("\(settingsURL.lastPathComponent).bak-\(Int(Date().timeIntervalSince1970))")
+            .appendingPathComponent("\(settingsURL.lastPathComponent).bak-\(Int(Date().timeIntervalSince1970))-\(UUID().uuidString)")
         // Best-effort: a failed backup shouldn't block the install itself.
         try? fileManager.copyItem(at: settingsURL, to: backupURL)
     }
@@ -344,12 +370,18 @@ public struct StatuslineHookInstaller {
         if fileManager.fileExists(atPath: installedScriptURL.path) {
             try fileManager.removeItem(at: installedScriptURL)
         }
-        fileManager.createFile(atPath: installedScriptURL.path, contents: bundledScript)
+        guard fileManager.createFile(atPath: installedScriptURL.path, contents: bundledScript) else {
+            throw Error.scriptWriteFailed
+        }
         try fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: installedScriptURL.path)
     }
 
     private func isScriptStale(against bundledScript: Data) -> Bool {
-        guard let installed = fileManager.contents(atPath: installedScriptURL.path) else { return false }
+        // A missing script is the most stale it can be — `.installedStale`
+        // routes SettingsView to "Update Script", which writes the file back;
+        // reporting `.installed` here instead would tell the user everything
+        // is fine while Claude Code silently runs a nonexistent script.
+        guard let installed = fileManager.contents(atPath: installedScriptURL.path) else { return true }
         return installed != bundledScript
     }
 }

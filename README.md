@@ -35,19 +35,19 @@ in order — the freshness tag in the popover shows which one won:
 
 | Tag | Source | Setup |
 |---|---|---|
-| `official` | Claude Code's `statusLine` hook, cached to disk (stale after ~10 min) | Manual — see below |
+| `official` | Claude Code's `statusLine` hook, cached to disk (stale after ~10 min) | One click — see below |
 | `experimental` | Polls the undocumented `oauth/usage` endpoint directly | None — reads your existing Claude Code login |
 | `local_estimate` | Math over local session logs (known plan-tier thresholds + your recent usage) | None — always available |
 
 **`official` — statusline hook.** Claude Code's `statusLine` feature can emit
 live rate-limit data, but only while a terminal is actively rendering a status
 line, and only if something is registered to receive it. This app is a menu
-bar app, not a shell hook, so a small script bridges the two: it's the actual
-`statusLine` command and writes what it receives to a cache file this app
-reads. Installing it is a deliberate manual step (not done automatically) —
-open **Settings → About**, click **Reveal Script in Finder**, then follow the
-wiring instructions in the script's header comment (move it into `~/.claude/`
-and point `statusLine` at it in `~/.claude/settings.json`).
+bar app, not a shell hook, so a small script bridges the two. Open
+**Settings → Quota source** and click **Set Up Automatically**: the app shows the
+exact before/after change to `~/.claude/settings.json`, backs the file up, and
+only edits the `statusLine` key (an existing statusline is wrapped, not
+replaced). **Remove** reverts it. Prefer doing it yourself? **Reveal Script in
+Finder** and follow the header comment.
 
 **`experimental` — OAuth usage poll.** Reads the same OAuth token Claude Code
 itself uses, from the `Claude Code-credentials` login-Keychain item (the
