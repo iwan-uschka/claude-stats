@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-12
+
 ### Added
 - Settings → General: "Launch at login" toggle, registering the app bundle
   itself as a login item via `SMAppService.mainApp` (macOS 13+) — no separate
