@@ -13,6 +13,10 @@ Pre-built releases (macOS app bundle, zipped) are available on the
 
 > **Note:** the app is unsigned — right-click → Open on first launch to bypass Gatekeeper.
 
+> **Note:** move the app to `/Applications` before enabling **Settings → General →
+> Launch at login** — the login item records the bundle's location, so
+> enabling it from `~/Downloads` and moving it afterwards breaks the entry.
+
 ## Features
 
 - Menu bar glyph showing 5-hour and 7-day quota usage as two thin bars, tinted for light/dark mode automatically

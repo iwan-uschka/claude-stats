@@ -7,9 +7,12 @@ import SwiftUI
 /// `SettingsWindowController`).
 struct SettingsView: View {
     @ObservedObject var model: AppModel
+    @State private var launchAtLoginEnabled = LaunchAtLogin.isEnabled
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
+            generalSection
+            Divider()
             refreshSection
             Divider()
             quotaSourceSection
@@ -19,6 +22,59 @@ struct SettingsView: View {
         }
         .padding(20)
         .frame(width: 380)
+        // The window is created once and kept alive across close/reopen
+        // (`SettingsWindowController`), so this view's @State never
+        // reinitializes — resync on every appearance and every reactivation,
+        // since the login item can also change from System Settings behind
+        // our back.
+        .onAppear { launchAtLoginEnabled = LaunchAtLogin.isEnabled }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            launchAtLoginEnabled = LaunchAtLogin.isEnabled
+        }
+    }
+
+    // MARK: - General
+
+    private var generalSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("General").font(.headline)
+            Toggle(
+                "Launch at login",
+                isOn: Binding(
+                    get: { launchAtLoginEnabled },
+                    set: { newValue in
+                        // SMAppService register()/unregister()/status are
+                        // synchronous IPC round-trips to launchd that can take
+                        // noticeably long (first-time approval checks) —
+                        // offload off the main thread so the toggle doesn't
+                        // freeze the only window this `.accessory`-policy app
+                        // has.
+                        Task.detached {
+                            let succeeded = LaunchAtLogin.setEnabled(newValue)
+                            let actual = LaunchAtLogin.isEnabled
+                            await MainActor.run {
+                                launchAtLoginEnabled = actual
+                                // Registration call failed, or macOS silently
+                                // left the item at a different state than
+                                // requested (e.g. `.requiresApproval`) —
+                                // either way the toggle snapping back needs
+                                // some signal, matching the existing
+                                // "Reveal Script" failure pattern.
+                                if !succeeded || actual != newValue {
+                                    NSSound.beep()
+                                }
+                            }
+                        }
+                    }
+                )
+            )
+            .disabled(!LaunchAtLogin.isSupported)
+            if !LaunchAtLogin.isSupported {
+                Text("Not available in development builds.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
     }
 
     // MARK: - Refresh
