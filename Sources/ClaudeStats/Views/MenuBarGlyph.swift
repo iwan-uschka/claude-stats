@@ -28,14 +28,6 @@ enum MenuBarGlyph {
     /// Alpha of the unused portion of a bar.
     static let trackAlpha: CGFloat = 0.3
 
-    /// True for a `swift build`/`swift run` binary with no `.app` bundle —
-    /// mirrors ``LaunchAtLogin``'s dev-build guard. ``StatusItemController``
-    /// uses this to overlay a colored dot on the status item so a dev build
-    /// run alongside the installed release is distinguishable at a glance.
-    static var isDevelopmentBuild: Bool {
-        Bundle.main.bundleURL.pathExtension != "app"
-    }
-
     static var width: CGFloat {
         markSize + markToBarsGap + barWidth * 2 + barSpacing
     }
@@ -56,7 +48,8 @@ enum MenuBarGlyph {
             return true
         }
         image.isTemplate = true
-        image.accessibilityDescription = "Claude Stats\(isDevelopmentBuild ? " (dev build)" : ""): \(Int(fractions[0] * 100))% five-hour, \(Int(fractions[1] * 100))% seven-day usage"
+        let devSuffix = BuildEnvironment.isDevelopmentBuild ? BuildEnvironment.devBuildSuffix : ""
+        image.accessibilityDescription = "Claude Stats\(devSuffix): \(Int(fractions[0] * 100))% five-hour, \(Int(fractions[1] * 100))% seven-day usage"
         return image
     }
 
