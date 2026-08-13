@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-08-13
+
 ### Added
 - The app now checks for updates automatically every 24 hours while running, not just once at launch.
 
