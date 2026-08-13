@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-13
+
 ### Fixed
 - Quota errors are shown as sentences instead of raw enum case names.
 - An installed-but-quiet hook (stale cache) now keeps the last reading with an
