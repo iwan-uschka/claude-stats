@@ -35,9 +35,11 @@ Two independent tiers, deliberately decoupled:
    hook — receives `rate_limits.{five_hour,seven_day}.{used_percentage,
    resets_at}` via stdin, but only fires while Claude Code is actively
    rendering a status line in a terminal. Cache to disk, treat as stale after
-   ~10 min. This is the only quota source: no live source installed (or a
-   stale cache) surfaces as an error in the popover rather than falling back
-   to an estimate — see `Sources/ClaudeStatsCore/Quota/StatuslineCacheReader.swift`.
+   ~10 min. This is the only quota source: no live source installed surfaces
+   as an error in the popover rather than falling back to an estimate; an
+   installed-but-quiet source (stale cache) keeps the last reading on screen
+   with an orange staleness warning — see
+   `Sources/ClaudeStatsCore/Quota/StatuslineCacheReader.swift`.
    **This tier is account-wide, not machine-wide** — it already reflects AFK
    docker-loop usage automatically, *because* those containers reauthenticate
    as the same Anthropic account (confirmed: no separate API keys). No extra
@@ -103,7 +105,8 @@ Refresh   Settings   Quit
 ```
 
 Freshness tag shows `official` (fresh statusline capture) — the only tier.
-No fallback: nothing installed or a stale cache shows as an error instead.
+No fallback: nothing installed shows as an error; an installed-but-quiet
+source (stale cache) keeps the last reading with an orange staleness warning.
 
 ## Tech / release
 

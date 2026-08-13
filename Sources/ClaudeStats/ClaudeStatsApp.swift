@@ -25,10 +25,10 @@ enum ClaudeStatsApp {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let quotaProvider: any QuotaProviding
-    /// Current store generation; only ever read/written on the main thread —
-    /// initial construction here, and reassigned from `rebuildUsageStore`'s
-    /// `DispatchQueue.main.async` completion.
-    private var usageStore: any UsageStoring
+    /// Only read once, at launch, to seed `AppModel`; `rebuildUsageStore`
+    /// hands later generations straight to `model.updateUsageStore` instead
+    /// of keeping a second copy here.
+    private let usageStore: any UsageStoring
     /// Whether `usageStore` started out backed by `MockUsageStore` because no
     /// readable `~/.claude` was found — surfaced through `AppModel` so the
     /// popover can mark the numbers as sample data instead of showing them as real.
@@ -120,7 +120,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let fresh = try? LocalLogUsageStore() else { return }
             DispatchQueue.main.async {
                 guard let self else { return }
-                self.usageStore = fresh
                 self.model?.updateUsageStore(fresh)
                 // Local stats already refreshed by `updateUsageStore`; this
                 // additionally re-reads the statusline cache, throttled

@@ -209,6 +209,40 @@ final class StatuslineHookInstallerTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: settingsURL.path))
     }
 
+    /// Dotfile-managed setups often symlink `settings.json` elsewhere (e.g.
+    /// into a synced folder) — `replaceItemAt` fails with "file doesn't
+    /// exist" if asked to replace a symlink whose target lives in a
+    /// different directory than the atomic-write temp file.
+    func testInstallFollowsSymlinkedSettingsFileInsteadOfReplacingTheSymlink() throws {
+        let realDir = directory.appendingPathComponent("elsewhere", isDirectory: true)
+        try FileManager.default.createDirectory(at: realDir, withIntermediateDirectories: true)
+        let realSettingsURL = realDir.appendingPathComponent("settings.json")
+        try Data(#"{"someOtherSetting": 42}"#.utf8).write(to: realSettingsURL)
+
+        let symlinkURL = directory.appendingPathComponent("linked-settings.json")
+        try FileManager.default.createSymbolicLink(at: symlinkURL, withDestinationURL: realSettingsURL)
+
+        let symlinkedInstaller = StatuslineHookInstaller(
+            settingsURL: symlinkURL,
+            installedScriptURL: scriptURL,
+            cacheURL: cacheURL,
+            homeDirectory: URL(fileURLWithPath: "/nonexistent-home-for-tests")
+        )
+        let state = try symlinkedInstaller.install(bundledScript: bundledScript)
+        XCTAssertEqual(state, .installed(wrapping: nil))
+
+        // The symlink itself must survive — only its target's content changes.
+        XCTAssertEqual(
+            try FileManager.default.destinationOfSymbolicLink(atPath: symlinkURL.path),
+            realSettingsURL.path
+        )
+        let root = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: try Data(contentsOf: realSettingsURL)) as? [String: Any]
+        )
+        XCTAssertEqual(root["someOtherSetting"] as? Int, 42)
+        XCTAssertEqual(statusLineCommand(root), "bash \"\(scriptURL.path)\"")
+    }
+
     func testInstallPreservesUnrelatedSettingsKeys() throws {
         try write(#"{"someOtherSetting": 42}"#)
         _ = try installer.install(bundledScript: bundledScript)
@@ -386,6 +420,7 @@ final class StatuslineHookInstallerTests: XCTestCase {
         let installerUnderHome = StatuslineHookInstaller(
             settingsURL: settingsURL,
             installedScriptURL: scriptURL,
+            cacheURL: cacheURL,
             homeDirectory: directory
         )
         let state = try installerUnderHome.install(bundledScript: bundledScript)

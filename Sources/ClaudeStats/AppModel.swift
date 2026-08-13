@@ -1,8 +1,9 @@
 import ClaudeStatsCore
 import Foundation
 
-/// Bridges the Core data layer into the UI. Holds the last successful readings
-/// and republishes them on the main actor.
+/// Bridges the Core data layer into the UI. Holds the last successful
+/// readings for local stats/breakdown; the quota snapshot is cleared when
+/// its source hard-fails (see `refresh()`) so stale numbers don't read as live.
 ///
 /// The views read these published properties and nothing else — the two
 /// protocol-typed dependencies are the seam the real providers plug into.
@@ -17,7 +18,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var usingSampleData: Bool
 
     /// Kept independent per subsystem so one reload's success can't clobber
-    /// another's still-live failure — see `lastError`.
+    /// another's still-live failure — see `activeErrors`.
     @Published private(set) var localStatsError: String?
     @Published private(set) var breakdownError: String?
     @Published private(set) var quotaError: String?
@@ -26,8 +27,10 @@ final class AppModel: ObservableObject {
     /// and this is shown as a warning, not an error.
     @Published private(set) var quotaWarning: String?
 
-    /// The line shown in the popover's error banner, if any.
-    var lastError: String? { localStatsError ?? breakdownError ?? quotaError }
+    /// Every still-live failure, not just the highest-priority one — the
+    /// popover clears `snapshot` on a quota failure, so a masked `quotaError`
+    /// would otherwise leave empty bars with no stated cause.
+    var activeErrors: [String] { [localStatsError, breakdownError, quotaError].compactMap { $0 } }
 
     /// Window selected by the "This Mac" toggle.
     @Published var selectedWindow: TimeWindow = .fiveHour {
@@ -38,6 +41,7 @@ final class AppModel: ObservableObject {
     private var usageStore: any UsageStoring
     private var refreshTask: Task<Void, Never>?
     private var lastQuotaPoll: Date?
+    private var postInstallPollTask: Task<Void, Never>?
 
     /// Minimum time between live quota polls. Refreshes are triggered by opening
     /// the popover or by new session activity, not by a repeating timer; manual
@@ -112,6 +116,26 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Right after installing the hook, the cache file doesn't exist yet — an
+    /// immediate poll can only fail with `noQuotaSourceAvailable`. Retry a few
+    /// times over ~15s instead of waiting for the next popover open: catches
+    /// the common case of Claude Code already running in a terminal and
+    /// firing the hook almost immediately.
+    func pollAfterInstall() {
+        postInstallPollTask?.cancel()
+        postInstallPollTask = Task { [weak self] in
+            for delay in [2.0, 4.0, 8.0] {
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                guard let self, !Task.isCancelled else { return }
+                self.refresh(force: true)
+                // Local file read — near-instant; give the forced poll's own
+                // `Task` a moment to land before deciding whether to retry.
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                if self.quotaError == nil, self.snapshot != nil { return }
+            }
+        }
+    }
+
     private func reloadLocalStats() {
         do {
             planTier = try usageStore.detectedPlanTier()
@@ -148,7 +172,8 @@ extension AppModel {
     static func preview(
         window: TimeWindow = .fiveHour,
         snapshot: QuotaSnapshot? = MockQuotaProvider.sampleSnapshot(),
-        error: String? = nil
+        error: String? = nil,
+        warning: String? = nil
     ) -> AppModel {
         let store = MockUsageStore()
         let model = AppModel(
@@ -162,6 +187,7 @@ extension AppModel {
         model.estimatedCostToday = try? store.estimatedCostToday()
         model.modelUsage = (try? store.modelUsage(last24h: true)) ?? []
         model.quotaError = error
+        model.quotaWarning = warning
         return model
     }
 
@@ -170,20 +196,26 @@ extension AppModel {
         AppModel(quotaProvider: MockQuotaProvider(), usageStore: MockUsageStore())
     }
 
+    /// Live source, but stale — quota still shown, plus a warning line.
+    static func previewStaleWarning() -> AppModel {
+        preview(warning: "Statusline cache is 14 minutes old.")
+    }
+
     /// Worst case: a stale snapshot, a window over budget, and a data-source
     /// error to surface.
     static func previewDegraded() -> AppModel {
         let now = Date()
-        return preview(
+        let model = preview(
             window: .sevenDay,
             snapshot: QuotaSnapshot(
                 fiveHour: QuotaWindow(percentUsed: 104, resetsAt: now.addingTimeInterval(90)),
                 sevenDay: QuotaWindow(percentUsed: 88, resetsAt: nil),
                 confidence: .official,
                 capturedAt: now.addingTimeInterval(-42 * 60)
-            ),
-            error: ClaudeStatsError.noQuotaSourceAvailable.localizedDescription
+            )
         )
+        model.quotaWarning = ClaudeStatsError.staleQuotaSource(age: 42 * 60).localizedDescription
+        return model
     }
 }
 #endif

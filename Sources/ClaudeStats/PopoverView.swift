@@ -38,9 +38,7 @@ struct PopoverView: View {
             if model.usingSampleData {
                 sampleDataLine
             }
-            if let error = model.lastError {
-                errorLine(error)
-            }
+            ForEach(model.activeErrors, id: \.self) { errorLine($0) }
             Divider()
             footer
         }
@@ -80,9 +78,9 @@ struct PopoverView: View {
             } else {
                 WindowBarView(title: "5-hour window", window: .empty, now: now)
                 WindowBarView(title: "7-day window", window: .empty, now: now)
-                Text("source: none yet — requires Claude Code's statusLine hook (Settings → Quota source)")
+                Text(model.quotaWarning ?? "source: none yet — requires Claude Code's statusLine hook (Settings → Quota source)")
                     .font(PopoverMetrics.captionFont)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(model.quotaWarning != nil ? .orange : .secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -234,6 +232,14 @@ struct PopoverView: View {
 
 #Preview("Popover — stale, over budget, error") {
     PopoverView(model: .previewDegraded(), clock: PopoverClock())
+}
+
+#Preview("Popover — stale warning") {
+    PopoverView(model: .previewStaleWarning(), clock: PopoverClock())
+}
+
+#Preview("Popover — stale warning, no prior snapshot") {
+    PopoverView(model: .preview(snapshot: nil, warning: "Statusline cache is 14 minutes old."), clock: PopoverClock())
 }
 
 #Preview("Popover — 24h breakdown") {

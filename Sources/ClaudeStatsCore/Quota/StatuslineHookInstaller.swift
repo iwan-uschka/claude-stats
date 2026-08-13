@@ -185,9 +185,10 @@ public struct StatuslineHookInstaller {
     }
 
     /// Restores `statusLine` to whatever our script was wrapping (or removes
-    /// the key entirely if it wasn't wrapping anything), and deletes the
-    /// installed script. No-op if we're not currently installed. Only the
-    /// `statusLine` member's text is touched — see ``JSONObjectSurgery``.
+    /// the key entirely if it wasn't wrapping anything), deletes the installed
+    /// script, and deletes the statusline cache file (best-effort). No-op if
+    /// we're not currently installed. Only the `statusLine` member's text is
+    /// touched — see ``JSONObjectSurgery``.
     public func uninstall() throws {
         guard let command = try currentCommand(),
               let wrapping = wrappedOriginal(from: command)
@@ -328,11 +329,21 @@ public struct StatuslineHookInstaller {
 
     /// Atomic write: temp file in the same directory, then `replaceItemAt`, so
     /// a crash mid-write never leaves `settings.json` truncated.
+    ///
+    /// Resolves `settingsURL` first — dotfile-managed setups often symlink
+    /// `~/.claude/settings.json` elsewhere (e.g. into a synced folder), and
+    /// `replaceItemAt` fails with "file doesn't exist" when asked to replace
+    /// a symlink whose target lives in a different directory than the temp
+    /// file. Writing through the resolved path replaces the target's content
+    /// in place instead, leaving the symlink itself untouched. A path that
+    /// doesn't exist yet (fresh install, no `settings.json` at all) resolves
+    /// to itself unchanged, so this is a no-op for that case.
     private func writeSettingsText(_ text: String) throws {
-        let tempURL = settingsURL.deletingLastPathComponent()
-            .appendingPathComponent(".\(settingsURL.lastPathComponent).\(UUID().uuidString).tmp")
+        let resolvedURL = settingsURL.resolvingSymlinksInPath()
+        let tempURL = resolvedURL.deletingLastPathComponent()
+            .appendingPathComponent(".\(resolvedURL.lastPathComponent).\(UUID().uuidString).tmp")
         try Data(text.utf8).write(to: tempURL, options: .atomic)
-        _ = try fileManager.replaceItemAt(settingsURL, withItemAt: tempURL)
+        _ = try fileManager.replaceItemAt(resolvedURL, withItemAt: tempURL)
     }
 
     /// Replaces (or inserts) the `statusLine` member via ``JSONObjectSurgery``

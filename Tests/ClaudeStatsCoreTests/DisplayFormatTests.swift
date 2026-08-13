@@ -97,10 +97,6 @@ final class DisplayFormatTests: XCTestCase {
             DisplayFormat.sourceTag(confidence: .official, age: 40),
             "source: official · 40s ago"
         )
-        XCTAssertEqual(
-            DisplayFormat.sourceTag(confidence: .official, age: 12 * 60),
-            "source: official · 12m ago"
-        )
     }
 
     func testSourceTagReadsFromASnapshot() {

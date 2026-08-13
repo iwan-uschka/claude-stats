@@ -182,7 +182,7 @@ struct SettingsView: View {
 
             hookStatusView
 
-            if model.snapshot?.confidence != .official, hookState == nil || hookState == .notInstalled {
+            if model.snapshot == nil, hookState == nil || hookState == .notInstalled {
                 Button("Reveal Script in Finder") { revealBundledScript() }
                     .controlSize(.small)
                 Text("Prefer to wire it up yourself? The script's header comment has the exact steps.")
@@ -357,13 +357,19 @@ struct SettingsView: View {
                     return
                 }
                 _ = try installer.install(bundledScript: script)
+                refreshHookState()
+                // No immediate forced poll here: the cache file doesn't exist
+                // yet, so it can only fail. `pollAfterInstall` retries a few
+                // times over the next ~15s instead.
+                model.pollAfterInstall()
+                return
             case .uninstall:
                 try installer.uninstall()
             }
             refreshHookState()
-            // Install/uninstall just changed what the quota source reads (a
-            // fresh statusLine, or a deleted cache file) — re-poll immediately
-            // rather than showing last-poll data until the throttle expires.
+            // Uninstall just deleted the cache file the quota source reads —
+            // re-poll immediately rather than showing last-poll data until
+            // the throttle expires.
             model.refresh(force: true)
         } catch {
             NSLog("performHookAction failed: \(error)")
@@ -531,7 +537,7 @@ private struct HookConfirmationSheet: View {
     SettingsView(model: .preview())
 }
 
-#Preview("Settings — stale, hook not installed") {
+#Preview("Settings — stale, hook installed but quiet") {
     SettingsView(model: .previewDegraded())
 }
 #endif

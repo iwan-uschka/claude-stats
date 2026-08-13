@@ -34,8 +34,10 @@ The popover's 5-hour/7-day percentage bars come from a single source, tagged
 `official` in the freshness line: Claude Code's `statusLine` hook, cached to
 disk (stale after ~10 min). There is no fallback — until the hook is
 installed and has fired at least once, the popover shows an error instead of
-a quota number. Token counts, cost, and burn rate (from local log parsing)
-work regardless.
+a quota number. Once it has fired at least once but has since gone quiet
+(stale cache), the popover keeps the last reading on screen with an orange
+staleness warning instead. Token counts, cost, and burn rate (from local log
+parsing) work regardless.
 
 **Setup.** Claude Code's `statusLine` feature can emit live rate-limit data,
 but only while a terminal is actively rendering a status line, and only if
