@@ -11,7 +11,13 @@ final class UpdateChecker {
     /// How often a silent (periodic/launch) check is allowed to run.
     /// Explicit checks (the Settings button) always bypass this.
     private let checkInterval: TimeInterval = 24 * 60 * 60
+    /// How often the periodic timer ticks. Shorter than `checkInterval` so a
+    /// tick that lands just before a check is due (e.g. delayed behind a
+    /// modal alert, or skipped because of an intervening explicit check)
+    /// gets retried soon instead of waiting a whole extra `checkInterval`.
+    private let tickInterval: TimeInterval = 60 * 60
     private static let lastCheckDefaultsKey = "de.bitgrip.claude-stats.lastUpdateCheck"
+    private static let skippedVersionDefaultsKey = "de.bitgrip.claude-stats.skippedUpdateVersion"
 
     private var isChecking = false
     private var periodicTimer: Timer?
@@ -24,11 +30,13 @@ final class UpdateChecker {
     func startPeriodicChecks() {
         periodicTimer?.invalidate()
         check(silent: true)
-        periodicTimer = Timer.scheduledTimer(withTimeInterval: checkInterval, repeats: true) { [weak self] _ in
+        let timer = Timer(timeInterval: tickInterval, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 self?.check(silent: true)
             }
         }
+        RunLoop.main.add(timer, forMode: .common)
+        periodicTimer = timer
     }
 
     private var lastCheckDate: Date? {
@@ -39,6 +47,14 @@ final class UpdateChecker {
         set {
             UserDefaults.standard.set(newValue?.timeIntervalSince1970 ?? 0, forKey: Self.lastCheckDefaultsKey)
         }
+    }
+
+    /// Version the user dismissed with "Later" on a silent check. Suppresses
+    /// repeat silent alerts for that version — an explicit "Check for
+    /// Updates…" click always shows the result regardless.
+    private var skippedVersion: String? {
+        get { UserDefaults.standard.string(forKey: Self.skippedVersionDefaultsKey) }
+        set { UserDefaults.standard.set(newValue, forKey: Self.skippedVersionDefaultsKey) }
     }
 
     func check(silent: Bool) {
@@ -61,9 +77,12 @@ final class UpdateChecker {
         // Recorded as soon as a check attempt actually starts a network
         // request (not gated on success/failure), matching the "attempted,
         // not necessarily successful" throttle style used elsewhere — a
-        // flaky network shouldn't cause a retry storm. This also resets the
-        // periodic clock for explicit (silent: false) checks.
-        lastCheckDate = Date()
+        // flaky network shouldn't cause a retry storm. Only silent checks
+        // advance the clock; an explicit "Check for Updates…" click
+        // shouldn't push out the next automatic check.
+        if silent {
+            lastCheckDate = Date()
+        }
         Task {
             defer { isChecking = false }
             do {
@@ -71,7 +90,7 @@ final class UpdateChecker {
                 let httpStatus = (response as? HTTPURLResponse)?.statusCode ?? 200
                 switch decodeReleaseCheck(data: data, httpStatus: httpStatus, localVersion: local) {
                 case .updateAvailable(let version, let url):
-                    presentUpdateAvailable(version: version, localVersion: local, url: url)
+                    presentUpdateAvailable(version: version, localVersion: local, url: url, silent: silent)
                 case .upToDate(let version):
                     if !silent { presentUpToDate(version: version) }
                 case .httpError(let status):
@@ -90,7 +109,8 @@ final class UpdateChecker {
 
     // MARK: - Alerts
 
-    private func presentUpdateAvailable(version: String, localVersion: String, url: String) {
+    private func presentUpdateAvailable(version: String, localVersion: String, url: String, silent: Bool) {
+        if silent && version == skippedVersion { return }
         // An `.accessory`-policy app has no Dock icon; without activating first,
         // an alert triggered by the silent launch check can appear behind other
         // windows instead of frontmost.
@@ -108,6 +128,8 @@ final class UpdateChecker {
                 return
             }
             NSWorkspace.shared.open(releaseURL)
+        } else {
+            skippedVersion = version
         }
     }
 
