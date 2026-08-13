@@ -13,7 +13,7 @@ settled unless the user reopens it; don't re-derive or re-litigate.
 ## Layout
 
 - `ClaudeStatsCore` — models, parsing, watching, quota (unit-tested)
-- `ClaudeStats` — AppKit/SwiftUI menu bar app (executable, not testable by SwiftPM)
+- `ClaudeStats` — AppKit/SwiftUI menu bar app (executable; unit-tested via `Tests/ClaudeStatsTests`)
 
 ## Commands
 

@@ -377,7 +377,8 @@ public struct StatuslineHookInstaller {
     }
 
     private func backupSettingsIfPresent() throws {
-        guard fileManager.fileExists(atPath: settingsURL.path) else { return }
+        let resolvedURL = settingsURL.resolvingSymlinksInPath()
+        guard fileManager.fileExists(atPath: resolvedURL.path) else { return }
         // UUID suffix guarantees uniqueness even when two backup-worthy
         // mutations land in the same wall-clock second (e.g. install then
         // uninstall in quick succession); the timestamp prefix keeps backups
@@ -385,19 +386,35 @@ public struct StatuslineHookInstaller {
         let backupURL = settingsURL.deletingLastPathComponent()
             .appendingPathComponent("\(settingsURL.lastPathComponent).bak-\(Int(Date().timeIntervalSince1970))-\(UUID().uuidString)")
         // Best-effort: a failed backup shouldn't block the install itself.
-        try? fileManager.copyItem(at: settingsURL, to: backupURL)
+        // `copyItem` on `settingsURL` would recreate a symlink rather than
+        // snapshot its target's content, so back up the resolved bytes.
+        if let data = fileManager.contents(atPath: resolvedURL.path) {
+            try? data.write(to: backupURL)
+        }
     }
 
     private func writeScript(_ bundledScript: Data) throws {
         let directory = installedScriptURL.deletingLastPathComponent()
         try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-        if fileManager.fileExists(atPath: installedScriptURL.path) {
-            try fileManager.removeItem(at: installedScriptURL)
-        }
-        guard fileManager.createFile(atPath: installedScriptURL.path, contents: bundledScript) else {
+        // Temp-then-replace, same as `writeSettingsText`: a failed write must
+        // leave the previously-installed script in place, because
+        // `settings.json` still points `statusLine` at it and SettingsView
+        // reports the failure as "Nothing was changed".
+        let tempURL = directory.appendingPathComponent(".\(installedScriptURL.lastPathComponent).\(UUID().uuidString).tmp")
+        guard fileManager.createFile(atPath: tempURL.path, contents: bundledScript) else {
             throw Error.scriptWriteFailed
         }
-        try fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: installedScriptURL.path)
+        do {
+            try fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: tempURL.path)
+            if fileManager.fileExists(atPath: installedScriptURL.path) {
+                _ = try fileManager.replaceItemAt(installedScriptURL, withItemAt: tempURL)
+            } else {
+                try fileManager.moveItem(at: tempURL, to: installedScriptURL)
+            }
+        } catch {
+            try? fileManager.removeItem(at: tempURL)
+            throw Error.scriptWriteFailed
+        }
     }
 
     private func isScriptStale(against bundledScript: Data) -> Bool {

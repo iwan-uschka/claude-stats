@@ -320,8 +320,12 @@ struct SettingsView: View {
 
     /// `nil` if `settings.json` doesn't exist (or its attributes can't be
     /// read) — a real, comparable state distinct from any actual timestamp.
+    /// Resolves symlinks first — a symlinked `settings.json`'s own mtime
+    /// never changes when the target is rewritten, which would make this
+    /// guard permanently blind to concurrent edits for that setup.
     private func settingsModificationDate(_ installer: StatuslineHookInstaller) -> Date? {
-        (try? FileManager.default.attributesOfItem(atPath: installer.settingsURL.path))?[.modificationDate] as? Date
+        let resolved = installer.settingsURL.resolvingSymlinksInPath()
+        return (try? FileManager.default.attributesOfItem(atPath: resolved.path))?[.modificationDate] as? Date
     }
 
     private func updateStaleScript() {

@@ -38,7 +38,7 @@ struct PopoverView: View {
             if model.usingSampleData {
                 sampleDataLine
             }
-            ForEach(model.activeErrors, id: \.self) { errorLine($0) }
+            ForEach(Array(model.activeErrors.enumerated()), id: \.offset) { _, error in errorLine(error) }
             Divider()
             footer
         }
@@ -230,8 +230,15 @@ struct PopoverView: View {
     PopoverView(model: .previewEmpty(), clock: PopoverClock())
 }
 
-#Preview("Popover — stale, over budget, error") {
+#Preview("Popover — stale, over budget, warning") {
     PopoverView(model: .previewDegraded(), clock: PopoverClock())
+}
+
+#Preview("Popover — no quota source installed") {
+    PopoverView(
+        model: .preview(snapshot: nil, error: ClaudeStatsError.noQuotaSourceAvailable.localizedDescription),
+        clock: PopoverClock()
+    )
 }
 
 #Preview("Popover — stale warning") {

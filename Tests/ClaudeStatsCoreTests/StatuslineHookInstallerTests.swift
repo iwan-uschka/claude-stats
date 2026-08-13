@@ -393,17 +393,17 @@ final class StatuslineHookInstallerTests: XCTestCase {
 
     func testPreviewUninstallWillRemoveStatusLineWhenBare() throws {
         _ = try installer.install(bundledScript: bundledScript)
-        let current = try statusLineCommand(readSettings())
-        XCTAssertEqual(try installer.previewUninstall(), .willRemoveStatusLine(current: current!))
+        let current = try XCTUnwrap(statusLineCommand(readSettings()))
+        XCTAssertEqual(try installer.previewUninstall(), .willRemoveStatusLine(current: current))
     }
 
     func testPreviewUninstallWillRestoreWrappedCommand() throws {
         try write(#"{"statusLine": {"type": "command", "command": "bash \"$HOME/.claude/mine.sh\""}}"#)
         _ = try installer.install(bundledScript: bundledScript)
-        let current = try statusLineCommand(readSettings())
+        let current = try XCTUnwrap(statusLineCommand(readSettings()))
         XCTAssertEqual(
             try installer.previewUninstall(),
-            .willRestore(current: current!, original: "bash \"$HOME/.claude/mine.sh\"")
+            .willRestore(current: current, original: "bash \"$HOME/.claude/mine.sh\"")
         )
     }
 

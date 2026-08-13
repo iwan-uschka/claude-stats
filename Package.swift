@@ -39,7 +39,7 @@ let package = Package(
         ),
         .testTarget(
             name: "ClaudeStatsTests",
-            dependencies: ["ClaudeStats"],
+            dependencies: ["ClaudeStats", "ClaudeStatsCore"],
             path: "Tests/ClaudeStatsTests"
         ),
     ],

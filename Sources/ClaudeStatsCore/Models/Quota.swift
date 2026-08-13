@@ -74,14 +74,4 @@ public struct QuotaSnapshot: Sendable, Hashable, Codable {
     ) -> Bool {
         age(asOf: now) > threshold
     }
-
-    /// Placeholder snapshot: both windows empty, for "no data yet" states.
-    public static func placeholder(capturedAt: Date = Date()) -> QuotaSnapshot {
-        QuotaSnapshot(
-            fiveHour: .empty,
-            sevenDay: .empty,
-            confidence: .official,
-            capturedAt: capturedAt
-        )
-    }
 }

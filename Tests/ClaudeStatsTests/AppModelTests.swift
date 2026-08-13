@@ -99,4 +99,16 @@ final class AppModelTests: XCTestCase {
         XCTAssertNotNil(model.breakdownError)
         XCTAssertNotNil(model.quotaError)
     }
+
+    func testPollAfterInstallRetriesUntilSnapshotLands() async {
+        let provider = ScriptedQuotaProvider()
+        await provider.setResult(.failure(ClaudeStatsError.noQuotaSourceAvailable))
+        let model = AppModel(quotaProvider: provider, usageStore: MockUsageStore())
+
+        model.pollAfterInstall()
+        await provider.setResult(.success(MockQuotaProvider.sampleSnapshot()))
+        await waitUntil(timeout: 5) { model.snapshot != nil }
+
+        XCTAssertNotNil(model.snapshot)
+    }
 }

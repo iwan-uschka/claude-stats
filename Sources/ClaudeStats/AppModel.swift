@@ -77,15 +77,18 @@ final class AppModel: ObservableObject {
     }
 
     /// Reload everything. The quota network poll is throttled to
-    /// `quotaPollInterval` unless `force` is set (manual "Refresh").
-    func refresh(force: Bool = false) {
+    /// `quotaPollInterval` unless `force` is set (manual "Refresh"). Returns
+    /// the spawned quota-poll task (`nil` if throttled) so callers that need
+    /// to know when it lands — e.g. ``pollAfterInstall()`` — can await it.
+    @discardableResult
+    func refresh(force: Bool = false) -> Task<Void, Never>? {
         reloadLocalStats()
         reloadBreakdown()
 
         let shouldPollQuota = force || lastQuotaPoll.map {
             Date().timeIntervalSince($0) >= quotaPollInterval
         } ?? true
-        guard shouldPollQuota else { return }
+        guard shouldPollQuota else { return nil }
         lastQuotaPoll = Date()
 
         refreshTask?.cancel()
@@ -114,6 +117,7 @@ final class AppModel: ObservableObject {
                 self.quotaWarning = nil
             }
         }
+        return refreshTask
     }
 
     /// Right after installing the hook, the cache file doesn't exist yet — an
@@ -127,10 +131,7 @@ final class AppModel: ObservableObject {
             for delay in [2.0, 4.0, 8.0] {
                 try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
                 guard let self, !Task.isCancelled else { return }
-                self.refresh(force: true)
-                // Local file read — near-instant; give the forced poll's own
-                // `Task` a moment to land before deciding whether to retry.
-                try? await Task.sleep(nanoseconds: 200_000_000)
+                await self.refresh(force: true)?.value
                 if self.quotaError == nil, self.snapshot != nil { return }
             }
         }
@@ -176,8 +177,19 @@ extension AppModel {
         warning: String? = nil
     ) -> AppModel {
         let store = MockUsageStore()
+        // Inlined here (not a public Core factory) so a preview-only "no
+        // data yet" fixture can't be mistaken for or reused as a real
+        // placeholder elsewhere. `confidence` has no non-official case to
+        // express "not real data" — this fixture is never rendered as-is;
+        // it only backstops the mock provider when `snapshot` is nil.
+        let previewPlaceholder = QuotaSnapshot(
+            fiveHour: .empty,
+            sevenDay: .empty,
+            confidence: .official,
+            capturedAt: Date()
+        )
         let model = AppModel(
-            quotaProvider: MockQuotaProvider(snapshot: snapshot ?? .placeholder()),
+            quotaProvider: MockQuotaProvider(snapshot: snapshot ?? previewPlaceholder),
             usageStore: store
         )
         model.selectedWindow = window // already populates `breakdown` via didSet
@@ -201,8 +213,8 @@ extension AppModel {
         preview(warning: "Statusline cache is 14 minutes old.")
     }
 
-    /// Worst case: a stale snapshot, a window over budget, and a data-source
-    /// error to surface.
+    /// Worst case: a stale snapshot, a window over budget, and a quota
+    /// staleness warning to surface.
     static func previewDegraded() -> AppModel {
         let now = Date()
         let model = preview(
