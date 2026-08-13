@@ -85,9 +85,7 @@ final class AppModel: ObservableObject {
         reloadLocalStats()
         reloadBreakdown()
 
-        let shouldPollQuota = force || lastQuotaPoll.map {
-            Date().timeIntervalSince($0) >= quotaPollInterval
-        } ?? true
+        let shouldPollQuota = force || shouldRunUpdateCheck(lastCheck: lastQuotaPoll, now: Date(), interval: quotaPollInterval)
         guard shouldPollQuota else { return nil }
         lastQuotaPoll = Date()
 

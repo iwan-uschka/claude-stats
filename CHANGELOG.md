@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+- The app now checks for updates automatically every 24 hours while running, not just once at launch.
+
+### Changed
+- Automatic update checks are throttled to once per 24 hours across launches (persisted), so
+  relaunching within that window no longer triggers a fresh check. An explicit
+  "Check for Updates…" always runs but no longer resets the 24-hour clock.
+
 ## [0.6.0] - 2026-08-13
 
 ### Fixed
