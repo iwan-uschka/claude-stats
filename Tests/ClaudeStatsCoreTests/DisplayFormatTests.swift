@@ -98,8 +98,8 @@ final class DisplayFormatTests: XCTestCase {
             "source: official · 40s ago"
         )
         XCTAssertEqual(
-            DisplayFormat.sourceTag(confidence: .localEstimate, age: 12 * 60),
-            "source: local_estimate · 12m ago"
+            DisplayFormat.sourceTag(confidence: .official, age: 12 * 60),
+            "source: official · 12m ago"
         )
     }
 

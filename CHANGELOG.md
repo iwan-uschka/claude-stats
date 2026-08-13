@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Removed
+- The `experimental` (OAuth `oauth/usage` poll) and `local_estimate`
+  (local-log-derived approximation) quota tiers. The statusline hook
+  (`official`) is now the only quota source, with no fallback — the popover
+  shows an error instead of a number until the hook is installed and has
+  fired at least once.
+
 ## [0.5.0] - 2026-08-13
 
 ### Added

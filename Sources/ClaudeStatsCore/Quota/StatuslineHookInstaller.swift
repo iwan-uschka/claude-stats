@@ -58,6 +58,11 @@ public struct StatuslineHookInstaller {
 
     public let settingsURL: URL
     public let installedScriptURL: URL
+    /// ``uninstall()`` also removes whatever's at this path (best-effort) —
+    /// without it, ``StatuslineCacheReader`` would keep serving the last real
+    /// capture as `.official` for up to its staleness threshold (~10 min)
+    /// after the hook that used to refresh it is gone.
+    public let cacheURL: URL
     /// `FileManager` isn't marked `Sendable`, but `.default` and other
     /// instances are documented thread-safe.
     nonisolated(unsafe) private let fileManager: FileManager
@@ -66,11 +71,13 @@ public struct StatuslineHookInstaller {
     public init(
         settingsURL: URL,
         installedScriptURL: URL,
+        cacheURL: URL = StatuslineCacheReader.defaultCacheURL,
         fileManager: FileManager = .default,
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
     ) {
         self.settingsURL = settingsURL
         self.installedScriptURL = installedScriptURL
+        self.cacheURL = cacheURL
         self.fileManager = fileManager
         self.homeDirectory = homeDirectory
     }
@@ -161,18 +168,20 @@ public struct StatuslineHookInstaller {
     public enum UninstallPreview: Equatable {
         /// We're not installed; ``uninstall()`` would be a no-op.
         case notInstalled
-        /// `statusLine` would be removed entirely.
-        case willRemoveStatusLine
-        /// `statusLine.command` would revert to this original command.
-        case willRestore(String)
+        /// `statusLine` would be removed entirely. Carries the current raw
+        /// command (our own invocation) for a before/after dialog.
+        case willRemoveStatusLine(current: String)
+        /// `statusLine.command` would revert to `original`. `current` is our
+        /// own raw invocation, wrapping `original`.
+        case willRestore(current: String, original: String)
     }
 
     public func previewUninstall() throws -> UninstallPreview {
         guard let command = try currentCommand(),
               let wrapping = wrappedOriginal(from: command)
         else { return .notInstalled }
-        guard let wrapping else { return .willRemoveStatusLine }
-        return .willRestore(wrapping)
+        guard let wrapping else { return .willRemoveStatusLine(current: command) }
+        return .willRestore(current: command, original: wrapping)
     }
 
     /// Restores `statusLine` to whatever our script was wrapping (or removes
@@ -195,6 +204,10 @@ public struct StatuslineHookInstaller {
         }
 
         try? fileManager.removeItem(at: installedScriptURL)
+        // Best-effort, same as the script removal above: without this,
+        // StatuslineCacheReader keeps serving the last real capture as
+        // `.official` until it ages past its own staleness threshold.
+        try? fileManager.removeItem(at: cacheURL)
     }
 
     // MARK: - Command line construction

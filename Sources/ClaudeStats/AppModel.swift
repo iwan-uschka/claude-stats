@@ -21,6 +21,10 @@ final class AppModel: ObservableObject {
     @Published private(set) var localStatsError: String?
     @Published private(set) var breakdownError: String?
     @Published private(set) var quotaError: String?
+    /// Set instead of `quotaError` for `.staleQuotaSource` — the source has a
+    /// real (if old) reading, not nothing, so ``snapshot`` is left in place
+    /// and this is shown as a warning, not an error.
+    @Published private(set) var quotaWarning: String?
 
     /// The line shown in the popover's error banner, if any.
     var lastError: String? { localStatsError ?? breakdownError ?? quotaError }
@@ -87,9 +91,23 @@ final class AppModel: ObservableObject {
                 guard !Task.isCancelled else { return }
                 self.snapshot = snapshot
                 self.quotaError = nil
+                self.quotaWarning = nil
+            } catch let error as ClaudeStatsError where error.isStaleQuotaSource {
+                guard !Task.isCancelled else { return }
+                // The source has a real reading, just an old one — leave
+                // `snapshot` as-is (the popover's own staleness check already
+                // marks it) and surface this as a warning, not an error.
+                self.quotaWarning = error.localizedDescription
+                self.quotaError = nil
             } catch {
                 guard !Task.isCancelled else { return }
-                self.quotaError = String(describing: error)
+                // Replaces the last snapshot rather than leaving it on screen:
+                // once the source has genuinely failed (not just a throttled
+                // skip — this closure only runs when a poll was attempted),
+                // frozen old numbers with no visual change read as live.
+                self.snapshot = nil
+                self.quotaError = error.localizedDescription
+                self.quotaWarning = nil
             }
         }
     }
@@ -102,7 +120,7 @@ final class AppModel: ObservableObject {
             modelUsage = try usageStore.modelUsage(last24h: true)
             localStatsError = nil
         } catch {
-            localStatsError = String(describing: error)
+            localStatsError = error.localizedDescription
         }
     }
 
@@ -111,7 +129,7 @@ final class AppModel: ObservableObject {
             breakdown = try usageStore.entrypointBreakdown(for: selectedWindow)
             breakdownError = nil
         } catch {
-            breakdownError = String(describing: error)
+            breakdownError = error.localizedDescription
         }
     }
 
@@ -152,8 +170,8 @@ extension AppModel {
         AppModel(quotaProvider: MockQuotaProvider(), usageStore: MockUsageStore())
     }
 
-    /// Worst case: a stale low-confidence snapshot, a window over budget, and a
-    /// data-source error to surface.
+    /// Worst case: a stale snapshot, a window over budget, and a data-source
+    /// error to surface.
     static func previewDegraded() -> AppModel {
         let now = Date()
         return preview(
@@ -161,10 +179,10 @@ extension AppModel {
             snapshot: QuotaSnapshot(
                 fiveHour: QuotaWindow(percentUsed: 104, resetsAt: now.addingTimeInterval(90)),
                 sevenDay: QuotaWindow(percentUsed: 88, resetsAt: nil),
-                confidence: .localEstimate,
+                confidence: .official,
                 capturedAt: now.addingTimeInterval(-42 * 60)
             ),
-            error: String(describing: ClaudeStatsError.noQuotaSourceAvailable)
+            error: ClaudeStatsError.noQuotaSourceAvailable.localizedDescription
         )
     }
 }

@@ -31,28 +31,11 @@ public struct QuotaWindow: Sendable, Hashable, Codable {
     public static let empty = QuotaWindow(percentUsed: 0, resetsAt: nil)
 }
 
-/// How trustworthy a ``QuotaSnapshot`` is. Ordered worst-to-best so
-/// `Comparable` can pick the strongest available source.
-public enum QuotaConfidence: String, Sendable, Codable, CaseIterable, Comparable {
+/// How trustworthy a ``QuotaSnapshot`` is. Only one source is wired up
+/// (Claude Code's `statusLine` hook), so this currently has a single case.
+public enum QuotaConfidence: String, Sendable, Codable {
     /// Fresh capture from Claude Code's `statusLine` hook.
     case official = "official"
-    /// Poll of the undocumented `oauth/usage` endpoint.
-    case experimental = "experimental"
-    /// No live source available — math derived from local JSONL only.
-    case localEstimate = "local_estimate"
-
-    /// Higher is better. `official` > `experimental` > `localEstimate`.
-    private var rank: Int {
-        switch self {
-        case .localEstimate: return 0
-        case .experimental: return 1
-        case .official: return 2
-        }
-    }
-
-    public static func < (lhs: QuotaConfidence, rhs: QuotaConfidence) -> Bool {
-        lhs.rank < rhs.rank
-    }
 
     /// Label shown in the popover's freshness tag.
     public var displayLabel: String { rawValue }
@@ -92,12 +75,12 @@ public struct QuotaSnapshot: Sendable, Hashable, Codable {
         age(asOf: now) > threshold
     }
 
-    /// Placeholder snapshot: both windows empty, lowest confidence.
+    /// Placeholder snapshot: both windows empty, for "no data yet" states.
     public static func placeholder(capturedAt: Date = Date()) -> QuotaSnapshot {
         QuotaSnapshot(
             fiveHour: .empty,
             sevenDay: .empty,
-            confidence: .localEstimate,
+            confidence: .official,
             capturedAt: capturedAt
         )
     }

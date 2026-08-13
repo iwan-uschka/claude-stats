@@ -71,12 +71,19 @@ struct PopoverView: View {
                 Text(sourceTag(for: snapshot))
                     .font(PopoverMetrics.captionFont)
                     .foregroundStyle(.secondary)
+                if let warning = model.quotaWarning {
+                    Text(warning)
+                        .font(PopoverMetrics.captionFont)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             } else {
                 WindowBarView(title: "5-hour window", window: .empty, now: now)
                 WindowBarView(title: "7-day window", window: .empty, now: now)
-                Text("source: none yet")
+                Text("source: none yet — requires Claude Code's statusLine hook (Settings → Quota source)")
                     .font(PopoverMetrics.captionFont)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }

@@ -169,6 +169,10 @@ struct SettingsView: View {
     private var quotaSourceSection: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Quota source").font(.headline)
+            Text("The 5-hour/7-day percentages only ever come from this hook — there's no other source.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 4) {
                 Text("Active tier:")
                     .foregroundStyle(.secondary)
@@ -357,6 +361,10 @@ struct SettingsView: View {
                 try installer.uninstall()
             }
             refreshHookState()
+            // Install/uninstall just changed what the quota source reads (a
+            // fresh statusLine, or a deleted cache file) — re-poll immediately
+            // rather than showing last-poll data until the throttle expires.
+            model.refresh(force: true)
         } catch {
             NSLog("performHookAction failed: \(error)")
             hookActionFailed = true
@@ -498,8 +506,8 @@ private struct HookConfirmationSheet: View {
         case .uninstall(let preview):
             switch preview {
             case .notInstalled: return "(not installed)"
-            case .willRemoveStatusLine, .willRestore:
-                return "ClaudeStats' statusline hook"
+            case .willRemoveStatusLine(let current): return current
+            case .willRestore(let current, _): return current
             }
         }
     }
@@ -512,7 +520,7 @@ private struct HookConfirmationSheet: View {
             switch preview {
             case .notInstalled: return "(no change)"
             case .willRemoveStatusLine: return "(no statusLine configured)"
-            case .willRestore(let original): return original
+            case .willRestore(_, let original): return original
             }
         }
     }
@@ -523,7 +531,7 @@ private struct HookConfirmationSheet: View {
     SettingsView(model: .preview())
 }
 
-#Preview("Settings — local estimate, hook not installed") {
+#Preview("Settings — stale, hook not installed") {
     SettingsView(model: .previewDegraded())
 }
 #endif

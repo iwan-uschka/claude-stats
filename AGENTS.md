@@ -30,24 +30,24 @@ Two independent tiers, deliberately decoupled:
    already present on each line — confirmed values on this machine: `cli`,
    `claude-vscode`, `sdk-cli` (Agent SDK / subagents / workflows / headless
    `-p` runs). Only sees sessions whose JSONL lives on this Mac's disk.
-2. **Live account-wide quota % (secondary, best-effort, labeled
-   "experimental").** Two ways to get 5-hour/7-day rate-limit %:
-   - Register as (or piggyback on) Claude Code's `statusLine` hook — receives
-     `rate_limits.{five_hour,seven_day}.{used_percentage,resets_at}` via
-     stdin, but only fires while Claude Code is actively rendering a status
-     line in a terminal. Cache to disk, treat as stale after ~10 min.
-   - Poll `https://api.anthropic.com/api/oauth/usage` (undocumented,
-     `anthropic-beta: oauth-2025-04-20`, Bearer token from
-     `~/.claude/.credentials.json` on Linux, or the `Claude Code-credentials`
-     login-Keychain item on macOS, where Claude Code generally doesn't write
-     the plaintext file) directly, independent of whether Claude Code is
-     running. Undocumented endpoint — can break or get revoked without
-     notice; token refresh mechanics unverified. Spike before building,
-     don't block v1 on it.
-   - **This tier is account-wide, not machine-wide** — it already reflects
-     AFK docker-loop usage automatically, *because* those containers
-     reauthenticate as the same Anthropic account (confirmed: no separate
-     API keys). No extra plumbing needed for that case.
+2. **Live account-wide quota % (secondary, `official` confidence, no
+   fallback).** Register as (or piggyback on) Claude Code's `statusLine`
+   hook — receives `rate_limits.{five_hour,seven_day}.{used_percentage,
+   resets_at}` via stdin, but only fires while Claude Code is actively
+   rendering a status line in a terminal. Cache to disk, treat as stale after
+   ~10 min. This is the only quota source: no live source installed (or a
+   stale cache) surfaces as an error in the popover rather than falling back
+   to an estimate — see `Sources/ClaudeStatsCore/Quota/StatuslineCacheReader.swift`.
+   **This tier is account-wide, not machine-wide** — it already reflects AFK
+   docker-loop usage automatically, *because* those containers reauthenticate
+   as the same Anthropic account (confirmed: no separate API keys). No extra
+   plumbing needed for that case.
+   - A prior version of this app additionally polled the undocumented
+     `oauth/usage` endpoint (`experimental` confidence) and, failing that,
+     estimated usage from local token counts against the detected plan's
+     budget (`local_estimate` confidence). Both were removed: the app is
+     meant to show the account's real rate-limit window, not a guess, so a
+     source that can't do that shouldn't silently stand in for one that can.
 3. Refresh via `FSEventStream` (CoreServices) watching the config dir tree —
    not polling. Kernel wakes the app only on write; debounce bursts; reparse
    only changed files, not a full rescan.
@@ -102,9 +102,8 @@ Est. cost today: $4.82
 Refresh   Settings   Quit
 ```
 
-Confidence tiers shown in the freshness tag: `official` (fresh statusline
-capture) > `experimental` (OAuth-usage poll) > `local_estimate` (no live
-source available, math from local logs only).
+Freshness tag shows `official` (fresh statusline capture) — the only tier.
+No fallback: nothing installed or a stale cache shows as an error instead.
 
 ## Tech / release
 

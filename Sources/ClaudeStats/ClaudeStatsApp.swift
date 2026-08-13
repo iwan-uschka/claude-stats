@@ -24,23 +24,13 @@ enum ClaudeStatsApp {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    /// Shared mutable "current store" so both `AppModel` and the quota
-    /// closure below observe the same generation after a rebuild — the
-    /// closure captures this box, never a specific store instance.
-    private final class UsageStoreBox: @unchecked Sendable {
-        private let lock = NSLock()
-        private var _current: any UsageStoring
-        init(_ store: any UsageStoring) { _current = store }
-        var current: any UsageStoring {
-            get { lock.lock(); defer { lock.unlock() }; return _current }
-            set { lock.lock(); defer { lock.unlock() }; _current = newValue }
-        }
-    }
-
     private let quotaProvider: any QuotaProviding
-    private let usageStoreBox: UsageStoreBox
-    /// Whether `usageStoreBox` started out backed by `MockUsageStore` because
-    /// no readable `~/.claude` was found — surfaced through `AppModel` so the
+    /// Current store generation; only ever read/written on the main thread —
+    /// initial construction here, and reassigned from `rebuildUsageStore`'s
+    /// `DispatchQueue.main.async` completion.
+    private var usageStore: any UsageStoring
+    /// Whether `usageStore` started out backed by `MockUsageStore` because no
+    /// readable `~/.claude` was found — surfaced through `AppModel` so the
     /// popover can mark the numbers as sample data instead of showing them as real.
     private let usingSampleData: Bool
 
@@ -67,33 +57,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             usingSampleData = true
         }
         self.usingSampleData = usingSampleData
-        let box = UsageStoreBox(usageStore)
-        self.usageStoreBox = box
+        self.usageStore = usageStore
 
-        // Lowest-confidence fallback tier for `CompositeQuotaProvider`: no live
-        // source, so approximate window usage from local token counts against
-        // the detected plan's budget. The 7-day budget has no official
-        // per-plan number, so it's scaled from the 5-hour one by the number of
-        // 5-hour windows in a week (33.6) — a stated approximation, not a fact.
-        // Uses `quotaWeightedTokens`, the same metric `detectedPlanTier()` is
-        // calibrated against — dividing raw tokens by a quota-weighted budget
-        // would inflate the percentage by an order of magnitude.
-        self.quotaProvider = CompositeQuotaProvider.makeDefault(
-            localEstimateSource: ClosureQuotaProvider {
-                let store = box.current
-                let tier = try store.detectedPlanTier()
-                let fiveHourBudget = Double(tier.fiveHourTokenBudget)
-                let sevenDayBudget = fiveHourBudget * (7 * 24 / 5)
-                let fiveHourTokens = Double(try store.quotaWeightedTokens(in: .fiveHour))
-                let sevenDayTokens = Double(try store.quotaWeightedTokens(in: .sevenDay))
-                return QuotaSnapshot(
-                    fiveHour: QuotaWindow(percentUsed: fiveHourBudget > 0 ? fiveHourTokens / fiveHourBudget * 100 : 0),
-                    sevenDay: QuotaWindow(percentUsed: sevenDayBudget > 0 ? sevenDayTokens / sevenDayBudget * 100 : 0),
-                    confidence: .localEstimate,
-                    capturedAt: Date()
-                )
-            }
-        )
+        // The only wired-up quota source: the statusline hook's disk cache.
+        // No fallback — until it's installed and has fired at least once,
+        // `AppModel.refresh()` surfaces `noQuotaSourceAvailable` as an error
+        // instead of showing an estimated number.
+        self.quotaProvider = StatuslineCacheReader()
 
         super.init()
     }
@@ -101,7 +71,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         let model = AppModel(
             quotaProvider: quotaProvider,
-            usageStore: usageStoreBox.current,
+            usageStore: usageStore,
             usingSampleData: usingSampleData
         )
         self.model = model
@@ -150,11 +120,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let fresh = try? LocalLogUsageStore() else { return }
             DispatchQueue.main.async {
                 guard let self else { return }
-                self.usageStoreBox.current = fresh
+                self.usageStore = fresh
                 self.model?.updateUsageStore(fresh)
                 // Local stats already refreshed by `updateUsageStore`; this
-                // additionally (re)polls the quota tier, throttled internally
-                // by `AppModel` so filesystem churn can't hammer `oauth/usage`.
+                // additionally re-reads the statusline cache, throttled
+                // internally by `AppModel` so filesystem churn can't cause a
+                // read on every write.
                 self.model?.refresh()
             }
         }

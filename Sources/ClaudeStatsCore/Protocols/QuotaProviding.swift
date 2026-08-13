@@ -2,13 +2,10 @@ import Foundation
 
 /// Source of live account-wide quota percentages (tier 2 of the data layer).
 ///
-/// Implementations are expected to be one of:
-/// - a `statusLine`-hook reader (writes/reads a disk cache; `.official`),
-/// - a poller for the undocumented `oauth/usage` endpoint (`.experimental`),
-/// - a local-logs estimator (`.localEstimate`),
-/// - or a composite that picks the highest-confidence non-stale source.
+/// The only implementation is a `statusLine`-hook reader (writes/reads a disk
+/// cache; `.official` confidence) — see ``StatuslineCacheReader``.
 ///
-/// `async` because the real implementations do network or file I/O.
+/// `async` because the real implementation does file I/O.
 public protocol QuotaProviding: Sendable {
     /// The most recent reading available. Implementations may return a cached
     /// snapshot — callers check ``QuotaSnapshot/isStale(asOf:threshold:)``.
@@ -37,12 +34,6 @@ public protocol UsageStoring: Sendable {
 
     /// Plan tier inferred from local history.
     func detectedPlanTier() throws -> PlanTier
-
-    /// Quota-weighted tokens (``TokenUsage/quotaWeightedTokens``) in the given
-    /// rolling window — the same metric ``detectedPlanTier()`` calibrates
-    /// against, so a local-estimate quota percentage divides like-for-like
-    /// instead of comparing raw tokens to a quota-weighted budget.
-    func quotaWeightedTokens(in window: TimeWindow) throws -> Int
 }
 
 /// Errors surfaced by the data layer.
@@ -51,10 +42,43 @@ public enum ClaudeStatsError: Error, Sendable, Equatable {
     case configDirectoryNotFound
     /// A JSONL line could not be decoded.
     case malformedLogLine(path: String, line: Int)
-    /// No live quota source produced a usable reading.
+    /// No live quota source produced a usable reading — nothing installed, or
+    /// a reading with no usable data at all. See ``staleQuotaSource(age:)``
+    /// for the "installed, but hasn't reported recently" case.
     case noQuotaSourceAvailable
-    /// Credentials for the OAuth usage endpoint are missing or unreadable.
-    case missingCredentials
+    /// A live quota source has a reading, but it's older than its staleness
+    /// threshold — the source is installed and has worked before, it just
+    /// hasn't reported since. `age` is how long ago it was captured.
+    case staleQuotaSource(age: TimeInterval)
     /// The quota source responded, but not with something we can parse.
     case unexpectedQuotaResponse(String)
+
+    /// `true` for ``staleQuotaSource(age:)`` — callers that want to treat it
+    /// as a warning rather than a hard failure switch on this instead of
+    /// pattern-matching the case directly.
+    public var isStaleQuotaSource: Bool {
+        if case .staleQuotaSource = self { return true }
+        return false
+    }
+}
+
+/// The popover's error banner reads ``LocalizedError/errorDescription``
+/// (via ``Error/localizedDescription``) rather than the raw case — a bare
+/// `String(describing:)` of `.noQuotaSourceAvailable` would just print
+/// "noQuotaSourceAvailable".
+extension ClaudeStatsError: LocalizedError {
+    public var errorDescription: String? {
+        switch self {
+        case .configDirectoryNotFound:
+            return "Couldn't find Claude Code's config directory (~/.claude or $CLAUDE_CONFIG_DIR)."
+        case .malformedLogLine(let path, let line):
+            return "Couldn't parse line \(line) of \((path as NSString).lastPathComponent)."
+        case .noQuotaSourceAvailable:
+            return "No live quota data. Install the statusline hook in Settings → Quota source, or wait for it to report."
+        case .staleQuotaSource(let age):
+            return "Quota data is stale (hasn't reported in \(DisplayFormat.duration(age))). Open a terminal running Claude Code to refresh it."
+        case .unexpectedQuotaResponse(let message):
+            return "Quota source returned something unexpected: \(message)"
+        }
+    }
 }
