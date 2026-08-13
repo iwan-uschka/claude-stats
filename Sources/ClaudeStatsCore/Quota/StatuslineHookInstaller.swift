@@ -58,6 +58,11 @@ public struct StatuslineHookInstaller {
 
     public let settingsURL: URL
     public let installedScriptURL: URL
+    /// ``uninstall()`` also removes whatever's at this path (best-effort) —
+    /// without it, ``StatuslineCacheReader`` would keep serving the last real
+    /// capture as `.official` for up to its staleness threshold (~10 min)
+    /// after the hook that used to refresh it is gone.
+    public let cacheURL: URL
     /// `FileManager` isn't marked `Sendable`, but `.default` and other
     /// instances are documented thread-safe.
     nonisolated(unsafe) private let fileManager: FileManager
@@ -66,11 +71,13 @@ public struct StatuslineHookInstaller {
     public init(
         settingsURL: URL,
         installedScriptURL: URL,
+        cacheURL: URL = StatuslineCacheReader.defaultCacheURL,
         fileManager: FileManager = .default,
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
     ) {
         self.settingsURL = settingsURL
         self.installedScriptURL = installedScriptURL
+        self.cacheURL = cacheURL
         self.fileManager = fileManager
         self.homeDirectory = homeDirectory
     }
@@ -161,24 +168,27 @@ public struct StatuslineHookInstaller {
     public enum UninstallPreview: Equatable {
         /// We're not installed; ``uninstall()`` would be a no-op.
         case notInstalled
-        /// `statusLine` would be removed entirely.
-        case willRemoveStatusLine
-        /// `statusLine.command` would revert to this original command.
-        case willRestore(String)
+        /// `statusLine` would be removed entirely. Carries the current raw
+        /// command (our own invocation) for a before/after dialog.
+        case willRemoveStatusLine(current: String)
+        /// `statusLine.command` would revert to `original`. `current` is our
+        /// own raw invocation, wrapping `original`.
+        case willRestore(current: String, original: String)
     }
 
     public func previewUninstall() throws -> UninstallPreview {
         guard let command = try currentCommand(),
               let wrapping = wrappedOriginal(from: command)
         else { return .notInstalled }
-        guard let wrapping else { return .willRemoveStatusLine }
-        return .willRestore(wrapping)
+        guard let wrapping else { return .willRemoveStatusLine(current: command) }
+        return .willRestore(current: command, original: wrapping)
     }
 
     /// Restores `statusLine` to whatever our script was wrapping (or removes
-    /// the key entirely if it wasn't wrapping anything), and deletes the
-    /// installed script. No-op if we're not currently installed. Only the
-    /// `statusLine` member's text is touched — see ``JSONObjectSurgery``.
+    /// the key entirely if it wasn't wrapping anything), deletes the installed
+    /// script, and deletes the statusline cache file (best-effort). No-op if
+    /// we're not currently installed. Only the `statusLine` member's text is
+    /// touched — see ``JSONObjectSurgery``.
     public func uninstall() throws {
         guard let command = try currentCommand(),
               let wrapping = wrappedOriginal(from: command)
@@ -195,6 +205,10 @@ public struct StatuslineHookInstaller {
         }
 
         try? fileManager.removeItem(at: installedScriptURL)
+        // Best-effort, same as the script removal above: without this,
+        // StatuslineCacheReader keeps serving the last real capture as
+        // `.official` until it ages past its own staleness threshold.
+        try? fileManager.removeItem(at: cacheURL)
     }
 
     // MARK: - Command line construction
@@ -315,11 +329,21 @@ public struct StatuslineHookInstaller {
 
     /// Atomic write: temp file in the same directory, then `replaceItemAt`, so
     /// a crash mid-write never leaves `settings.json` truncated.
+    ///
+    /// Resolves `settingsURL` first — dotfile-managed setups often symlink
+    /// `~/.claude/settings.json` elsewhere (e.g. into a synced folder), and
+    /// `replaceItemAt` fails with "file doesn't exist" when asked to replace
+    /// a symlink whose target lives in a different directory than the temp
+    /// file. Writing through the resolved path replaces the target's content
+    /// in place instead, leaving the symlink itself untouched. A path that
+    /// doesn't exist yet (fresh install, no `settings.json` at all) resolves
+    /// to itself unchanged, so this is a no-op for that case.
     private func writeSettingsText(_ text: String) throws {
-        let tempURL = settingsURL.deletingLastPathComponent()
-            .appendingPathComponent(".\(settingsURL.lastPathComponent).\(UUID().uuidString).tmp")
+        let resolvedURL = settingsURL.resolvingSymlinksInPath()
+        let tempURL = resolvedURL.deletingLastPathComponent()
+            .appendingPathComponent(".\(resolvedURL.lastPathComponent).\(UUID().uuidString).tmp")
         try Data(text.utf8).write(to: tempURL, options: .atomic)
-        _ = try fileManager.replaceItemAt(settingsURL, withItemAt: tempURL)
+        _ = try fileManager.replaceItemAt(resolvedURL, withItemAt: tempURL)
     }
 
     /// Replaces (or inserts) the `statusLine` member via ``JSONObjectSurgery``
@@ -353,7 +377,8 @@ public struct StatuslineHookInstaller {
     }
 
     private func backupSettingsIfPresent() throws {
-        guard fileManager.fileExists(atPath: settingsURL.path) else { return }
+        let resolvedURL = settingsURL.resolvingSymlinksInPath()
+        guard fileManager.fileExists(atPath: resolvedURL.path) else { return }
         // UUID suffix guarantees uniqueness even when two backup-worthy
         // mutations land in the same wall-clock second (e.g. install then
         // uninstall in quick succession); the timestamp prefix keeps backups
@@ -361,19 +386,35 @@ public struct StatuslineHookInstaller {
         let backupURL = settingsURL.deletingLastPathComponent()
             .appendingPathComponent("\(settingsURL.lastPathComponent).bak-\(Int(Date().timeIntervalSince1970))-\(UUID().uuidString)")
         // Best-effort: a failed backup shouldn't block the install itself.
-        try? fileManager.copyItem(at: settingsURL, to: backupURL)
+        // `copyItem` on `settingsURL` would recreate a symlink rather than
+        // snapshot its target's content, so back up the resolved bytes.
+        if let data = fileManager.contents(atPath: resolvedURL.path) {
+            try? data.write(to: backupURL)
+        }
     }
 
     private func writeScript(_ bundledScript: Data) throws {
         let directory = installedScriptURL.deletingLastPathComponent()
         try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-        if fileManager.fileExists(atPath: installedScriptURL.path) {
-            try fileManager.removeItem(at: installedScriptURL)
-        }
-        guard fileManager.createFile(atPath: installedScriptURL.path, contents: bundledScript) else {
+        // Temp-then-replace, same as `writeSettingsText`: a failed write must
+        // leave the previously-installed script in place, because
+        // `settings.json` still points `statusLine` at it and SettingsView
+        // reports the failure as "Nothing was changed".
+        let tempURL = directory.appendingPathComponent(".\(installedScriptURL.lastPathComponent).\(UUID().uuidString).tmp")
+        guard fileManager.createFile(atPath: tempURL.path, contents: bundledScript) else {
             throw Error.scriptWriteFailed
         }
-        try fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: installedScriptURL.path)
+        do {
+            try fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: tempURL.path)
+            if fileManager.fileExists(atPath: installedScriptURL.path) {
+                _ = try fileManager.replaceItemAt(installedScriptURL, withItemAt: tempURL)
+            } else {
+                try fileManager.moveItem(at: tempURL, to: installedScriptURL)
+            }
+        } catch {
+            try? fileManager.removeItem(at: tempURL)
+            throw Error.scriptWriteFailed
+        }
     }
 
     private func isScriptStale(against bundledScript: Data) -> Bool {

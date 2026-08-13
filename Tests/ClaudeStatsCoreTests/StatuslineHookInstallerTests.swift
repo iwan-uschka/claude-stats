@@ -7,6 +7,7 @@ final class StatuslineHookInstallerTests: XCTestCase {
     private var directory: URL!
     private var settingsURL: URL!
     private var scriptURL: URL!
+    private var cacheURL: URL!
     private var installer: StatuslineHookInstaller!
 
     private let bundledScript = Data("#!/usr/bin/env bash\necho v1\n".utf8)
@@ -19,6 +20,10 @@ final class StatuslineHookInstallerTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         settingsURL = directory.appendingPathComponent("settings.json")
         scriptURL = directory.appendingPathComponent(StatuslineHookInstaller.scriptFileName)
+        // Own temp path, never the real default — `uninstall()` deletes
+        // whatever's at `cacheURL`, and this suite must never touch the
+        // real ~/Library/Application Support/ClaudeStats cache.
+        cacheURL = directory.appendingPathComponent("statusline-cache.json")
         // Explicit, guaranteed-non-home directory: every test but the two
         // $HOME-relative-path tests below expects an absolute scriptURL path
         // in statusLine.command. Relying on the real home directory here
@@ -27,6 +32,7 @@ final class StatuslineHookInstallerTests: XCTestCase {
         installer = StatuslineHookInstaller(
             settingsURL: settingsURL,
             installedScriptURL: scriptURL,
+            cacheURL: cacheURL,
             homeDirectory: URL(fileURLWithPath: "/nonexistent-home-for-tests")
         )
     }
@@ -203,6 +209,40 @@ final class StatuslineHookInstallerTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: settingsURL.path))
     }
 
+    /// Dotfile-managed setups often symlink `settings.json` elsewhere (e.g.
+    /// into a synced folder) — `replaceItemAt` fails with "file doesn't
+    /// exist" if asked to replace a symlink whose target lives in a
+    /// different directory than the atomic-write temp file.
+    func testInstallFollowsSymlinkedSettingsFileInsteadOfReplacingTheSymlink() throws {
+        let realDir = directory.appendingPathComponent("elsewhere", isDirectory: true)
+        try FileManager.default.createDirectory(at: realDir, withIntermediateDirectories: true)
+        let realSettingsURL = realDir.appendingPathComponent("settings.json")
+        try Data(#"{"someOtherSetting": 42}"#.utf8).write(to: realSettingsURL)
+
+        let symlinkURL = directory.appendingPathComponent("linked-settings.json")
+        try FileManager.default.createSymbolicLink(at: symlinkURL, withDestinationURL: realSettingsURL)
+
+        let symlinkedInstaller = StatuslineHookInstaller(
+            settingsURL: symlinkURL,
+            installedScriptURL: scriptURL,
+            cacheURL: cacheURL,
+            homeDirectory: URL(fileURLWithPath: "/nonexistent-home-for-tests")
+        )
+        let state = try symlinkedInstaller.install(bundledScript: bundledScript)
+        XCTAssertEqual(state, .installed(wrapping: nil))
+
+        // The symlink itself must survive — only its target's content changes.
+        XCTAssertEqual(
+            try FileManager.default.destinationOfSymbolicLink(atPath: symlinkURL.path),
+            realSettingsURL.path
+        )
+        let root = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: try Data(contentsOf: realSettingsURL)) as? [String: Any]
+        )
+        XCTAssertEqual(root["someOtherSetting"] as? Int, 42)
+        XCTAssertEqual(statusLineCommand(root), "bash \"\(scriptURL.path)\"")
+    }
+
     func testInstallPreservesUnrelatedSettingsKeys() throws {
         try write(#"{"someOtherSetting": 42}"#)
         _ = try installer.install(bundledScript: bundledScript)
@@ -353,15 +393,17 @@ final class StatuslineHookInstallerTests: XCTestCase {
 
     func testPreviewUninstallWillRemoveStatusLineWhenBare() throws {
         _ = try installer.install(bundledScript: bundledScript)
-        XCTAssertEqual(try installer.previewUninstall(), .willRemoveStatusLine)
+        let current = try XCTUnwrap(statusLineCommand(readSettings()))
+        XCTAssertEqual(try installer.previewUninstall(), .willRemoveStatusLine(current: current))
     }
 
     func testPreviewUninstallWillRestoreWrappedCommand() throws {
         try write(#"{"statusLine": {"type": "command", "command": "bash \"$HOME/.claude/mine.sh\""}}"#)
         _ = try installer.install(bundledScript: bundledScript)
+        let current = try XCTUnwrap(statusLineCommand(readSettings()))
         XCTAssertEqual(
             try installer.previewUninstall(),
-            .willRestore("bash \"$HOME/.claude/mine.sh\"")
+            .willRestore(current: current, original: "bash \"$HOME/.claude/mine.sh\"")
         )
     }
 
@@ -378,6 +420,7 @@ final class StatuslineHookInstallerTests: XCTestCase {
         let installerUnderHome = StatuslineHookInstaller(
             settingsURL: settingsURL,
             installedScriptURL: scriptURL,
+            cacheURL: cacheURL,
             homeDirectory: directory
         )
         let state = try installerUnderHome.install(bundledScript: bundledScript)
@@ -477,6 +520,26 @@ final class StatuslineHookInstallerTests: XCTestCase {
 
         let root = try readSettings()
         XCTAssertEqual(statusLineCommand(root), "bash \"$HOME/.claude/mine.sh\"")
+    }
+
+    /// Without this, `StatuslineCacheReader` would keep serving the last real
+    /// capture as `.official` for up to its staleness threshold after the
+    /// hook that used to refresh it is gone.
+    func testUninstallDeletesTheStatuslineCacheFile() throws {
+        try Data(#"{"rate_limits": {"five_hour": {"used_percentage": 10}}}"#.utf8).write(to: cacheURL)
+        _ = try installer.install(bundledScript: bundledScript)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: cacheURL.path))
+
+        try installer.uninstall()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: cacheURL.path))
+    }
+
+    func testUninstallIsNoOpOnTheCacheFileWhenNotInstalled() throws {
+        try write(#"{"statusLine": {"type": "command", "command": "bash \"$HOME/.claude/mine.sh\""}}"#)
+        try Data(#"{"rate_limits": {"five_hour": {"used_percentage": 10}}}"#.utf8).write(to: cacheURL)
+        try installer.uninstall()
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: cacheURL.path))
     }
 
     func testUninstallNoOpWhenNoSettingsFileAtAll() throws {

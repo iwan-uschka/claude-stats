@@ -38,9 +38,7 @@ struct PopoverView: View {
             if model.usingSampleData {
                 sampleDataLine
             }
-            if let error = model.lastError {
-                errorLine(error)
-            }
+            ForEach(Array(model.activeErrors.enumerated()), id: \.offset) { _, error in errorLine(error) }
             Divider()
             footer
         }
@@ -71,12 +69,19 @@ struct PopoverView: View {
                 Text(sourceTag(for: snapshot))
                     .font(PopoverMetrics.captionFont)
                     .foregroundStyle(.secondary)
+                if let warning = model.quotaWarning {
+                    Text(warning)
+                        .font(PopoverMetrics.captionFont)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             } else {
                 WindowBarView(title: "5-hour window", window: .empty, now: now)
                 WindowBarView(title: "7-day window", window: .empty, now: now)
-                Text("source: none yet")
+                Text(model.quotaWarning ?? "source: none yet — requires Claude Code's statusLine hook (Settings → Quota source)")
                     .font(PopoverMetrics.captionFont)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(model.quotaWarning != nil ? .orange : .secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -225,8 +230,23 @@ struct PopoverView: View {
     PopoverView(model: .previewEmpty(), clock: PopoverClock())
 }
 
-#Preview("Popover — stale, over budget, error") {
+#Preview("Popover — stale, over budget, warning") {
     PopoverView(model: .previewDegraded(), clock: PopoverClock())
+}
+
+#Preview("Popover — no quota source installed") {
+    PopoverView(
+        model: .preview(snapshot: nil, error: ClaudeStatsError.noQuotaSourceAvailable.localizedDescription),
+        clock: PopoverClock()
+    )
+}
+
+#Preview("Popover — stale warning") {
+    PopoverView(model: .previewStaleWarning(), clock: PopoverClock())
+}
+
+#Preview("Popover — stale warning, no prior snapshot") {
+    PopoverView(model: .preview(snapshot: nil, warning: "Statusline cache is 14 minutes old."), clock: PopoverClock())
 }
 
 #Preview("Popover — 24h breakdown") {

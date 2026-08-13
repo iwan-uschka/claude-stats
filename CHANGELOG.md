@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+### Fixed
+- Quota errors are shown as sentences instead of raw enum case names.
+- An installed-but-quiet hook (stale cache) now keeps the last reading with an
+  orange staleness warning instead of blanking the bars with a red error.
+- Removing the hook deletes the statusline cache and re-polls immediately,
+  instead of leaving the last reading on screen for up to 10 minutes.
+- The uninstall confirmation's "Before" text shows the real current
+  `statusLine` command.
+- `settings.json` writes no longer fail when the file is a symlink into
+  another directory (dotfile-managed / synced setups).
+
+### Removed
+- The `experimental` (OAuth `oauth/usage` poll) and `local_estimate`
+  (local-log-derived approximation) quota tiers. The statusline hook
+  (`official`) is now the only quota source, with no fallback — the popover
+  shows an error instead of a number until the hook is installed and has
+  fired at least once.
+
 ## [0.5.0] - 2026-08-13
 
 ### Added

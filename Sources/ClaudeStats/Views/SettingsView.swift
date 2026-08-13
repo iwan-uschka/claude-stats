@@ -169,6 +169,10 @@ struct SettingsView: View {
     private var quotaSourceSection: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Quota source").font(.headline)
+            Text("The 5-hour/7-day percentages only ever come from this hook — there's no other source.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 4) {
                 Text("Active tier:")
                     .foregroundStyle(.secondary)
@@ -178,7 +182,7 @@ struct SettingsView: View {
 
             hookStatusView
 
-            if model.snapshot?.confidence != .official, hookState == nil || hookState == .notInstalled {
+            if model.snapshot == nil, hookState == nil || hookState == .notInstalled {
                 Button("Reveal Script in Finder") { revealBundledScript() }
                     .controlSize(.small)
                 Text("Prefer to wire it up yourself? The script's header comment has the exact steps.")
@@ -316,8 +320,12 @@ struct SettingsView: View {
 
     /// `nil` if `settings.json` doesn't exist (or its attributes can't be
     /// read) — a real, comparable state distinct from any actual timestamp.
+    /// Resolves symlinks first — a symlinked `settings.json`'s own mtime
+    /// never changes when the target is rewritten, which would make this
+    /// guard permanently blind to concurrent edits for that setup.
     private func settingsModificationDate(_ installer: StatuslineHookInstaller) -> Date? {
-        (try? FileManager.default.attributesOfItem(atPath: installer.settingsURL.path))?[.modificationDate] as? Date
+        let resolved = installer.settingsURL.resolvingSymlinksInPath()
+        return (try? FileManager.default.attributesOfItem(atPath: resolved.path))?[.modificationDate] as? Date
     }
 
     private func updateStaleScript() {
@@ -353,10 +361,20 @@ struct SettingsView: View {
                     return
                 }
                 _ = try installer.install(bundledScript: script)
+                refreshHookState()
+                // No immediate forced poll here: the cache file doesn't exist
+                // yet, so it can only fail. `pollAfterInstall` retries a few
+                // times over the next ~15s instead.
+                model.pollAfterInstall()
+                return
             case .uninstall:
                 try installer.uninstall()
             }
             refreshHookState()
+            // Uninstall just deleted the cache file the quota source reads —
+            // re-poll immediately rather than showing last-poll data until
+            // the throttle expires.
+            model.refresh(force: true)
         } catch {
             NSLog("performHookAction failed: \(error)")
             hookActionFailed = true
@@ -498,8 +516,8 @@ private struct HookConfirmationSheet: View {
         case .uninstall(let preview):
             switch preview {
             case .notInstalled: return "(not installed)"
-            case .willRemoveStatusLine, .willRestore:
-                return "ClaudeStats' statusline hook"
+            case .willRemoveStatusLine(let current): return current
+            case .willRestore(let current, _): return current
             }
         }
     }
@@ -512,7 +530,7 @@ private struct HookConfirmationSheet: View {
             switch preview {
             case .notInstalled: return "(no change)"
             case .willRemoveStatusLine: return "(no statusLine configured)"
-            case .willRestore(let original): return original
+            case .willRestore(_, let original): return original
             }
         }
     }
@@ -523,7 +541,7 @@ private struct HookConfirmationSheet: View {
     SettingsView(model: .preview())
 }
 
-#Preview("Settings — local estimate, hook not installed") {
+#Preview("Settings — stale, hook installed but quiet") {
     SettingsView(model: .previewDegraded())
 }
 #endif

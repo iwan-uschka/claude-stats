@@ -23,51 +23,34 @@ Pre-built releases (macOS app bundle, zipped) are available on the
 - Popover with per-window usage and reset countdowns, auto-detected plan tier (Pro / Max5 / Max20 / custom), and current burn rate
 - Per-source breakdown (CLI / VS Code / SDK-agents) across 5h/24h/7d windows, and per-model token/cost totals
 - Local session-log parsing (`~/.claude/projects/*/*.jsonl`) — token counts, cost, burn rate always available, no network or credentials needed
-- Optional live quota percentage layered on top (Claude Code's `statusLine` hook, or a usage-API poll), falling back to a local estimate when neither is available — see [Quota sources](#quota-sources)
+- Live 5-hour/7-day quota percentage from Claude Code's `statusLine` hook — see [Quota source](#quota-source)
 - FSEvents-driven refresh — updates on write, not on a poll timer
 
 Full architecture and data-source design: see [AGENTS.md](AGENTS.md).
 
-## Quota sources
+## Quota source
 
-The popover's 5-hour/7-day percentage bars come from one of three tiers, tried
-in order — the freshness tag in the popover shows which one won:
+The popover's 5-hour/7-day percentage bars come from a single source, tagged
+`official` in the freshness line: Claude Code's `statusLine` hook, cached to
+disk (stale after ~10 min). There is no fallback — until the hook is
+installed and has fired at least once, the popover shows an error instead of
+a quota number. Once it has fired at least once but has since gone quiet
+(stale cache), the popover keeps the last reading on screen with an orange
+staleness warning instead. Token counts, cost, and burn rate (from local log
+parsing) work regardless.
 
-| Tag | Source | Setup |
-|---|---|---|
-| `official` | Claude Code's `statusLine` hook, cached to disk (stale after ~10 min) | One click — see below |
-| `experimental` | Polls the undocumented `oauth/usage` endpoint directly | None — reads your existing Claude Code login |
-| `local_estimate` | Math over local session logs (known plan-tier thresholds + your recent usage) | None — always available |
+**Setup.** Claude Code's `statusLine` feature can emit live rate-limit data,
+but only while a terminal is actively rendering a status line, and only if
+something is registered to receive it. This app is a menu bar app, not a
+shell hook, so a small script bridges the two. Open **Settings → Quota
+source** and click **Set Up Automatically**: the app shows the exact
+before/after change to `~/.claude/settings.json`, backs the file up, and only
+edits the `statusLine` key (an existing statusline is wrapped, not replaced).
+**Remove** reverts it. Prefer doing it yourself? **Reveal Script in Finder**
+and follow the header comment.
 
-**`official` — statusline hook.** Claude Code's `statusLine` feature can emit
-live rate-limit data, but only while a terminal is actively rendering a status
-line, and only if something is registered to receive it. This app is a menu
-bar app, not a shell hook, so a small script bridges the two. Open
-**Settings → Quota source** and click **Set Up Automatically**: the app shows the
-exact before/after change to `~/.claude/settings.json`, backs the file up, and
-only edits the `statusLine` key (an existing statusline is wrapped, not
-replaced). **Remove** reverts it. Prefer doing it yourself? **Reveal Script in
-Finder** and follow the header comment.
-
-**`experimental` — OAuth usage poll.** Reads the same OAuth token Claude Code
-itself uses, from the `Claude Code-credentials` login-Keychain item (the
-first Keychain read will prompt for access, click "Always Allow") and polls
-Anthropic's undocumented usage endpoint directly, independent of whether a
-terminal is open. No setup beyond already being logged into Claude Code, but
-since the endpoint is undocumented it can change or get rate-limited without
-notice — that's what the "experimental" label is warning about, not anything
-you did wrong.
-
-**`local_estimate` — fallback.** When neither live tier has a usable reading
-(nothing installed, or both stale/unreachable), usage is estimated from the
-same local session logs used for token/cost tracking, against known per-tier
-thresholds (Pro / Max5 / Max20) or a P90-of-recent-history fallback for custom
-tiers. Always available, never requires network or credentials, but it's an
-estimate — not the account's authoritative rate-limit window.
-
-Only the live tiers (`official`, `experimental`) are account-wide; both
-reflect usage from other machines/containers on the same Anthropic account
-automatically. `local_estimate` only sees activity logged on the system.
+This tier is account-wide — it reflects usage from other machines/containers
+on the same Anthropic account automatically.
 
 ## Building a release app
 

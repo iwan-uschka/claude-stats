@@ -205,15 +205,6 @@ public struct LocalLogUsageStore: UsageStoring {
         return PlanTier.nearestKnownTier(forFiveHourTokens: p90)
     }
 
-    /// Quota-weighted tokens (``TokenUsage/quotaWeightedTokens``) in `window`,
-    /// ending at "now" — the same metric ``detectedPlanTier()`` calibrates
-    /// against, so estimators divide like-for-like against a plan budget.
-    public func quotaWeightedTokens(in window: TimeWindow) throws -> Int {
-        let now = nowProvider()
-        return events(in: window.startDate(endingAt: now), to: now)
-            .reduce(0) { $0 + $1.usage.quotaWeightedTokens }
-    }
-
     // MARK: - Derived values
 
     /// Number of days of local history the plan-tier heuristic looks at.

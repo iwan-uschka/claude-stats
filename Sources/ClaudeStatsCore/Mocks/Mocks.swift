@@ -43,7 +43,6 @@ public struct MockUsageStore: UsageStoring {
     public var burnRate: Double
     public var costToday: Double
     public var planTier: PlanTier
-    public var quotaWeightedTokensByWindow: [TimeWindow: Int]
 
     public init(
         breakdowns: [TimeWindow: EntrypointBreakdown] = MockUsageStore.sampleBreakdowns,
@@ -51,8 +50,7 @@ public struct MockUsageStore: UsageStoring {
         modelUsageAllTime: [ModelUsage]? = nil,
         burnRate: Double = 12_400,
         costToday: Double = 4.82,
-        planTier: PlanTier = .max20,
-        quotaWeightedTokensByWindow: [TimeWindow: Int] = MockUsageStore.sampleQuotaWeightedTokens
+        planTier: PlanTier = .max20
     ) {
         self.breakdowns = breakdowns
         self.modelUsageLast24h = modelUsageLast24h
@@ -60,7 +58,6 @@ public struct MockUsageStore: UsageStoring {
         self.burnRate = burnRate
         self.costToday = costToday
         self.planTier = planTier
-        self.quotaWeightedTokensByWindow = quotaWeightedTokensByWindow
     }
 
     public func entrypointBreakdown(for window: TimeWindow) throws -> EntrypointBreakdown {
@@ -76,10 +73,6 @@ public struct MockUsageStore: UsageStoring {
     public func estimatedCostToday() throws -> Double { costToday }
 
     public func detectedPlanTier() throws -> PlanTier { planTier }
-
-    public func quotaWeightedTokens(in window: TimeWindow) throws -> Int {
-        quotaWeightedTokensByWindow[window] ?? 0
-    }
 
     /// Token totals consistent with the default `burnRate` (12.4k tok/hr) across
     /// every window, so the popover never shows two contradictory numbers for
@@ -97,15 +90,6 @@ public struct MockUsageStore: UsageStoring {
             window: .sevenDay,
             tokensByEntrypoint: [.cli: 566_500, .vscode: 164_500, .sdkAgent: 1_352_200]
         ),
-    ]
-
-    /// Quota-weighted tokens per window, kept comfortably under the default
-    /// `.max20` plan's budget (220k/5h, 7,392,000/7d) so the local-estimate
-    /// quota tier doesn't pin every mock window at 100% used.
-    public static let sampleQuotaWeightedTokens: [TimeWindow: Int] = [
-        .fiveHour: 130_000,
-        .twentyFourHour: 620_000,
-        .sevenDay: 3_500_000,
     ]
 
     /// Matches the "By model" rows in the popover sketch in `AGENTS.md`.

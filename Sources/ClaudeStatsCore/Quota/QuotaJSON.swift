@@ -1,18 +1,15 @@
 import Foundation
 
-/// Lenient coercion helpers shared by the two live quota sources.
+/// Lenient coercion helpers for the statusline cache payload.
 ///
-/// Both sources are semi-documented at best and disagree on details, so nothing
-/// here uses `Codable`: the statusline hook reports `used_percentage` with
-/// `resets_at` as **Unix epoch seconds**, while `oauth/usage` reports
-/// `utilization` with `resets_at` as an **ISO-8601 string**. Rather than pin one
-/// shape per source and break on the first upstream rename, we accept any of the
-/// plausible spellings for both.
+/// The payload is semi-documented at best, so nothing here uses `Codable`: the
+/// statusline hook reports `used_percentage` with `resets_at` as **Unix epoch
+/// seconds**. Rather than pin one shape and break on the first upstream rename,
+/// we accept any of several plausible key spellings.
 enum QuotaJSON {
-    /// Percentage-consumed key spellings observed or plausible across sources.
+    /// Percentage-consumed key spellings observed or plausible in the payload.
     static let percentKeys = [
         "used_percentage",  // statusLine hook payload
-        "utilization",      // GET /api/oauth/usage
         "usedPercentage",
         "percent_used",
         "percentUsed",

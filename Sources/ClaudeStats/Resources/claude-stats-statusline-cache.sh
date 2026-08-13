@@ -22,7 +22,8 @@
 # `rate_limits` only appears for Claude.ai Pro/Max subscribers, and only after the
 # session's first API response. The hook fires only while Claude Code is actively
 # rendering a status line, so the cache goes cold when you stop working — the app
-# treats it as stale after 10 minutes and falls back to the OAuth usage poll.
+# treats it as stale after 10 minutes and shows a warning instead of a number.
+# There is no fallback source: this script is the app's only quota source.
 #
 # INSTALL
 # -------

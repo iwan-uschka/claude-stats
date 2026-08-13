@@ -37,6 +37,11 @@ let package = Package(
             // Hand-crafted JSONL fixtures, so log-parsing tests never touch ~/.claude.
             resources: [.copy("Fixtures")]
         ),
+        .testTarget(
+            name: "ClaudeStatsTests",
+            dependencies: ["ClaudeStats", "ClaudeStatsCore"],
+            path: "Tests/ClaudeStatsTests"
+        ),
     ],
     swiftLanguageModes: [.v5]
 )

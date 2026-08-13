@@ -117,11 +117,11 @@ final class StatuslineCacheReaderTests: XCTestCase {
 
     // MARK: - Staleness
 
-    func testCacheOlderThanThresholdIsTreatedAsNoSource() async throws {
+    func testCacheOlderThanThresholdThrowsStale() async throws {
         // 601s old — one second past the 600s default.
         try write(filteredCache(capturedAt: now.addingTimeInterval(-601)))
 
-        await assertThrows(.noQuotaSourceAvailable) {
+        await assertThrows(.staleQuotaSource(age: 601)) {
             try await self.makeReader().currentSnapshot()
         }
     }
@@ -138,7 +138,7 @@ final class StatuslineCacheReaderTests: XCTestCase {
         // Fresh under the default, stale under a 60s threshold.
         let underDefault = try await makeReader().currentSnapshot()
         XCTAssertEqual(underDefault.confidence, .official)
-        await assertThrows(.noQuotaSourceAvailable) {
+        await assertThrows(.staleQuotaSource(age: 120)) {
             try await self.makeReader(stalenessThreshold: 60).currentSnapshot()
         }
     }
