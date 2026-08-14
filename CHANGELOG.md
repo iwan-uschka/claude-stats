@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Fixed
+- Session-log refreshes now reparse only the files that actually changed
+  (stat-based mtime/size diff) instead of the entire multi-GB corpus on every
+  write, and bursts of watcher batches collapse into at most one queued
+  rebuild. On a 1.9 GB corpus this drops sustained CPU during active Claude
+  Code sessions from ~100% of a core to near zero.
+- Events older than the longest query window (8 days) are folded into
+  per-model totals instead of being kept in memory individually, shrinking the
+  app's resident memory from hundreds of MB to a size proportional to the last
+  8 days of activity. All-time "By model" totals are preserved by the fold.
+
 ## [0.7.0] - 2026-08-13
 
 ### Added
