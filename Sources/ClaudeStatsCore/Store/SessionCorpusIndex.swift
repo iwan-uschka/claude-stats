@@ -161,6 +161,10 @@ public final class SessionCorpusIndex {
                cached.fileSize == fileSize {
                 // Unchanged on disk — just fold whatever aged past the cutoff.
                 if cached.recentEvents.contains(where: { $0.timestamp < cutoff }) {
+                    // Both `inout` arguments must come from independent locals: passing
+                    // `&cached.recentEvents` and `&cached.foldedByModel` directly lets the
+                    // release optimizer collapse them onto one base pointer and trip a runtime
+                    // exclusivity trap. Do not inline these back into the call.
                     var recentEvents = cached.recentEvents
                     var foldedByModel = cached.foldedByModel
                     let fold = Self.signposter.beginInterval("Fold", id: Self.signposter.makeSignpostID())
@@ -189,6 +193,10 @@ public final class SessionCorpusIndex {
                 skippedCount: result.skippedLines.count,
                 skippedSamples: Array(result.skippedLines.prefix(Self.skippedSampleLimit))
             )
+            // Both `inout` arguments must come from independent locals: passing
+            // `&entry.recentEvents` and `&entry.foldedByModel` directly lets the
+            // release optimizer collapse them onto one base pointer and trip a runtime
+            // exclusivity trap. Do not inline these back into the call.
             var recentEvents = entry.recentEvents
             var foldedByModel = entry.foldedByModel
             let fold = Self.signposter.beginInterval("Fold", id: Self.signposter.makeSignpostID())
