@@ -57,7 +57,7 @@ public final class SessionCorpusIndex {
     /// producing thousands.
     public static let skippedSampleLimit = 5
 
-    /// Signpost emitter for ``rebuild()``'s three phases, so the real cost of
+    /// Signpost emitter for ``rebuild()``'s phases, so the real cost of
     /// an FSEvent-triggered rebuild can be read off an Instruments trace
     /// instead of guessed at. Record with:
     ///
@@ -67,17 +67,24 @@ public final class SessionCorpusIndex {
     ///
     /// Signposts compile to a cheap "is anyone listening?" check when nothing
     /// is recording, so these stay always-on rather than hiding behind a
-    /// build flag. Three interval names are emitted:
+    /// build flag. Four interval names are emitted:
     ///
     /// - `StatPass` — one per rebuild, spanning enumeration + sort of the
     ///   session files and the per-file `resourceValues` stat. It *encloses*
-    ///   the `Reparse` intervals below (the scan and the reparse-or-skip
-    ///   decision share one loop, and instrumentation must not restructure
-    ///   that), so the stat-only cost is `StatPass − Σ Reparse`.
+    ///   the `Reparse` and `Fold` intervals below (the scan and the
+    ///   reparse-or-skip decision share one loop, and instrumentation must not
+    ///   restructure that), so the stat-only cost is
+    ///   `StatPass − Σ Reparse − Σ Fold`. That residual still includes the
+    ///   per-file `contains(where:)` scan (over every retained event of every
+    ///   unchanged file) that decides whether a fold is even needed.
     /// - `Reparse` — one per file that actually got reparsed, around the parse
     ///   call alone; files skipped by the mtime/size check emit nothing, so
     ///   the count of intervals is the churn rate and their sum is the real
     ///   reparse cost.
+    /// - `Fold` — one per file whose retained events are swept for the
+    ///   fold-past-cutoff pass, covering both unchanged files (aged-out
+    ///   events) and freshly reparsed files (fresh events already past the
+    ///   cutoff on arrival).
     /// - `SnapshotAssembly` — one per rebuild, over the event concatenation
     ///   and historical-fold merge that builds the returned store.
     private static let signposter = OSSignposter(
@@ -154,7 +161,9 @@ public final class SessionCorpusIndex {
                cached.fileSize == fileSize {
                 // Unchanged on disk — just fold whatever aged past the cutoff.
                 if cached.recentEvents.contains(where: { $0.timestamp < cutoff }) {
+                    let fold = Self.signposter.beginInterval("Fold", id: Self.signposter.makeSignpostID())
                     Self.fold(events: &cached.recentEvents, into: &cached.foldedByModel, before: cutoff)
+                    Self.signposter.endInterval("Fold", fold, "events: \(cached.recentEvents.count)")
                     files[path] = cached
                 }
                 continue
@@ -176,7 +185,9 @@ public final class SessionCorpusIndex {
                 skippedCount: result.skippedLines.count,
                 skippedSamples: Array(result.skippedLines.prefix(Self.skippedSampleLimit))
             )
+            let fold = Self.signposter.beginInterval("Fold", id: Self.signposter.makeSignpostID())
             Self.fold(events: &entry.recentEvents, into: &entry.foldedByModel, before: cutoff)
+            Self.signposter.endInterval("Fold", fold, "events: \(entry.recentEvents.count)")
             files[path] = entry
         }
         files = files.filter { seen.contains($0.key) }
@@ -201,18 +212,18 @@ public final class SessionCorpusIndex {
                 historical[modelID, default: HistoricalModelUsage()].merge(total)
             }
         }
-        Self.signposter.endInterval(
-            "SnapshotAssembly", assembly,
-            "events: \(events.count), models: \(historical.count)"
-        )
-
-        return LocalLogUsageStore(
+        let store = LocalLogUsageStore(
             events: events,
             skippedLines: skipped,
             historicalByModel: historical,
             calendar: calendar,
             now: nowProvider
         )
+        Self.signposter.endInterval(
+            "SnapshotAssembly", assembly,
+            "events: \(events.count), models: \(historical.count)"
+        )
+        return store
     }
 
     /// Total malformed lines across the corpus (uncapped, unlike the samples
