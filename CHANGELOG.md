@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-08-15
+
 ### Fixed
 - Session-log refreshes now reparse only the files that actually changed
   (stat-based mtime/size diff) instead of the entire multi-GB corpus on every
