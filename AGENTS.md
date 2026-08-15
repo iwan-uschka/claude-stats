@@ -56,6 +56,12 @@ Two independent tiers, deliberately decoupled:
 4. Plan tier (Pro / Max5 / Max20) auto-detected: known thresholds
    (~19k / ~88k / ~220k tokens per 5h window) plus P90 of the last 8 days of
    local history as a fallback for custom/unclear tiers.
+5. **Retention window.** `SessionCorpusIndex` keeps individual `UsageEvent`s
+   only for the last `defaultRetention` (8 days = `planDetectionHistoryDays`);
+   older events fold into per-model `HistoricalModelUsage` totals that only
+   `modelUsage(last24h: false)` reads back. Any new per-event query — a new
+   `TimeWindow` case, a longer heuristic — must fit inside that window, or
+   raise `defaultRetention` first.
 
 ### Explicit non-goals (v1)
 

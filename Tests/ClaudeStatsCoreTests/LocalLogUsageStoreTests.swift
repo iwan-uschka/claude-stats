@@ -632,6 +632,120 @@ final class LocalLogUsageStoreTests: XCTestCase {
         XCTAssertTrue(store.events(in: end, to: start).isEmpty, "inverted range yields nothing")
     }
 
+    // MARK: - Historical (folded) model usage
+
+    /// Days-ago shorthand relative to the frozen clock.
+    private func date(daysAgo: Double) -> Date {
+        Self.referenceNow.addingTimeInterval(-daysAgo * 86_400)
+    }
+
+    private func makeHistoricalStore(
+        events: [UsageEvent] = [],
+        historical: [String?: HistoricalModelUsage]
+    ) -> LocalLogUsageStore {
+        let now = Self.referenceNow
+        return LocalLogUsageStore(
+            events: events,
+            historicalByModel: historical,
+            calendar: Self.utcCalendar,
+            now: { now }
+        )
+    }
+
+    func testAllTimeModelUsagePrefersNewestRetainedIDOverFoldedID() throws {
+        // Folded history used an older sonnet ID; the retained event a newer
+        // one — same family, so one row, carrying the newest raw ID.
+        let store = makeHistoricalStore(
+            events: [UsageEvent(
+                timestamp: date(daysAgo: 1),
+                modelID: "claude-sonnet-5",
+                usage: TokenUsage(inputTokens: 10, outputTokens: 5)
+            )],
+            historical: ["claude-sonnet-4-5": HistoricalModelUsage(
+                usage: TokenUsage(inputTokens: 100, outputTokens: 50),
+                estimatedCostUSD: 1.0,
+                latestTimestamp: date(daysAgo: 30)
+            )]
+        )
+        let rows = try store.modelUsage(last24h: false)
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertEqual(rows[0].modelID, "claude-sonnet-5")
+        XCTAssertEqual(rows[0].family, .sonnet)
+        XCTAssertEqual(rows[0].tokens, 165)
+    }
+
+    func testAllTimeModelUsagePicksNewestFoldedIDWhenNothingRetained() throws {
+        // Two folded IDs in the same family, no retained events: the one with
+        // the newer latestTimestamp must name the row.
+        let store = makeHistoricalStore(historical: [
+            "claude-sonnet-4-5": HistoricalModelUsage(
+                usage: TokenUsage(inputTokens: 100, outputTokens: 50),
+                latestTimestamp: date(daysAgo: 30)
+            ),
+            "claude-sonnet-5": HistoricalModelUsage(
+                usage: TokenUsage(inputTokens: 10, outputTokens: 5),
+                latestTimestamp: date(daysAgo: 20)
+            ),
+        ])
+        let rows = try store.modelUsage(last24h: false)
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertEqual(rows[0].modelID, "claude-sonnet-5")
+        XCTAssertEqual(rows[0].tokens, 165)
+    }
+
+    func testAllTimeModelUsageKeepsUnrecognisedAndNilHistoricalIDs() throws {
+        let store = makeHistoricalStore(historical: [
+            "claude-future-9": HistoricalModelUsage(
+                usage: TokenUsage(inputTokens: 7, outputTokens: 3),
+                latestTimestamp: date(daysAgo: 15)
+            ),
+            nil: HistoricalModelUsage(
+                usage: TokenUsage(inputTokens: 2, outputTokens: 1),
+                latestTimestamp: date(daysAgo: 10)
+            ),
+        ])
+        let rows = try store.modelUsage(last24h: false)
+        // Unknown IDs sort after family rows, alphabetically.
+        XCTAssertEqual(rows.map(\.modelID), ["claude-future-9", "unknown"])
+        XCTAssertEqual(rows.map(\.tokens), [10, 3])
+        XCTAssertEqual(rows.map(\.family), [nil, nil])
+    }
+
+    func testLast24hModelUsageIgnoresHistoricalTotals() throws {
+        // Opus exists only in folded history — the 24h view must not show it.
+        let store = makeHistoricalStore(
+            events: [UsageEvent(
+                timestamp: date(daysAgo: 0.5),
+                modelID: "claude-sonnet-5",
+                usage: TokenUsage(inputTokens: 10, outputTokens: 5)
+            )],
+            historical: ["claude-opus-5": HistoricalModelUsage(
+                usage: TokenUsage(inputTokens: 100, outputTokens: 50),
+                latestTimestamp: date(daysAgo: 30)
+            )]
+        )
+        let rows = try store.modelUsage(last24h: true)
+        XCTAssertEqual(rows.map(\.modelID), ["claude-sonnet-5"])
+        XCTAssertEqual(rows[0].tokens, 15)
+    }
+
+    func testAddingEventsCarriesHistoricalTotalsThrough() throws {
+        let historical: [String?: HistoricalModelUsage] = [
+            "claude-sonnet-5": HistoricalModelUsage(
+                usage: TokenUsage(inputTokens: 100, outputTokens: 50),
+                latestTimestamp: date(daysAgo: 30)
+            )
+        ]
+        let base = makeHistoricalStore(historical: historical)
+        let grown = base.adding(events: [UsageEvent(
+            timestamp: date(daysAgo: 0.5),
+            modelID: "claude-sonnet-5",
+            usage: TokenUsage(inputTokens: 10, outputTokens: 5)
+        )])
+        XCTAssertEqual(grown.historicalByModel, historical)
+        XCTAssertEqual(try grown.modelUsage(last24h: false).first?.tokens, 165)
+    }
+
     // MARK: - Protocol conformance
 
     func testConformsToUsageStoringAndIsUsableThroughTheProtocol() throws {

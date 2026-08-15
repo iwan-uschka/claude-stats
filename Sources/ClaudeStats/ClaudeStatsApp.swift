@@ -27,8 +27,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let quotaProvider: any QuotaProviding
     /// Only read once, at launch, to seed `AppModel`; `rebuildUsageStore`
     /// hands later generations straight to `model.updateUsageStore` instead
-    /// of keeping a second copy here.
-    private let usageStore: any UsageStoring
+    /// of keeping a second copy here. Cleared once `AppModel` owns the store
+    /// so the launch snapshot's event array isn't pinned for the process
+    /// lifetime.
+    private var usageStore: (any UsageStoring)?
     /// Whether `usageStore` started out backed by `MockUsageStore` because no
     /// readable `~/.claude` was found — surfaced through `AppModel` so the
     /// popover can mark the numbers as sample data instead of showing them as real.
@@ -38,10 +40,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var model: AppModel?
     private var watcher: ConfigDirectoryWatcher?
 
-    /// Serial, so overlapping FSEvents batches rebuild one at a time instead of
-    /// racing several concurrent full-corpus parses; a burst just queues a few
-    /// redundant-but-correct rebuilds rather than corrupting anything.
+    /// Serial home of `corpusIndex`: every rebuild — and every touch of the
+    /// index after `init` — happens here, so the index needs no locking.
     private let rebuildQueue = DispatchQueue(label: "de.bitgrip.claude-stats.usage-rebuild", qos: .utility)
+
+    /// Incremental parser state. `nil` when running on sample data. Created on
+    /// the main thread in `init` (before the watcher exists), then confined to
+    /// `rebuildQueue`.
+    private let corpusIndex: SessionCorpusIndex?
+
+    /// `true` while a rebuild is queued but not yet started, guarded by
+    /// `rebuildFlagLock`. Watcher batches arriving in that window are already
+    /// covered — the queued rebuild stat-scans the whole corpus when it runs —
+    /// so they don't enqueue another one. Without this, batches every ~2s each
+    /// queueing their own rebuild would pile up behind a slow one indefinitely.
+    private var rebuildQueued = false
+    private let rebuildFlagLock = NSLock()
 
     override init() {
         // Real local-log store when `~/.claude` (or `$CLAUDE_CONFIG_DIR`) is
@@ -50,9 +64,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let usageStore: any UsageStoring
         let usingSampleData: Bool
         do {
-            usageStore = try LocalLogUsageStore()
+            let index = try SessionCorpusIndex()
+            self.corpusIndex = index
+            usageStore = index.rebuild()
             usingSampleData = false
         } catch {
+            self.corpusIndex = nil
             usageStore = MockUsageStore()
             usingSampleData = true
         }
@@ -69,11 +86,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Always set in `init`; consumed here exactly once.
+        guard let usageStore else { return }
         let model = AppModel(
             quotaProvider: quotaProvider,
             usageStore: usageStore,
             usingSampleData: usingSampleData
         )
+        self.usageStore = nil
         self.model = model
         statusItemController = StatusItemController(model: model)
         model.refresh(force: true)
@@ -103,23 +123,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Any relevant change is treated as "reparse everything": `LocalLogUsageStore`
-    /// is an immutable in-memory index, and a full rebuild (~4.5s for 1.8GB, per
-    /// the parser's own benchmark) is simpler and safer than reconciling the
-    /// per-file `FileChangeBatch` against it (`adding(events:)` also has no
-    /// dedup guard yet, so wiring it in here would double-count re-parsed
-    /// files). Revisit with an incremental path if real-world corpora make
-    /// full-rebuild latency noticeable.
-    ///
-    /// The batch is still consulted for *whether* to rebuild at all: changes
-    /// outside the `.jsonl` session tree (or a dropped-events rescan signal)
-    /// are the only things that should trigger the expensive reparse.
+    /// The batch decides *whether* to rebuild — only `.jsonl` content changes
+    /// (or a dropped-events rescan signal) matter. *What* to reparse is the
+    /// index's job: it stat-scans the corpus and reparses only files whose
+    /// mtime/size actually changed, so a rebuild is milliseconds, not the
+    /// ~4.5s full-corpus parse this used to be. Bursts collapse via
+    /// `rebuildQueued` — at most one rebuild runs and one waits.
     private func rebuildUsageStore(changed batch: FileChangeBatch) {
         guard batch.requiresFullRescan || !batch.contentChanges(withExtension: "jsonl").isEmpty else { return }
+
+        rebuildFlagLock.lock()
+        let alreadyQueued = rebuildQueued
+        rebuildQueued = true
+        rebuildFlagLock.unlock()
+        guard !alreadyQueued else { return }
+
         rebuildQueue.async { [weak self] in
-            guard let fresh = try? LocalLogUsageStore() else { return }
+            guard let self else { return }
+            // Clear the flag before any early exit or rebuild: changes that
+            // land mid-rebuild must queue a follow-up, and a `nil` index
+            // (sample-data mode) must not latch the flag forever.
+            self.rebuildFlagLock.lock()
+            self.rebuildQueued = false
+            self.rebuildFlagLock.unlock()
+
+            guard let index = self.corpusIndex else { return }
+            let fresh = index.rebuild()
             DispatchQueue.main.async {
-                guard let self else { return }
                 self.model?.updateUsageStore(fresh)
                 // Local stats already refreshed by `updateUsageStore`; this
                 // additionally re-reads the statusline cache, throttled

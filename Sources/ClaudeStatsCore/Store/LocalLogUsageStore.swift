@@ -1,5 +1,43 @@
 import Foundation
 
+/// Per-model lifetime totals for events that have aged out of the store's
+/// per-event retention window (see ``SessionCorpusIndex``).
+///
+/// Only ``LocalLogUsageStore/modelUsage(last24h:)`` with `last24h == false`
+/// needs data older than the longest rolling window, and it only needs these
+/// sums — so old events are folded down to this instead of being kept whole.
+public struct HistoricalModelUsage: Sendable, Hashable {
+    /// Summed token counts of every folded event for this model ID.
+    public var usage: TokenUsage
+
+    /// Summed ``UsageEvent/estimatedCostUSD`` of the folded events.
+    public var estimatedCostUSD: Double
+
+    /// Timestamp of the newest folded event — lets `modelUsage` keep its
+    /// "newest raw ID wins per family" rule across the fold boundary.
+    public var latestTimestamp: Date
+
+    public init(usage: TokenUsage = .zero, estimatedCostUSD: Double = 0, latestTimestamp: Date = .distantPast) {
+        self.usage = usage
+        self.estimatedCostUSD = estimatedCostUSD
+        self.latestTimestamp = latestTimestamp
+    }
+
+    /// Fold one event into the totals.
+    public mutating func fold(_ event: UsageEvent) {
+        usage = usage + event.usage
+        estimatedCostUSD += event.estimatedCostUSD
+        latestTimestamp = max(latestTimestamp, event.timestamp)
+    }
+
+    /// Combine two totals for the same model ID.
+    public mutating func merge(_ other: HistoricalModelUsage) {
+        usage = usage + other.usage
+        estimatedCostUSD += other.estimatedCostUSD
+        latestTimestamp = max(latestTimestamp, other.latestTimestamp)
+    }
+}
+
 /// Real ``UsageStoring`` backed by Claude Code's session JSONL on this Mac
 /// (tier 1 of the data layer). Replaces ``MockUsageStore`` in production; the
 /// mock stays for previews and for tests of other layers.
@@ -7,13 +45,29 @@ import Foundation
 /// I/O happens once, in the initialiser: the store keeps the parsed events in
 /// memory so every protocol method is pure arithmetic and safe to call from the
 /// popover's render path. The FSEvents watcher refreshes by building a new
-/// store (or by calling ``adding(events:)`` for an incremental update).
+/// store via ``SessionCorpusIndex/rebuild()``; ``adding(events:)`` is a
+/// standalone merge helper that does *not* maintain the index's retention
+/// window, so it must not be used on an index-built store.
 public struct LocalLogUsageStore: UsageStoring {
     /// Every token-bearing event known to this store, sorted oldest-first.
+    ///
+    /// When the store is built by ``SessionCorpusIndex`` this only spans the
+    /// retention window; older history lives in ``historicalByModel``.
     public let events: [UsageEvent]
 
-    /// Non-fatal problems from the last scan — one entry per malformed or
-    /// truncated JSONL line. Surfaced for diagnostics; never thrown, because a
+    /// Per-model totals for events older than the retention window, keyed by
+    /// raw model ID (`nil` for events that carried none). Empty when the store
+    /// was built from a full parse. Consulted only by
+    /// ``modelUsage(last24h:)`` with `last24h == false` — every rolling-window
+    /// query is answerable from ``events`` alone.
+    public let historicalByModel: [String?: HistoricalModelUsage]
+
+    /// Non-fatal problems from the last scan. When the store is built by
+    /// ``SessionCorpusIndex`` this is a *sample* (at most
+    /// ``SessionCorpusIndex/skippedSampleLimit`` per file), not a complete
+    /// list — the exact total lives on
+    /// ``SessionCorpusIndex/skippedLineCount``. A full parse carries one entry
+    /// per malformed or truncated JSONL line. Never thrown, because a
     /// half-written final line is the normal state of an active session.
     public let skippedLines: [ClaudeStatsError]
 
@@ -30,9 +84,11 @@ public struct LocalLogUsageStore: UsageStoring {
     public init(
         events: [UsageEvent],
         skippedLines: [ClaudeStatsError] = [],
+        historicalByModel: [String?: HistoricalModelUsage] = [:],
         calendar: Calendar = .current,
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
+        self.historicalByModel = historicalByModel
         // `adding(events:)` merges two individually-sorted sequences; skip the
         // O(n log n) resort of the whole accumulated history when the
         // concatenation is already in order, which is the common case for an
@@ -92,6 +148,7 @@ public struct LocalLogUsageStore: UsageStoring {
         LocalLogUsageStore(
             events: events + newEvents,
             skippedLines: skippedLines + newSkipped,
+            historicalByModel: historicalByModel,
             calendar: calendar,
             now: nowProvider
         )
@@ -130,26 +187,37 @@ public struct LocalLogUsageStore: UsageStoring {
         var byFamily: [ModelFamily: (modelID: String, usage: TokenUsage, cost: Double)] = [:]
         var byUnknownID: [String: (usage: TokenUsage, cost: Double)] = [:]
 
-        for event in scoped {
-            let usage = event.usage
-            guard !usage.isEmpty else { continue }  // `<synthetic>` lines report all-zero usage
-            let cost = event.estimatedCostUSD
-            if let family = event.modelFamily {
+        func accumulate(modelID: String?, usage: TokenUsage, cost: Double) {
+            guard !usage.isEmpty else { return }  // `<synthetic>` lines report all-zero usage
+            if let family = modelID.flatMap(ModelFamily.inferred(fromModelID:)) {
                 let existing = byFamily[family]
                 byFamily[family] = (
-                    // `scoped` is oldest-first, so the last write wins → newest ID.
-                    modelID: event.modelID ?? existing?.modelID ?? family.rawValue,
+                    // Accumulation order is oldest-first, so the last write wins → newest ID.
+                    modelID: modelID ?? existing?.modelID ?? family.rawValue,
                     usage: (existing?.usage ?? .zero) + usage,
                     cost: (existing?.cost ?? 0) + cost
                 )
             } else {
-                let key = event.modelID ?? "unknown"
+                let key = modelID ?? "unknown"
                 let existing = byUnknownID[key]
                 byUnknownID[key] = (
                     usage: (existing?.usage ?? .zero) + usage,
                     cost: (existing?.cost ?? 0) + cost
                 )
             }
+        }
+
+        if !last24h {
+            // Folded history predates every retained event, so feeding it first
+            // (oldest fold first) keeps the "newest ID wins" ordering intact.
+            for (modelID, total) in historicalByModel.sorted(by: {
+                ($0.value.latestTimestamp, $0.key ?? "") < ($1.value.latestTimestamp, $1.key ?? "")
+            }) {
+                accumulate(modelID: modelID, usage: total.usage, cost: total.estimatedCostUSD)
+            }
+        }
+        for event in scoped {
+            accumulate(modelID: event.modelID, usage: event.usage, cost: event.estimatedCostUSD)
         }
 
         var rows: [ModelUsage] = ModelFamily.displayOrder.compactMap { family in
