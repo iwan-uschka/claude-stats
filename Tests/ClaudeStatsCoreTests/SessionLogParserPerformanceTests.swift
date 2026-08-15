@@ -54,6 +54,19 @@ final class SessionLogParserPerformanceTests: XCTestCase {
         let result = parser.parse(jsonlData: data, path: "/synthetic.jsonl")
         let elapsed = ContinuousClock.now - start
 
+        // Reported on every run, not just failures: the assertion below only
+        // catches an order-of-magnitude regression, so the actual number is
+        // what makes a gradual drift — or a real speed-up — visible in the log.
+        let seconds = Double(elapsed.components.attoseconds) / 1e18
+            + Double(elapsed.components.seconds)
+        let megabytesPerSecond = Double(data.count) / 1_048_576 / seconds
+        print(
+            String(
+                format: "[perf] parsed %.1f MB in %.3f s (%.0f MB/s), %d events",
+                Double(data.count) / 1_048_576, seconds, megabytesPerSecond, result.events.count
+            )
+        )
+
         // Prove the work actually happened: two usage-bearing lines per block,
         // and nothing in the corpus is malformed.
         XCTAssertEqual(result.events.count, blocks * 2)

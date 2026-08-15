@@ -18,6 +18,10 @@ settled unless the user reopens it; don't re-derive or re-litigate.
 ## Commands
 
 - `swift build` / `swift test`
+- `xcrun xctrace record --template 'os_signpost' --launch ClaudeStats.app` —
+  rebuild perf triage; `SessionCorpusIndex` emits `StatPass`, `Reparse`,
+  `Fold` and `SnapshotAssembly` intervals under subsystem
+  `de.bitgrip.claude-stats`, category `RebuildPerf`.
 
 ## Data layer
 
