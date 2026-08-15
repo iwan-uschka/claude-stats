@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Added
+- `os_signpost` instrumentation around `rebuild()`'s phases (`StatPass`,
+  `Reparse`, `Fold`, `SnapshotAssembly`) for perf triage — record with
+  `xcrun xctrace record --template 'os_signpost' --launch ClaudeStats.app`,
+  or query the persisted unified log directly:
+  `log show --predicate 'subsystem == "de.bitgrip.claude-stats" and category == "RebuildPerf"' --style compact --last 7d`.
+
 ## [0.8.0] - 2026-08-15
 
 ### Fixed
