@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Incremental builder of ``LocalLogUsageStore`` snapshots.
 ///
@@ -56,6 +57,34 @@ public final class SessionCorpusIndex {
     /// producing thousands.
     public static let skippedSampleLimit = 5
 
+    /// Signpost emitter for ``rebuild()``'s three phases, so the real cost of
+    /// an FSEvent-triggered rebuild can be read off an Instruments trace
+    /// instead of guessed at. Record with:
+    ///
+    /// ```
+    /// xcrun xctrace record --template 'os_signpost' --launch ClaudeStats.app
+    /// ```
+    ///
+    /// Signposts compile to a cheap "is anyone listening?" check when nothing
+    /// is recording, so these stay always-on rather than hiding behind a
+    /// build flag. Three interval names are emitted:
+    ///
+    /// - `StatPass` — one per rebuild, spanning enumeration + sort of the
+    ///   session files and the per-file `resourceValues` stat. It *encloses*
+    ///   the `Reparse` intervals below (the scan and the reparse-or-skip
+    ///   decision share one loop, and instrumentation must not restructure
+    ///   that), so the stat-only cost is `StatPass − Σ Reparse`.
+    /// - `Reparse` — one per file that actually got reparsed, around the parse
+    ///   call alone; files skipped by the mtime/size check emit nothing, so
+    ///   the count of intervals is the churn rate and their sum is the real
+    ///   reparse cost.
+    /// - `SnapshotAssembly` — one per rebuild, over the event concatenation
+    ///   and historical-fold merge that builds the returned store.
+    private static let signposter = OSSignposter(
+        subsystem: "de.bitgrip.claude-stats",
+        category: "RebuildPerf"
+    )
+
     private let configDirectory: URL
     private let retention: TimeInterval
     private let calendar: Calendar
@@ -110,6 +139,8 @@ public final class SessionCorpusIndex {
         let cutoff = now.addingTimeInterval(-retention)
 
         var seen = Set<String>()
+        var reparsedCount = 0
+        let statPass = Self.signposter.beginInterval("StatPass", id: Self.signposter.makeSignpostID())
         for url in SessionLogParser.sessionFileURLs(inConfigDirectory: configDirectory) {
             guard let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey]),
                   let modificationDate = values.contentModificationDate,
@@ -129,7 +160,14 @@ public final class SessionCorpusIndex {
                 continue
             }
 
+            let reparse = Self.signposter.beginInterval("Reparse", id: Self.signposter.makeSignpostID())
             let result = parseFile(url)
+            Self.signposter.endInterval(
+                "Reparse", reparse,
+                "bytes: \(fileSize), events: \(result.events.count)"
+            )
+            reparsedCount += 1
+
             var entry = CachedFile(
                 modificationDate: modificationDate,
                 fileSize: fileSize,
@@ -142,7 +180,12 @@ public final class SessionCorpusIndex {
             files[path] = entry
         }
         files = files.filter { seen.contains($0.key) }
+        Self.signposter.endInterval(
+            "StatPass", statPass,
+            "scanned: \(seen.count), reparsed: \(reparsedCount)"
+        )
 
+        let assembly = Self.signposter.beginInterval("SnapshotAssembly", id: Self.signposter.makeSignpostID())
         var events: [UsageEvent] = []
         var skipped: [ClaudeStatsError] = []
         var historical: [String?: HistoricalModelUsage] = [:]
@@ -158,6 +201,10 @@ public final class SessionCorpusIndex {
                 historical[modelID, default: HistoricalModelUsage()].merge(total)
             }
         }
+        Self.signposter.endInterval(
+            "SnapshotAssembly", assembly,
+            "events: \(events.count), models: \(historical.count)"
+        )
 
         return LocalLogUsageStore(
             events: events,
