@@ -161,9 +161,13 @@ public final class SessionCorpusIndex {
                cached.fileSize == fileSize {
                 // Unchanged on disk — just fold whatever aged past the cutoff.
                 if cached.recentEvents.contains(where: { $0.timestamp < cutoff }) {
+                    var recentEvents = cached.recentEvents
+                    var foldedByModel = cached.foldedByModel
                     let fold = Self.signposter.beginInterval("Fold", id: Self.signposter.makeSignpostID())
-                    Self.fold(events: &cached.recentEvents, into: &cached.foldedByModel, before: cutoff)
-                    Self.signposter.endInterval("Fold", fold, "events: \(cached.recentEvents.count)")
+                    Self.fold(events: &recentEvents, into: &foldedByModel, before: cutoff)
+                    Self.signposter.endInterval("Fold", fold, "events: \(recentEvents.count)")
+                    cached.recentEvents = recentEvents
+                    cached.foldedByModel = foldedByModel
                     files[path] = cached
                 }
                 continue
@@ -185,9 +189,13 @@ public final class SessionCorpusIndex {
                 skippedCount: result.skippedLines.count,
                 skippedSamples: Array(result.skippedLines.prefix(Self.skippedSampleLimit))
             )
+            var recentEvents = entry.recentEvents
+            var foldedByModel = entry.foldedByModel
             let fold = Self.signposter.beginInterval("Fold", id: Self.signposter.makeSignpostID())
-            Self.fold(events: &entry.recentEvents, into: &entry.foldedByModel, before: cutoff)
-            Self.signposter.endInterval("Fold", fold, "events: \(entry.recentEvents.count)")
+            Self.fold(events: &recentEvents, into: &foldedByModel, before: cutoff)
+            Self.signposter.endInterval("Fold", fold, "events: \(recentEvents.count)")
+            entry.recentEvents = recentEvents
+            entry.foldedByModel = foldedByModel
             files[path] = entry
         }
         files = files.filter { seen.contains($0.key) }
