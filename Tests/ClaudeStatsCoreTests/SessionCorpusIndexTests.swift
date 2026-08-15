@@ -156,6 +156,7 @@ final class SessionCorpusIndexTests: XCTestCase {
         XCTAssertEqual(allTime[0].tokens, 1650)
         // Rolling windows only see the retained event.
         let last24h = try store.modelUsage(last24h: true)
+        XCTAssertEqual(last24h.count, 1)
         XCTAssertEqual(last24h[0].tokens, 150)
     }
 
@@ -223,6 +224,33 @@ final class SessionCorpusIndexTests: XCTestCase {
         ).modelUsage(last24h: false)
 
         XCTAssertEqual(incremental, full)
+    }
+
+    func testHistoricalTotalsMergeAcrossMultipleFiles() throws {
+        // Both events are past retention and share a model ID, so their folds
+        // must merge across files — including taking the max latestTimestamp.
+        _ = try writeSession("a", lines: [assistantLine(hoursAgo: 30 * 24, inputTokens: 1000, outputTokens: 500)])
+        _ = try writeSession("b", lines: [assistantLine(hoursAgo: 40 * 24, inputTokens: 2000, outputTokens: 1000)])
+        let clock = Clock(Self.referenceNow)
+        let index = makeIndex(clock: clock, counter: ParseCounter())
+
+        let store = index.rebuild()
+        XCTAssertTrue(store.events.isEmpty)
+        let merged = try XCTUnwrap(store.historicalByModel["claude-sonnet-5"])
+        XCTAssertEqual(merged.usage.totalTokens, 4500)
+        XCTAssertEqual(merged.latestTimestamp, Self.referenceNow.addingTimeInterval(-30 * 24 * 3600))
+    }
+
+    func testRetentionCoversEveryPerEventQueryWindow() {
+        // Folded events only survive in per-model totals; every per-event
+        // query (rolling windows, plan-tier heuristic) must fit inside the
+        // retention window or it silently under-reports.
+        let longestWindow = TimeWindow.allCases.map(\.duration).max()!
+        XCTAssertGreaterThanOrEqual(SessionCorpusIndex.defaultRetention, longestWindow)
+        XCTAssertGreaterThanOrEqual(
+            SessionCorpusIndex.defaultRetention,
+            TimeInterval(LocalLogUsageStore.planDetectionHistoryDays) * 86_400
+        )
     }
 
     func testSameSizeContentChangeIsStillReparsed() throws {

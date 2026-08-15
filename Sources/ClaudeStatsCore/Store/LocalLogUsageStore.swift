@@ -45,7 +45,9 @@ public struct HistoricalModelUsage: Sendable, Hashable {
 /// I/O happens once, in the initialiser: the store keeps the parsed events in
 /// memory so every protocol method is pure arithmetic and safe to call from the
 /// popover's render path. The FSEvents watcher refreshes by building a new
-/// store (or by calling ``adding(events:)`` for an incremental update).
+/// store via ``SessionCorpusIndex/rebuild()``; ``adding(events:)`` is a
+/// standalone merge helper that does *not* maintain the index's retention
+/// window, so it must not be used on an index-built store.
 public struct LocalLogUsageStore: UsageStoring {
     /// Every token-bearing event known to this store, sorted oldest-first.
     ///
@@ -60,8 +62,12 @@ public struct LocalLogUsageStore: UsageStoring {
     /// query is answerable from ``events`` alone.
     public let historicalByModel: [String?: HistoricalModelUsage]
 
-    /// Non-fatal problems from the last scan — one entry per malformed or
-    /// truncated JSONL line. Surfaced for diagnostics; never thrown, because a
+    /// Non-fatal problems from the last scan. When the store is built by
+    /// ``SessionCorpusIndex`` this is a *sample* (at most
+    /// ``SessionCorpusIndex/skippedSampleLimit`` per file), not a complete
+    /// list — the exact total lives on
+    /// ``SessionCorpusIndex/skippedLineCount``. A full parse carries one entry
+    /// per malformed or truncated JSONL line. Never thrown, because a
     /// half-written final line is the normal state of an active session.
     public let skippedLines: [ClaudeStatsError]
 
@@ -204,7 +210,9 @@ public struct LocalLogUsageStore: UsageStoring {
         if !last24h {
             // Folded history predates every retained event, so feeding it first
             // (oldest fold first) keeps the "newest ID wins" ordering intact.
-            for (modelID, total) in historicalByModel.sorted(by: { $0.value.latestTimestamp < $1.value.latestTimestamp }) {
+            for (modelID, total) in historicalByModel.sorted(by: {
+                ($0.value.latestTimestamp, $0.key ?? "") < ($1.value.latestTimestamp, $1.key ?? "")
+            }) {
                 accumulate(modelID: modelID, usage: total.usage, cost: total.estimatedCostUSD)
             }
         }

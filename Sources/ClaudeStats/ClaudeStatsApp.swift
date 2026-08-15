@@ -27,8 +27,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let quotaProvider: any QuotaProviding
     /// Only read once, at launch, to seed `AppModel`; `rebuildUsageStore`
     /// hands later generations straight to `model.updateUsageStore` instead
-    /// of keeping a second copy here.
-    private let usageStore: any UsageStoring
+    /// of keeping a second copy here. Cleared once `AppModel` owns the store
+    /// so the launch snapshot's event array isn't pinned for the process
+    /// lifetime.
+    private var usageStore: (any UsageStoring)?
     /// Whether `usageStore` started out backed by `MockUsageStore` because no
     /// readable `~/.claude` was found — surfaced through `AppModel` so the
     /// popover can mark the numbers as sample data instead of showing them as real.
@@ -84,11 +86,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Always set in `init`; consumed here exactly once.
+        guard let usageStore else { return }
         let model = AppModel(
             quotaProvider: quotaProvider,
             usageStore: usageStore,
             usingSampleData: usingSampleData
         )
+        self.usageStore = nil
         self.model = model
         statusItemController = StatusItemController(model: model)
         model.refresh(force: true)
@@ -134,13 +139,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard !alreadyQueued else { return }
 
         rebuildQueue.async { [weak self] in
-            guard let self, let index = self.corpusIndex else { return }
-            // Clear the flag before rebuilding: changes that land mid-rebuild
-            // must queue a follow-up, or they'd be missed until the next batch.
+            guard let self else { return }
+            // Clear the flag before any early exit or rebuild: changes that
+            // land mid-rebuild must queue a follow-up, and a `nil` index
+            // (sample-data mode) must not latch the flag forever.
             self.rebuildFlagLock.lock()
             self.rebuildQueued = false
             self.rebuildFlagLock.unlock()
 
+            guard let index = self.corpusIndex else { return }
             let fresh = index.rebuild()
             DispatchQueue.main.async {
                 self.model?.updateUsageStore(fresh)

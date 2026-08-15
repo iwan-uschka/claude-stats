@@ -41,10 +41,14 @@ public final class SessionCorpusIndex {
 
     /// How long individual events are kept before being folded into
     /// ``HistoricalModelUsage`` totals. Must cover the longest per-event
-    /// query: every ``TimeWindow`` (≤ 7 days) and the plan-tier heuristic's
-    /// ``LocalLogUsageStore/planDetectionHistoryDays`` (8 days).
-    public static let defaultRetention: TimeInterval =
-        TimeInterval(LocalLogUsageStore.planDetectionHistoryDays) * 86_400
+    /// query, so it is derived from both: every ``TimeWindow`` and the
+    /// plan-tier heuristic's ``LocalLogUsageStore/planDetectionHistoryDays``
+    /// (8 days). A new, longer window case widens retention automatically
+    /// instead of silently under-reporting.
+    public static let defaultRetention: TimeInterval = max(
+        TimeInterval(LocalLogUsageStore.planDetectionHistoryDays) * 86_400,
+        TimeWindow.allCases.map(\.duration).max() ?? 0
+    )
 
     /// Per-file cap on retained skipped-line errors. A half-written last line
     /// is the normal state of an active session file, so these accumulate one
@@ -142,7 +146,12 @@ public final class SessionCorpusIndex {
         var events: [UsageEvent] = []
         var skipped: [ClaudeStatsError] = []
         var historical: [String?: HistoricalModelUsage] = [:]
-        for entry in files.values {
+        // Sorted by path so the assembly is deterministic across launches,
+        // matching `SessionLogParser.sessionFileURLs`' ordering guarantee —
+        // Dictionary iteration order would let timestamp ties resolve
+        // differently per process.
+        for path in files.keys.sorted() {
+            let entry = files[path]!
             events.append(contentsOf: entry.recentEvents)
             skipped.append(contentsOf: entry.skippedSamples)
             for (modelID, total) in entry.foldedByModel {
