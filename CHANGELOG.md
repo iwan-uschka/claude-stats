@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-08-15
+
 ### Fixed
 - Release builds crashed on launch with a Swift runtime exclusivity trap in
   `SessionCorpusIndex.rebuild()` (regression introduced by 0.9.0's signpost
