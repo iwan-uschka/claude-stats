@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-08-15
+
 ### Added
 - `os_signpost` instrumentation around `rebuild()`'s phases (`StatPass`,
   `Reparse`, `Fold`, `SnapshotAssembly`) for perf triage — record with
