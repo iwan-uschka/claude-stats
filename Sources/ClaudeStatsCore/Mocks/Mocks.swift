@@ -119,19 +119,77 @@ public struct MockUsageStore: UsageStoring {
 
     /// Token totals consistent with ``sampleBurnRateUsage`` (12.4k tok/hr)
     /// across every window, so the popover never shows two contradictory
-    /// numbers for the same underlying rate.
+    /// numbers for the same underlying rate. Each row is split in roughly the
+    /// same cache-read-heavy proportions as ``sampleBurnRateUsage``.
     public static let sampleBreakdowns: [TimeWindow: EntrypointBreakdown] = [
         .fiveHour: EntrypointBreakdown(
             window: .fiveHour,
-            tokensByEntrypoint: [.cli: 18_000, .vscode: 3_400, .sdkAgent: 40_600]
+            usageByEntrypoint: [
+                .cli: TokenUsage(
+                    inputTokens: 300,
+                    outputTokens: 1_000,
+                    cacheCreationInputTokens: 2_200,
+                    cacheReadInputTokens: 14_500
+                ),
+                .vscode: TokenUsage(
+                    inputTokens: 100,
+                    outputTokens: 200,
+                    cacheCreationInputTokens: 400,
+                    cacheReadInputTokens: 2_700
+                ),
+                .sdkAgent: TokenUsage(
+                    inputTokens: 600,
+                    outputTokens: 2_300,
+                    cacheCreationInputTokens: 4_900,
+                    cacheReadInputTokens: 32_800
+                ),
+            ]
         ),
         .twentyFourHour: EntrypointBreakdown(
             window: .twentyFourHour,
-            tokensByEntrypoint: [.cli: 90_000, .vscode: 28_000, .sdkAgent: 179_600]
+            usageByEntrypoint: [
+                .cli: TokenUsage(
+                    inputTokens: 1_500,
+                    outputTokens: 5_000,
+                    cacheCreationInputTokens: 11_000,
+                    cacheReadInputTokens: 72_500
+                ),
+                .vscode: TokenUsage(
+                    inputTokens: 500,
+                    outputTokens: 1_600,
+                    cacheCreationInputTokens: 3_400,
+                    cacheReadInputTokens: 22_500
+                ),
+                .sdkAgent: TokenUsage(
+                    inputTokens: 2_900,
+                    outputTokens: 10_200,
+                    cacheCreationInputTokens: 21_700,
+                    cacheReadInputTokens: 144_800
+                ),
+            ]
         ),
         .sevenDay: EntrypointBreakdown(
             window: .sevenDay,
-            tokensByEntrypoint: [.cli: 566_500, .vscode: 164_500, .sdkAgent: 1_352_200]
+            usageByEntrypoint: [
+                .cli: TokenUsage(
+                    inputTokens: 9_100,
+                    outputTokens: 32_000,
+                    cacheCreationInputTokens: 68_400,
+                    cacheReadInputTokens: 457_000
+                ),
+                .vscode: TokenUsage(
+                    inputTokens: 2_600,
+                    outputTokens: 9_300,
+                    cacheCreationInputTokens: 19_900,
+                    cacheReadInputTokens: 132_700
+                ),
+                .sdkAgent: TokenUsage(
+                    inputTokens: 21_800,
+                    outputTokens: 76_400,
+                    cacheCreationInputTokens: 163_400,
+                    cacheReadInputTokens: 1_090_600
+                ),
+            ]
         ),
     ]
 

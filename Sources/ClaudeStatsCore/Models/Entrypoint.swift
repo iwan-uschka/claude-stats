@@ -60,30 +60,43 @@ public enum TimeWindow: String, Sendable, Hashable, Codable, CaseIterable {
 /// Per-entrypoint token counts for one ``TimeWindow``.
 public struct EntrypointBreakdown: Sendable, Hashable, Codable {
     public let window: TimeWindow
-    public let tokensByEntrypoint: [Entrypoint: Int]
+    /// Summed token counts per entrypoint, kept split so the popover can
+    /// explain how much of a row's total is replayed cache reads.
+    public let usageByEntrypoint: [Entrypoint: TokenUsage]
 
-    public init(window: TimeWindow, tokensByEntrypoint: [Entrypoint: Int]) {
+    public init(window: TimeWindow, usageByEntrypoint: [Entrypoint: TokenUsage]) {
         self.window = window
-        self.tokensByEntrypoint = tokensByEntrypoint
+        self.usageByEntrypoint = usageByEntrypoint
+    }
+
+    /// Token split attributed to `entrypoint`, all-zero when it had no activity.
+    public func usage(for entrypoint: Entrypoint) -> TokenUsage {
+        usageByEntrypoint[entrypoint] ?? .zero
     }
 
     /// Tokens attributed to `entrypoint`, or 0 when it had no activity.
     public func tokens(for entrypoint: Entrypoint) -> Int {
-        tokensByEntrypoint[entrypoint] ?? 0
+        usage(for: entrypoint).totalTokens
+    }
+
+    /// Field-wise sum across all entrypoints — what the breakdown-wide
+    /// cache-read caption is computed from.
+    public var totalUsage: TokenUsage {
+        usageByEntrypoint.values.reduce(.zero, +)
     }
 
     /// Sum across all entrypoints.
     public var totalTokens: Int {
-        tokensByEntrypoint.values.reduce(0, +)
+        totalUsage.totalTokens
     }
 
     /// Rows in ``Entrypoint/displayOrder``, including zero-token entrypoints.
-    public var orderedRows: [(entrypoint: Entrypoint, tokens: Int)] {
-        Entrypoint.displayOrder.map { ($0, tokens(for: $0)) }
+    public var orderedRows: [(entrypoint: Entrypoint, usage: TokenUsage)] {
+        Entrypoint.displayOrder.map { ($0, usage(for: $0)) }
     }
 
     /// Empty breakdown for `window` — every entrypoint at zero.
     public static func empty(window: TimeWindow) -> EntrypointBreakdown {
-        EntrypointBreakdown(window: window, tokensByEntrypoint: [:])
+        EntrypointBreakdown(window: window, usageByEntrypoint: [:])
     }
 }

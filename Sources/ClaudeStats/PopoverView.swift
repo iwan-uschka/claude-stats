@@ -125,11 +125,12 @@ struct PopoverView: View {
     private var planSection: some View {
         VStack(alignment: .leading, spacing: 3) {
             labelledLine("Plan", DisplayFormat.planDescription(model.planTier))
-            labelledLine(
-                "Burn rate",
-                model.burnRateUsage.map { DisplayFormat.burnRate(Double($0.totalTokens)) } ?? "—"
-            )
-            .help(model.burnRateUsage.map(DisplayFormat.tokenSplit) ?? "")
+            if let usage = model.burnRateUsage {
+                labelledLine("Burn rate", DisplayFormat.burnRate(Double(usage.totalTokens)))
+                    .help(DisplayFormat.tokenSplit(usage))
+            } else {
+                labelledLine("Burn rate", "—")
+            }
             if let note = model.burnRateUsage.flatMap(DisplayFormat.cacheReadNote) {
                 cacheReadNoteLine(note)
             }
@@ -175,18 +176,23 @@ struct PopoverView: View {
                 .frame(width: 132)
             }
 
-            let rows = model.breakdown?.orderedRows ?? EntrypointBreakdown
-                .empty(window: model.selectedWindow).orderedRows
-            let peak = rows.map(\.tokens).max() ?? 0
+            let breakdown = model.breakdown ?? .empty(window: model.selectedWindow)
+            let rows = breakdown.orderedRows
+            let peak = rows.map(\.usage.totalTokens).max() ?? 0
 
             VStack(alignment: .leading, spacing: 5) {
                 ForEach(rows, id: \.entrypoint) { row in
                     EntrypointRow(
                         entrypoint: row.entrypoint,
-                        tokens: row.tokens,
+                        usage: row.usage,
                         peakTokens: peak
                     )
                 }
+            }
+            // Every entrypoint row summed — like "By model", the caption is
+            // about the section's numbers as a whole, not any single row.
+            if let note = DisplayFormat.cacheReadNote(breakdown.totalUsage) {
+                cacheReadNoteLine(note)
             }
         }
     }
@@ -215,17 +221,14 @@ struct PopoverView: View {
                         ModelUsageRow(usage: usage)
                     }
                 }
-                if let note = DisplayFormat.cacheReadNote(modelUsageTotal) {
+                // Every model row summed — the note is about the section's
+                // numbers as a whole, and one line reads better than one per
+                // row. The sum itself is cached on ``AppModel``.
+                if let note = DisplayFormat.cacheReadNote(model.modelUsageTotal) {
                     cacheReadNoteLine(note)
                 }
             }
         }
-    }
-
-    /// Every model row summed — the note is about the section's numbers as a
-    /// whole, and one line reads better than one per row.
-    private var modelUsageTotal: TokenUsage {
-        model.modelUsage.reduce(TokenUsage.zero) { $0 + $1.usage }
     }
 
     private var costSection: some View {

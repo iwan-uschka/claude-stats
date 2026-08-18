@@ -42,6 +42,14 @@ struct ModelUsageRow: View {
                 estimatedCostUSD: 0
             )
         )
+        // 4-digit spend: exercises the column width sized for `$1234.56`.
+        ModelUsageRow(
+            usage: ModelUsage(
+                modelID: "claude-opus-5",
+                usage: TokenUsage(inputTokens: 4_000_000, cacheReadInputTokens: 900_000_000),
+                estimatedCostUSD: 1_234.56
+            )
+        )
     }
     .padding()
     .frame(width: PopoverMetrics.popoverWidth)

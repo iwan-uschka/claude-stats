@@ -233,6 +233,47 @@ final class LocalLogUsageStoreTests: XCTestCase {
         XCTAssertEqual(week.totalTokens, 25_050)
     }
 
+    /// `entrypointBreakdown` sums the full ``TokenUsage`` per entrypoint, not
+    /// just the collapsed `Int` — a field mix-up (e.g. cache reads folded into
+    /// cache writes) would still pass a totals-only check.
+    func testEntrypointBreakdownPreservesTheTokenUsageSplit() throws {
+        let now = Self.referenceNow
+        let store = LocalLogUsageStore(
+            events: [
+                UsageEvent(
+                    timestamp: now,
+                    entrypoint: .cli,
+                    modelID: "claude-sonnet-5",
+                    usage: TokenUsage(inputTokens: 100, outputTokens: 10, cacheReadInputTokens: 5)
+                ),
+                UsageEvent(
+                    timestamp: now,
+                    entrypoint: .cli,
+                    modelID: "claude-sonnet-5",
+                    usage: TokenUsage(inputTokens: 1, cacheCreationInputTokens: 20, cacheReadInputTokens: 200)
+                ),
+                UsageEvent(
+                    timestamp: now,
+                    entrypoint: .sdkAgent,
+                    modelID: "claude-sonnet-5",
+                    usage: TokenUsage(inputTokens: 7, outputTokens: 3)
+                ),
+            ],
+            calendar: Self.utcCalendar,
+            now: { now }
+        )
+
+        let breakdown = try store.entrypointBreakdown(for: .fiveHour)
+
+        XCTAssertEqual(
+            breakdown.usage(for: .cli),
+            TokenUsage(inputTokens: 101, outputTokens: 10, cacheCreationInputTokens: 20, cacheReadInputTokens: 205)
+        )
+        XCTAssertEqual(breakdown.usage(for: .sdkAgent), TokenUsage(inputTokens: 7, outputTokens: 3))
+        XCTAssertEqual(breakdown.usage(for: .vscode), .zero)
+        XCTAssertEqual(breakdown.totalUsage, breakdown.usage(for: .cli) + breakdown.usage(for: .sdkAgent))
+    }
+
     func testUnknownEntrypointExcludedFromBreakdownButCountedInTotals() throws {
         let store = try makeStore()
         let fiveHour = try store.entrypointBreakdown(for: .fiveHour)
@@ -258,7 +299,7 @@ final class LocalLogUsageStoreTests: XCTestCase {
             XCTAssertEqual(breakdown.totalTokens, 0)
             XCTAssertEqual(breakdown.orderedRows.count, Entrypoint.displayOrder.count)
         }
-        XCTAssertEqual(try store.burnRatePerHour(), 0)
+        XCTAssertEqual(try store.burnRateUsagePerHour().totalTokens, 0)
         XCTAssertEqual(try store.estimatedCostToday(), 0)
         XCTAssertTrue(try store.modelUsage(last24h: false).isEmpty)
         XCTAssertEqual(try store.detectedPlanTier(), .custom(tokens: 0))
@@ -366,7 +407,7 @@ final class LocalLogUsageStoreTests: XCTestCase {
 
     func testBurnRateCountsOnlyTheTrailingHour() throws {
         // 11:30 (13500) + 11:45 (150) + 11:50 (2000) + 11:55 synthetic (0).
-        XCTAssertEqual(try makeStore().burnRatePerHour(), 15_650, accuracy: 1e-9)
+        XCTAssertEqual(try makeStore().burnRateUsagePerHour().totalTokens, 15_650)
     }
 
     func testBurnRateKeepsTheTokenSplit() throws {
@@ -604,7 +645,7 @@ final class LocalLogUsageStoreTests: XCTestCase {
             calendar: Self.utcCalendar,
             now: { now }
         )
-        XCTAssertEqual(try store.burnRatePerHour(), 15_650, accuracy: 1e-9)
+        XCTAssertEqual(try store.burnRateUsagePerHour().totalTokens, 15_650)
     }
 
     func testSessionFileURLsIgnoresNonJSONLAndMissingProjectsDirectory() throws {
@@ -809,7 +850,7 @@ final class LocalLogUsageStoreTests: XCTestCase {
 
         XCTAssertEqual(try store.entrypointBreakdown(for: .fiveHour).totalTokens, 16_550)
         XCTAssertFalse(try store.modelUsage(last24h: true).isEmpty)
-        XCTAssertGreaterThan(try store.burnRatePerHour(), 0)
+        XCTAssertGreaterThan(try store.burnRateUsagePerHour().totalTokens, 0)
         XCTAssertGreaterThan(try store.estimatedCostToday(), 0)
         _ = try store.detectedPlanTier()
     }

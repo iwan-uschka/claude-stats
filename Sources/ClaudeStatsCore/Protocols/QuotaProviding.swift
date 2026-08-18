@@ -46,14 +46,6 @@ public protocol UsageStoring: Sendable {
     func detectedPlanTier() throws -> PlanTier
 }
 
-public extension UsageStoring {
-    /// Current consumption rate in tokens per hour — the total of
-    /// ``burnRateUsagePerHour()``, whose window is exactly one hour.
-    func burnRatePerHour() throws -> Double {
-        Double(try burnRateUsagePerHour().totalTokens)
-    }
-}
-
 /// Errors surfaced by the data layer.
 public enum ClaudeStatsError: Error, Sendable, Equatable {
     /// No Claude config directory found (`$CLAUDE_CONFIG_DIR`, `~/.config/claude`, `~/.claude`).

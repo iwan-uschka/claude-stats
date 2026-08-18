@@ -172,7 +172,7 @@ final class DisplayFormatTests: XCTestCase {
         XCTAssertNil(DisplayFormat.cacheReadNote(.zero))
     }
 
-    /// Mirrors `PopoverView.modelUsageTotal`: the section's caption is about
+    /// Mirrors `AppModel.modelUsageTotal`: the section's caption is about
     /// every row summed, not any single model — a row that alone stays under
     /// the threshold can still push the total over it once combined.
     func testCacheReadNoteOverSummedModelRows() {
@@ -195,6 +195,35 @@ final class DisplayFormatTests: XCTestCase {
             DisplayFormat.cacheReadNote(total),
             "80k of 120k is cache reads — billed at 1/10 the input rate"
         )
+    }
+
+    /// Mirrors the "This Mac" caption: it is computed from every entrypoint
+    /// row summed, so a quiet row that is cache-read-light can't suppress it.
+    func testCacheReadNoteOverSummedEntrypointRows() {
+        let breakdown = EntrypointBreakdown(
+            window: .fiveHour,
+            usageByEntrypoint: [
+                .cli: TokenUsage(inputTokens: 30_000, cacheReadInputTokens: 20_000),
+                .sdkAgent: TokenUsage(inputTokens: 10_000, cacheReadInputTokens: 60_000),
+            ]
+        )
+
+        XCTAssertEqual(
+            breakdown.totalUsage,
+            TokenUsage(inputTokens: 40_000, cacheReadInputTokens: 80_000)
+        )
+        XCTAssertEqual(
+            DisplayFormat.cacheReadNote(breakdown.totalUsage),
+            "80k of 120k is cache reads — billed at 1/10 the input rate"
+        )
+
+        // A window with no cache-read dominance stays uncaptioned.
+        let fresh = EntrypointBreakdown(
+            window: .fiveHour,
+            usageByEntrypoint: [.cli: TokenUsage(inputTokens: 10_000, outputTokens: 5_000)]
+        )
+        XCTAssertNil(DisplayFormat.cacheReadNote(fresh.totalUsage))
+        XCTAssertNil(DisplayFormat.cacheReadNote(EntrypointBreakdown.empty(window: .fiveHour).totalUsage))
     }
 
     func testCostFormatting() {
@@ -258,24 +287,24 @@ final class DisplayFormatTests: XCTestCase {
     func testBreakdownRowsScaleAgainstThePeakRow() {
         let breakdown = MockUsageStore.sampleBreakdowns[.twentyFourHour]!
         let rows = breakdown.orderedRows
-        let peak = rows.map(\.tokens).max() ?? 0
+        let peak = rows.map(\.usage.totalTokens).max() ?? 0
         let fractions = rows.map {
-            DisplayFormat.barFraction(value: $0.tokens, peak: peak)
+            DisplayFormat.barFraction(value: $0.usage.totalTokens, peak: peak)
         }
 
         // Exactly one row is full-width, and every row is inside 0...1.
         XCTAssertEqual(fractions.filter { $0 == 1 }.count, 1)
         XCTAssertTrue(fractions.allSatisfy { $0 >= 0 && $0 <= 1 })
         // sdk-cli is the busiest entrypoint in the sample data.
-        XCTAssertEqual(rows.max { $0.tokens < $1.tokens }?.entrypoint, .sdkAgent)
+        XCTAssertEqual(rows.max { $0.usage.totalTokens < $1.usage.totalTokens }?.entrypoint, .sdkAgent)
     }
 
     func testEmptyBreakdownProducesAllZeroFractions() {
         let rows = EntrypointBreakdown.empty(window: .fiveHour).orderedRows
-        let peak = rows.map(\.tokens).max() ?? 0
+        let peak = rows.map(\.usage.totalTokens).max() ?? 0
         XCTAssertEqual(rows.count, Entrypoint.displayOrder.count)
         XCTAssertTrue(rows.allSatisfy {
-            DisplayFormat.barFraction(value: $0.tokens, peak: peak) == 0
+            DisplayFormat.barFraction(value: $0.usage.totalTokens, peak: peak) == 0
         })
     }
 

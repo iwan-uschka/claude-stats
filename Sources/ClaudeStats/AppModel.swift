@@ -16,7 +16,13 @@ final class AppModel: ObservableObject {
     @Published private(set) var burnRateUsage: TokenUsage?
     @Published private(set) var estimatedCostToday: Double?
     @Published private(set) var breakdown: EntrypointBreakdown?
-    @Published private(set) var modelUsage: [ModelUsage] = []
+    @Published private(set) var modelUsage: [ModelUsage] = [] {
+        didSet { modelUsageTotal = modelUsage.reduce(TokenUsage.zero) { $0 + $1.usage } }
+    }
+    /// Every ``modelUsage`` row summed, folded once per reload rather than on
+    /// each popover render — the "By model" caption is about the section's
+    /// numbers as a whole, and the popover re-renders every clock tick.
+    @Published private(set) var modelUsageTotal: TokenUsage = .zero
     @Published private(set) var usingSampleData: Bool
 
     /// Kept independent per subsystem so one reload's success can't clobber

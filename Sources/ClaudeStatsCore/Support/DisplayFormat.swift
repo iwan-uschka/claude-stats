@@ -138,7 +138,13 @@ public enum DisplayFormat {
         let share = Double(usage.cacheReadInputTokens) / Double(total)
         guard share > cacheReadNoteThreshold else { return nil }
         return "\(tokens(usage.cacheReadInputTokens)) of \(tokens(total)) is cache reads"
-            + " — billed at 1/10 the input rate"
+            + " — billed at \(cacheReadRateDescription) the input rate"
+    }
+
+    /// Derived from ``ModelPricing/cacheReadMultiplier`` so the caption can't
+    /// drift from the pricing the cost column actually uses.
+    private static var cacheReadRateDescription: String {
+        "1/\(Int((1 / ModelPricing.cacheReadMultiplier).rounded()))"
     }
 
     /// USD with two decimals: `$4.82`.

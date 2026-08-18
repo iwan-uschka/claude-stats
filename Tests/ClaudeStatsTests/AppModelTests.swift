@@ -206,6 +206,24 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(callsAfterClear, callsBeforeClear)
     }
 
+    /// The cached total has to move with every reload — a stale sum would put
+    /// the popover's cache-read caption on the wrong numbers.
+    func testModelUsageTotalIsKeptInSyncWithTheLoadedRows() throws {
+        let store = MockUsageStore()
+        let model = AppModel(quotaProvider: ScriptedQuotaProvider(), usageStore: store)
+        XCTAssertEqual(model.modelUsageTotal, .zero)
+
+        model.refresh(force: true)
+
+        let expected = try store.modelUsage(last24h: true).reduce(TokenUsage.zero) { $0 + $1.usage }
+        XCTAssertNotEqual(expected, .zero)
+        XCTAssertEqual(model.modelUsageTotal, expected)
+
+        model.updateUsageStore(MockUsageStore(modelUsageLast24h: []))
+
+        XCTAssertEqual(model.modelUsageTotal, .zero)
+    }
+
     func testPollAfterInstallRetriesUntilSnapshotLands() async {
         let provider = ScriptedQuotaProvider()
         await provider.setResult(.failure(ClaudeStatsError.noQuotaSourceAvailable))

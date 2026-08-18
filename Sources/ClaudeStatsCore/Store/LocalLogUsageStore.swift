@@ -160,16 +160,16 @@ public struct LocalLogUsageStore: UsageStoring {
     ///
     /// Events whose `entrypoint` this version doesn't recognise are omitted —
     /// the breakdown's rows are a fixed, known set — but they still count in
-    /// ``modelUsage(last24h:)``, ``burnRatePerHour()`` and
+    /// ``modelUsage(last24h:)``, ``burnRateUsagePerHour()`` and
     /// ``estimatedCostToday()``, so no spend goes missing from the totals.
     public func entrypointBreakdown(for window: TimeWindow) throws -> EntrypointBreakdown {
         let now = nowProvider()
-        var totals: [Entrypoint: Int] = [:]
+        var totals: [Entrypoint: TokenUsage] = [:]
         for event in events(in: window.startDate(endingAt: now), to: now) {
             guard let entrypoint = event.entrypoint else { continue }
-            totals[entrypoint, default: 0] += event.usage.totalTokens
+            totals[entrypoint] = totals[entrypoint, default: .zero] + event.usage
         }
-        return EntrypointBreakdown(window: window, tokensByEntrypoint: totals)
+        return EntrypointBreakdown(window: window, usageByEntrypoint: totals)
     }
 
     /// Tokens and estimated cost grouped by ``ModelFamily``.
