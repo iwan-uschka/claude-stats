@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.9.3] - 2026-08-18
+
 ### Added
 - "Clear Quota Cache" button in the popover's quota section: deletes the
   statusline cache file and re-polls, so the next percentage comes from Claude
