@@ -94,6 +94,8 @@ Click opens a popover:
 5-hour window     ▓▓▓▓▓▓░░ 62%     resets in 2h 14m
 7-day window       ▓▓▓░░░░░ 31%     resets in 4d 6h
 source: official · 40s ago                      ← confidence tag + freshness
+                                  [ Clear Quota Cache ]   ← deletes the
+                                    statusline cache and re-polls
 
 Plan: Max20 (auto-detected)
 Burn rate: 12.4k tok/hr
@@ -117,6 +119,9 @@ Refresh   Settings   Quit
 Freshness tag shows `official` (fresh statusline capture) — the only tier.
 No fallback: nothing installed shows as an error; an installed-but-quiet
 source (stale cache) keeps the last reading with an orange staleness warning.
+After "Clear Quota Cache" the bars go empty and a gray notice (not an error)
+explains that the next number comes from Claude Code's own next statusline
+render.
 
 ## Tech / release
 

@@ -141,7 +141,11 @@ public struct StatuslineCacheReader: QuotaProviding {
     /// throws ``ClaudeStatsError/noQuotaSourceAvailable`` — expected, not a
     /// failure. Best-effort: a missing file is not an error.
     public func clearCache() throws {
-        try? fileManager.removeItem(at: cacheURL)
+        do {
+            try fileManager.removeItem(at: cacheURL)
+        } catch let error as CocoaError where error.code == .fileNoSuchFile {
+            // already gone — nothing to do
+        }
     }
 
     /// Reads the cache file's bytes and modification time from a single open

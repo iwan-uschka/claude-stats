@@ -38,4 +38,16 @@ final class ClaudeStatsCoreTests: XCTestCase {
         XCTAssertEqual(snapshot.confidence, .official)
         XCTAssertFalse(snapshot.isStale())
     }
+
+    func testMockQuotaProviderClearCacheThrowsNoQuotaSourceAvailable() async throws {
+        let provider = MockQuotaProvider()
+        let seeded = try await provider.currentSnapshot()
+        XCTAssertEqual(seeded.confidence, .official)
+
+        try provider.clearCache()
+
+        await assertThrows(.noQuotaSourceAvailable) {
+            try await provider.currentSnapshot()
+        }
+    }
 }

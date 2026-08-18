@@ -96,46 +96,100 @@ final class AppModel: ObservableObject {
         lastQuotaPoll = Date()
 
         refreshTask?.cancel()
-        refreshTask = Task { [quotaProvider] in
+        refreshTask = runQuotaPoll()
+        return refreshTask
+    }
+
+    /// Shared body of a live quota poll. Every path that polls goes through
+    /// here — `refresh()` directly, and `pollAfterInstall()` /
+    /// `clearQuotaCache()` through `refresh(force:)` — so none of them can
+    /// drift out of sync on how a poll result is applied.
+    ///
+    /// While `quotaCacheClearedNotice` is set, a `noQuotaSourceAvailable`
+    /// result is the expected outcome rather than a failure — the cache was
+    /// deliberately emptied and nothing has written a fresh one yet — so it's
+    /// suppressed instead of shown as an error. That check is on the notice
+    /// itself, not on which caller started the poll, so any poll landing in
+    /// that window (a retry from ``clearQuotaCache()``, or a plain
+    /// ``refresh()``) leaves the notice in place rather than clobbering it
+    /// with a red error banner for the same expected condition.
+    private func runQuotaPoll() -> Task<Void, Never> {
+        Task { [quotaProvider] in
             do {
                 let snapshot = try await quotaProvider.currentSnapshot()
                 guard !Task.isCancelled else { return }
                 self.snapshot = snapshot
                 self.quotaError = nil
                 self.quotaWarning = nil
+                self.quotaCacheClearedNotice = nil
             } catch let error as ClaudeStatsError where error.isStaleQuotaSource {
                 guard !Task.isCancelled else { return }
                 // The source has a real reading, just an old one — leave
                 // `snapshot` as-is (the popover's own staleness check already
-                // marks it) and surface this as a warning, not an error.
+                // marks it) and surface this as a warning, not an error. A
+                // stale-but-present reading also means the "wait for a fresh
+                // render" notice no longer describes the state.
                 self.quotaWarning = error.localizedDescription
                 self.quotaError = nil
+                self.quotaCacheClearedNotice = nil
+            } catch ClaudeStatsError.noQuotaSourceAvailable where self.quotaCacheClearedNotice != nil {
+                guard !Task.isCancelled else { return }
+                // The expected outcome right after a clear: nothing has written a
+                // fresh cache yet. `quotaCacheClearedNotice` already says so, so
+                // no error banner — that would read as a fault the user has to
+                // fix rather than a state that resolves itself. Left set.
+                self.quotaError = nil
+                self.quotaWarning = nil
             } catch {
                 guard !Task.isCancelled else { return }
                 // Replaces the last snapshot rather than leaving it on screen:
                 // once the source has genuinely failed (not just a throttled
                 // skip — this closure only runs when a poll was attempted),
-                // frozen old numbers with no visual change read as live.
+                // frozen old numbers with no visual change read as live. Any
+                // pending "cache cleared" notice no longer applies either —
+                // this is a real, different failure.
                 self.snapshot = nil
                 self.quotaError = error.localizedDescription
                 self.quotaWarning = nil
+                self.quotaCacheClearedNotice = nil
             }
         }
-        return refreshTask
     }
 
-    /// Deletes the quota source's cache and re-polls immediately.
+    /// Deletes the quota source's cache and re-polls until a fresh reading lands.
     ///
     /// The escape hatch for a number that looks stuck or wrong — several
     /// concurrent Claude Code sessions share one cache file, so any of them can
     /// overwrite it with its own older reading. Plain "Refresh" can't help there:
     /// it re-reads the very file that holds the bad value.
     ///
+    /// The repoll goes through ``pollAfterInstall()`` rather than a single
+    /// poll: a just-deleted cache is the same "file doesn't exist yet" state as
+    /// a just-installed hook, so it needs the same retry ladder. A slow next
+    /// statusline render then resolves within ~15s instead of leaving the
+    /// notice up for a full `quotaPollInterval` (up to 5 minutes) before
+    /// anything tries again.
+    ///
     /// ``snapshot`` is dropped right away rather than at the end of the poll: the
     /// file is already gone, so keeping the old number on screen would show a
     /// reading that no longer has any source behind it.
+    ///
+    /// If the delete itself fails, none of the above happens: the existing
+    /// snapshot/notice state is left untouched and the failure is surfaced via
+    /// ``quotaError`` instead.
     func clearQuotaCache() {
-        try? quotaProvider.clearCache()
+        do {
+            try quotaProvider.clearCache()
+        } catch {
+            // The delete itself failed — nothing was actually cleared, so don't
+            // show the "cleared" notice or start a repoll; surface the real
+            // failure instead.
+            quotaError = error.localizedDescription
+            reloadLocalStats()
+            reloadBreakdown()
+            return
+        }
+
         snapshot = nil
         quotaError = nil
         quotaWarning = nil
@@ -144,49 +198,15 @@ final class AppModel: ObservableObject {
         reloadLocalStats()
         reloadBreakdown()
 
-        lastQuotaPoll = Date()
         refreshTask?.cancel()
-        refreshTask = Task { [quotaProvider] in
-            do {
-                let snapshot = try await quotaProvider.currentSnapshot()
-                guard !Task.isCancelled else { return }
-                self.snapshot = snapshot
-                self.quotaError = nil
-                self.quotaWarning = nil
-                self.quotaCacheClearedNotice = nil
-            } catch let error as ClaudeStatsError where error.isStaleQuotaSource {
-                guard !Task.isCancelled else { return }
-                // Something already wrote a cache back between the delete and
-                // this read, just an old one — same handling as `refresh()`, and
-                // the "wait for a fresh render" notice no longer describes it.
-                self.quotaWarning = error.localizedDescription
-                self.quotaError = nil
-                self.quotaCacheClearedNotice = nil
-            } catch ClaudeStatsError.noQuotaSourceAvailable {
-                guard !Task.isCancelled else { return }
-                // The expected outcome right after a clear: nothing has written a
-                // fresh cache yet. `quotaCacheClearedNotice` already says so, so
-                // no error banner — that would read as a fault the user has to
-                // fix rather than a state that resolves itself.
-                self.quotaError = nil
-                self.quotaWarning = nil
-            } catch {
-                guard !Task.isCancelled else { return }
-                // Anything else is a real failure, not a pending render — say so
-                // plainly instead of downplaying it as "just wait".
-                self.snapshot = nil
-                self.quotaError = error.localizedDescription
-                self.quotaWarning = nil
-                self.quotaCacheClearedNotice = nil
-            }
-        }
+        pollAfterInstall()
     }
 
-    /// Right after installing the hook, the cache file doesn't exist yet — an
-    /// immediate poll can only fail with `noQuotaSourceAvailable`. Retry a few
-    /// times over ~15s instead of waiting for the next popover open: catches
-    /// the common case of Claude Code already running in a terminal and
-    /// firing the hook almost immediately.
+    /// Right after installing the hook — or after ``clearQuotaCache()`` — the
+    /// cache file doesn't exist yet, so an immediate poll can only fail with
+    /// `noQuotaSourceAvailable`. Retry a few times over ~15s instead of waiting
+    /// for the next popover open: catches the common case of Claude Code
+    /// already running in a terminal and firing the hook almost immediately.
     func pollAfterInstall() {
         postInstallPollTask?.cancel()
         postInstallPollTask = Task { [weak self] in

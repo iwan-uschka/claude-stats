@@ -23,6 +23,19 @@ final class StatuslineCacheReaderTests: XCTestCase {
 
     // MARK: - Fixtures
 
+    /// Stands in for a removal that fails for any reason other than "already
+    /// gone" — a real permission failure is platform-dependent and doesn't
+    /// reproduce under a root CI user.
+    private final class ThrowingFileManager: FileManager {
+        struct RemovalFailure: Error, LocalizedError {
+            var errorDescription: String? { "permission denied" }
+        }
+
+        override func removeItem(at url: URL) throws {
+            throw RemovalFailure()
+        }
+    }
+
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
     private func write(_ json: String) throws {
@@ -30,12 +43,14 @@ final class StatuslineCacheReaderTests: XCTestCase {
     }
 
     private func makeReader(
-        stalenessThreshold: TimeInterval = QuotaSnapshot.defaultStalenessThreshold
+        stalenessThreshold: TimeInterval = QuotaSnapshot.defaultStalenessThreshold,
+        fileManager: FileManager = .default
     ) -> StatuslineCacheReader {
         let fixedNow = now
         return StatuslineCacheReader(
             cacheURL: cacheURL,
             stalenessThreshold: stalenessThreshold,
+            fileManager: fileManager,
             now: { fixedNow }
         )
     }
@@ -200,6 +215,15 @@ final class StatuslineCacheReaderTests: XCTestCase {
     func testClearCacheWithNoCacheFileDoesNotThrow() throws {
         XCTAssertFalse(FileManager.default.fileExists(atPath: cacheURL.path))
         XCTAssertNoThrow(try makeReader().clearCache())
+    }
+
+    /// Only "already gone" is swallowed — anything else has to reach the caller,
+    /// which shows it instead of a false "cleared" notice.
+    func testClearCachePropagatesGenuineFileSystemError() throws {
+        let reader = makeReader(fileManager: ThrowingFileManager())
+        XCTAssertThrowsError(try reader.clearCache()) { error in
+            XCTAssertTrue(error is ThrowingFileManager.RemovalFailure, "\(error)")
+        }
     }
 
     // MARK: - Default path
