@@ -181,6 +181,27 @@ final class StatuslineCacheReaderTests: XCTestCase {
         }
     }
 
+    // MARK: - Clearing
+
+    func testClearCacheRemovesTheCacheFile() async throws {
+        try write(filteredCache(capturedAt: now.addingTimeInterval(-30)))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: cacheURL.path))
+
+        let reader = makeReader()
+        try reader.clearCache()
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: cacheURL.path))
+        // Nothing has written a fresh cache yet — the expected post-clear state.
+        await assertThrows(.noQuotaSourceAvailable) {
+            try await reader.currentSnapshot()
+        }
+    }
+
+    func testClearCacheWithNoCacheFileDoesNotThrow() throws {
+        XCTAssertFalse(FileManager.default.fileExists(atPath: cacheURL.path))
+        XCTAssertNoThrow(try makeReader().clearCache())
+    }
+
     // MARK: - Default path
 
     func testDefaultCacheURLPointsAtApplicationSupport() {

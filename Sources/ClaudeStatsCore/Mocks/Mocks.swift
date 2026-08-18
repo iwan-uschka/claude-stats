@@ -18,6 +18,10 @@ public struct MockQuotaProvider: QuotaProviding {
         return snapshot
     }
 
+    /// No-op: nothing is on disk to clear, and the in-memory ``snapshot`` is the
+    /// fixture previews and tests depend on, so it deliberately stays put.
+    public func clearCache() throws {}
+
     /// Matches the numbers in the popover sketch in `AGENTS.md`.
     public static func sampleSnapshot(now: Date = Date()) -> QuotaSnapshot {
         QuotaSnapshot(

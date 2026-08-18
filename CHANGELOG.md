@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Added
+- "Clear Quota Cache" button in the popover's quota section: deletes the
+  statusline cache file and re-polls, so the next percentage comes from Claude
+  Code's own next statusline render. Escape hatch for a number that looks stuck
+  or wrong — the cache is one global file, so several concurrent Claude Code
+  sessions can overwrite it with each other's older readings, and "Refresh"
+  only re-reads that same file. The empty state shows a notice rather than an
+  error banner until a fresh reading lands.
+
 ## [0.9.2] - 2026-08-18
 
 ### Changed

@@ -15,6 +15,10 @@ final class AppModelTests: XCTestCase {
         func currentSnapshot() async throws -> QuotaSnapshot {
             try result.get()
         }
+
+        /// `nonisolated` because the protocol requirement is synchronous; there is
+        /// no on-disk state here, so the scripted `result` stays as set.
+        nonisolated func clearCache() throws {}
     }
 
     private struct FailingUsageStore: UsageStoring {
@@ -97,6 +101,49 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(model.activeErrors.count, 3)
         XCTAssertNotNil(model.localStatsError)
         XCTAssertNotNil(model.breakdownError)
+        XCTAssertNotNil(model.quotaError)
+    }
+
+    func testClearQuotaCacheDropsSnapshotAndShowsNoticeInsteadOfError() async {
+        let provider = ScriptedQuotaProvider()
+        await provider.setResult(.success(MockQuotaProvider.sampleSnapshot()))
+        let model = AppModel(quotaProvider: provider, usageStore: MockUsageStore())
+        model.refresh(force: true)
+        await waitUntil { model.snapshot != nil }
+
+        // Nothing has written a fresh cache yet — the expected post-clear state.
+        await provider.setResult(.failure(ClaudeStatsError.noQuotaSourceAvailable))
+        model.clearQuotaCache()
+        await waitUntil { model.quotaCacheClearedNotice != nil }
+
+        XCTAssertNil(model.snapshot)
+        XCTAssertNil(model.quotaError)
+        XCTAssertNil(model.quotaWarning)
+        XCTAssertNotNil(model.quotaCacheClearedNotice)
+    }
+
+    func testClearQuotaCacheNoticeIsDroppedOnceAFreshReadingLands() async {
+        let provider = ScriptedQuotaProvider()
+        let sample = MockQuotaProvider.sampleSnapshot()
+        await provider.setResult(.success(sample))
+        let model = AppModel(quotaProvider: provider, usageStore: MockUsageStore())
+
+        model.clearQuotaCache()
+        await waitUntil { model.snapshot != nil }
+
+        XCTAssertEqual(model.snapshot, sample)
+        XCTAssertNil(model.quotaCacheClearedNotice)
+    }
+
+    func testClearQuotaCacheStillReportsAGenuineFailure() async {
+        let provider = ScriptedQuotaProvider()
+        await provider.setResult(.failure(ClaudeStatsError.unexpectedQuotaResponse("nope")))
+        let model = AppModel(quotaProvider: provider, usageStore: MockUsageStore())
+
+        model.clearQuotaCache()
+        await waitUntil { model.quotaError != nil }
+
+        XCTAssertNil(model.quotaCacheClearedNotice)
         XCTAssertNotNil(model.quotaError)
     }
 

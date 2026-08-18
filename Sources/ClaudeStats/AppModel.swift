@@ -26,6 +26,12 @@ final class AppModel: ObservableObject {
     /// real (if old) reading, not nothing, so ``snapshot`` is left in place
     /// and this is shown as a warning, not an error.
     @Published private(set) var quotaWarning: String?
+    /// Set by ``clearQuotaCache()`` and shown in place of an error banner while
+    /// the cache is deliberately empty — the next reading has to come from
+    /// Claude Code's own next statusline render, which is expected to take a
+    /// moment. Cleared as soon as any poll comes back with real data (or with a
+    /// genuine failure, which is not this state).
+    @Published private(set) var quotaCacheClearedNotice: String?
 
     /// Every still-live failure, not just the highest-priority one — the
     /// popover clears `snapshot` on a quota failure, so a masked `quotaError`
@@ -116,6 +122,64 @@ final class AppModel: ObservableObject {
             }
         }
         return refreshTask
+    }
+
+    /// Deletes the quota source's cache and re-polls immediately.
+    ///
+    /// The escape hatch for a number that looks stuck or wrong — several
+    /// concurrent Claude Code sessions share one cache file, so any of them can
+    /// overwrite it with its own older reading. Plain "Refresh" can't help there:
+    /// it re-reads the very file that holds the bad value.
+    ///
+    /// ``snapshot`` is dropped right away rather than at the end of the poll: the
+    /// file is already gone, so keeping the old number on screen would show a
+    /// reading that no longer has any source behind it.
+    func clearQuotaCache() {
+        try? quotaProvider.clearCache()
+        snapshot = nil
+        quotaError = nil
+        quotaWarning = nil
+        quotaCacheClearedNotice = "Cache cleared — the next number comes from Claude Code's own next statusline render."
+
+        reloadLocalStats()
+        reloadBreakdown()
+
+        lastQuotaPoll = Date()
+        refreshTask?.cancel()
+        refreshTask = Task { [quotaProvider] in
+            do {
+                let snapshot = try await quotaProvider.currentSnapshot()
+                guard !Task.isCancelled else { return }
+                self.snapshot = snapshot
+                self.quotaError = nil
+                self.quotaWarning = nil
+                self.quotaCacheClearedNotice = nil
+            } catch let error as ClaudeStatsError where error.isStaleQuotaSource {
+                guard !Task.isCancelled else { return }
+                // Something already wrote a cache back between the delete and
+                // this read, just an old one — same handling as `refresh()`, and
+                // the "wait for a fresh render" notice no longer describes it.
+                self.quotaWarning = error.localizedDescription
+                self.quotaError = nil
+                self.quotaCacheClearedNotice = nil
+            } catch ClaudeStatsError.noQuotaSourceAvailable {
+                guard !Task.isCancelled else { return }
+                // The expected outcome right after a clear: nothing has written a
+                // fresh cache yet. `quotaCacheClearedNotice` already says so, so
+                // no error banner — that would read as a fault the user has to
+                // fix rather than a state that resolves itself.
+                self.quotaError = nil
+                self.quotaWarning = nil
+            } catch {
+                guard !Task.isCancelled else { return }
+                // Anything else is a real failure, not a pending render — say so
+                // plainly instead of downplaying it as "just wait".
+                self.snapshot = nil
+                self.quotaError = error.localizedDescription
+                self.quotaWarning = nil
+                self.quotaCacheClearedNotice = nil
+            }
+        }
     }
 
     /// Right after installing the hook, the cache file doesn't exist yet — an
@@ -209,6 +273,15 @@ extension AppModel {
     /// Live source, but stale — quota still shown, plus a warning line.
     static func previewStaleWarning() -> AppModel {
         preview(warning: "Statusline cache is 14 minutes old.")
+    }
+
+    /// Straight after "Clear Quota Cache": no snapshot, no error — just the
+    /// notice explaining what the popover is waiting for.
+    static func previewCacheCleared() -> AppModel {
+        let model = preview(snapshot: nil)
+        model.quotaCacheClearedNotice =
+            "Cache cleared — the next number comes from Claude Code's own next statusline render."
+        return model
     }
 
     /// Worst case: a stale snapshot, a window over budget, and a quota

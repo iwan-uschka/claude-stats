@@ -10,6 +10,16 @@ public protocol QuotaProviding: Sendable {
     /// The most recent reading available. Implementations may return a cached
     /// snapshot — callers check ``QuotaSnapshot/isStale(asOf:threshold:)``.
     func currentSnapshot() async throws -> QuotaSnapshot
+
+    /// Discards whatever on-disk or cached state backs this source, so the next
+    /// ``currentSnapshot()`` reflects only data written after this call.
+    ///
+    /// A manual escape hatch, not part of the normal refresh path: it exists for
+    /// a reading that looks stuck or wrong, which a plain re-read of the same
+    /// cache can't fix. Callers should expect
+    /// ``ClaudeStatsError/noQuotaSourceAvailable`` from the next read until the
+    /// source has reported again.
+    func clearCache() throws
 }
 
 /// Aggregated local-log statistics (tier 1 of the data layer).

@@ -131,6 +131,19 @@ public struct StatuslineCacheReader: QuotaProviding {
         return snapshot
     }
 
+    /// Deletes the cache file, so the next hook write starts from nothing.
+    ///
+    /// The escape hatch for a reading that looks stuck or wrong: the cache is a
+    /// single global path shared by every concurrently-running Claude Code
+    /// session, so any one of them can overwrite it with its own last-known
+    /// numbers. Removing the file makes the next statusline render the sole
+    /// source of what's on screen. Until one happens, ``currentSnapshot()``
+    /// throws ``ClaudeStatsError/noQuotaSourceAvailable`` — expected, not a
+    /// failure. Best-effort: a missing file is not an error.
+    public func clearCache() throws {
+        try? fileManager.removeItem(at: cacheURL)
+    }
+
     /// Reads the cache file's bytes and modification time from a single open
     /// descriptor, so they always describe the same file state — two separate
     /// syscalls (as `FileManager.contents(atPath:)` followed by
