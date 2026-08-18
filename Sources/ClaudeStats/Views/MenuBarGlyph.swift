@@ -18,11 +18,11 @@ enum MenuBarGlyph {
     /// Height of the drawn glyph; a little under the 22pt menu bar so the icon
     /// doesn't touch the edges.
     static let height: CGFloat = 18
-    static let markSize: CGFloat = 14
+    static let markSize: CGFloat = 11.9 // 15% smaller than the original 14.
     /// Gap between the mark and the first bar.
     static let markToBarsGap: CGFloat = 3.5
     static let barWidth: CGFloat = 3
-    static let barHeight: CGFloat = 13
+    static let barHeight: CGFloat = height
     static let barSpacing: CGFloat = 2.5
     static let barCornerRadius: CGFloat = 1
     /// Alpha of the unused portion of a bar.
