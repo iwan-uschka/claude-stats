@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Changed
+- Menu bar glyph: mark size 14 → 11.9 (15% smaller), and bars now stretch to
+  the full glyph height instead of a hardcoded 13pt, matching Stats' bar
+  proportions.
+
 ## [0.9.1] - 2026-08-15
 
 ### Fixed
