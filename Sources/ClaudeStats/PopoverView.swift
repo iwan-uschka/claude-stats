@@ -127,9 +127,22 @@ struct PopoverView: View {
             labelledLine("Plan", DisplayFormat.planDescription(model.planTier))
             labelledLine(
                 "Burn rate",
-                model.burnRatePerHour.map(DisplayFormat.burnRate) ?? "—"
+                model.burnRateUsage.map { DisplayFormat.burnRate(Double($0.totalTokens)) } ?? "—"
             )
+            .help(model.burnRateUsage.map(DisplayFormat.tokenSplit) ?? "")
+            if let note = model.burnRateUsage.flatMap(DisplayFormat.cacheReadNote) {
+                cacheReadNoteLine(note)
+            }
         }
+    }
+
+    /// Explains a token total that replayed cache reads dominate, so the
+    /// headline number doesn't read as fresh work.
+    private func cacheReadNoteLine(_ note: String) -> some View {
+        Text(note)
+            .font(PopoverMetrics.captionFont)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     private func labelledLine(_ label: String, _ value: String) -> some View {
@@ -202,8 +215,17 @@ struct PopoverView: View {
                         ModelUsageRow(usage: usage)
                     }
                 }
+                if let note = DisplayFormat.cacheReadNote(modelUsageTotal) {
+                    cacheReadNoteLine(note)
+                }
             }
         }
+    }
+
+    /// Every model row summed — the note is about the section's numbers as a
+    /// whole, and one line reads better than one per row.
+    private var modelUsageTotal: TokenUsage {
+        model.modelUsage.reduce(TokenUsage.zero) { $0 + $1.usage }
     }
 
     private var costSection: some View {

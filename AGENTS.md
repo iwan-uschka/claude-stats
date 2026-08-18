@@ -99,6 +99,10 @@ source: official · 40s ago                      ← confidence tag + freshness
 
 Plan: Max20 (auto-detected)
 Burn rate: 12.4k tok/hr
+10k of 12.4k is cache reads — billed at 1/10 the input rate  ← only when cache
+                                    reads are >50% of the total; same line
+                                    under the model rows. Hovering a model row
+                                    or the burn rate shows the full split.
 
 This Mac               5h   24h   7d
   CLI                   ▓░   ▓▓   ▓▓▓

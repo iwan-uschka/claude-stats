@@ -39,22 +39,26 @@ public struct ModelUsage: Sendable, Hashable, Codable, Identifiable {
     public let modelID: String
     /// Family the ID maps to, or `nil` for unrecognised IDs.
     public let family: ModelFamily?
-    /// Total tokens (input + output) attributed to this model.
-    public let tokens: Int
+    /// Summed token counts attributed to this model, kept split so the popover
+    /// can explain how much of the total is replayed cache reads.
+    public let usage: TokenUsage
     /// Cost in USD, computed locally from per-model pricing.
     public let estimatedCostUSD: Double
 
     public var id: String { modelID }
 
+    /// Total tokens attributed to this model — the row's headline number.
+    public var tokens: Int { usage.totalTokens }
+
     public init(
         modelID: String,
         family: ModelFamily? = nil,
-        tokens: Int,
+        usage: TokenUsage,
         estimatedCostUSD: Double
     ) {
         self.modelID = modelID
         self.family = family ?? ModelFamily.inferred(fromModelID: modelID)
-        self.tokens = tokens
+        self.usage = usage
         self.estimatedCostUSD = estimatedCostUSD
     }
 

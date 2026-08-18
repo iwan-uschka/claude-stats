@@ -74,7 +74,7 @@ public struct MockUsageStore: UsageStoring {
     public var breakdowns: [TimeWindow: EntrypointBreakdown]
     public var modelUsageLast24h: [ModelUsage]
     public var modelUsageAllTime: [ModelUsage]
-    public var burnRate: Double
+    public var burnRateUsage: TokenUsage
     public var costToday: Double
     public var planTier: PlanTier
 
@@ -82,14 +82,14 @@ public struct MockUsageStore: UsageStoring {
         breakdowns: [TimeWindow: EntrypointBreakdown] = MockUsageStore.sampleBreakdowns,
         modelUsageLast24h: [ModelUsage] = MockUsageStore.sampleModelUsage,
         modelUsageAllTime: [ModelUsage]? = nil,
-        burnRate: Double = 12_400,
+        burnRateUsage: TokenUsage = MockUsageStore.sampleBurnRateUsage,
         costToday: Double = 4.82,
         planTier: PlanTier = .max20
     ) {
         self.breakdowns = breakdowns
         self.modelUsageLast24h = modelUsageLast24h
         self.modelUsageAllTime = modelUsageAllTime ?? modelUsageLast24h
-        self.burnRate = burnRate
+        self.burnRateUsage = burnRateUsage
         self.costToday = costToday
         self.planTier = planTier
     }
@@ -102,15 +102,24 @@ public struct MockUsageStore: UsageStoring {
         last24h ? modelUsageLast24h : modelUsageAllTime
     }
 
-    public func burnRatePerHour() throws -> Double { burnRate }
+    public func burnRateUsagePerHour() throws -> TokenUsage { burnRateUsage }
 
     public func estimatedCostToday() throws -> Double { costToday }
 
     public func detectedPlanTier() throws -> PlanTier { planTier }
 
-    /// Token totals consistent with the default `burnRate` (12.4k tok/hr) across
-    /// every window, so the popover never shows two contradictory numbers for
-    /// the same underlying rate.
+    /// Trailing-hour split summing to 12.4k tok/hr, cache-read-heavy like real
+    /// sessions are.
+    public static let sampleBurnRateUsage = TokenUsage(
+        inputTokens: 200,
+        outputTokens: 700,
+        cacheCreationInputTokens: 1_500,
+        cacheReadInputTokens: 10_000
+    )
+
+    /// Token totals consistent with ``sampleBurnRateUsage`` (12.4k tok/hr)
+    /// across every window, so the popover never shows two contradictory
+    /// numbers for the same underlying rate.
     public static let sampleBreakdowns: [TimeWindow: EntrypointBreakdown] = [
         .fiveHour: EntrypointBreakdown(
             window: .fiveHour,
@@ -128,9 +137,45 @@ public struct MockUsageStore: UsageStoring {
 
     /// Matches the "By model" rows in the popover sketch in `AGENTS.md`.
     public static let sampleModelUsage: [ModelUsage] = [
-        ModelUsage(modelID: "claude-sonnet-5", tokens: 2_100_000, estimatedCostUSD: 3.15),
-        ModelUsage(modelID: "claude-opus-5", tokens: 180_000, estimatedCostUSD: 2.70),
-        ModelUsage(modelID: "claude-haiku-4-5", tokens: 640_000, estimatedCostUSD: 0.19),
-        ModelUsage(modelID: "claude-fable-5", tokens: 90_000, estimatedCostUSD: 0.08),
+        ModelUsage(
+            modelID: "claude-sonnet-5",
+            usage: TokenUsage(
+                inputTokens: 12_000,
+                outputTokens: 88_000,
+                cacheCreationInputTokens: 200_000,
+                cacheReadInputTokens: 1_800_000
+            ),
+            estimatedCostUSD: 3.15
+        ),
+        ModelUsage(
+            modelID: "claude-opus-5",
+            usage: TokenUsage(
+                inputTokens: 2_000,
+                outputTokens: 8_000,
+                cacheCreationInputTokens: 20_000,
+                cacheReadInputTokens: 150_000
+            ),
+            estimatedCostUSD: 2.70
+        ),
+        ModelUsage(
+            modelID: "claude-haiku-4-5",
+            usage: TokenUsage(
+                inputTokens: 5_000,
+                outputTokens: 35_000,
+                cacheCreationInputTokens: 100_000,
+                cacheReadInputTokens: 500_000
+            ),
+            estimatedCostUSD: 0.19
+        ),
+        ModelUsage(
+            modelID: "claude-fable-5",
+            usage: TokenUsage(
+                inputTokens: 1_000,
+                outputTokens: 4_000,
+                cacheCreationInputTokens: 10_000,
+                cacheReadInputTokens: 75_000
+            ),
+            estimatedCostUSD: 0.08
+        ),
     ]
 }

@@ -142,6 +142,61 @@ final class DisplayFormatTests: XCTestCase {
         XCTAssertEqual(DisplayFormat.burnRate(0), "0 tok/hr")
     }
 
+    // MARK: - token splits
+
+    func testTokenSplitListsEveryKind() {
+        let usage = TokenUsage(
+            inputTokens: 9_900,
+            outputTokens: 4_700_000,
+            cacheCreationInputTokens: 36_300_000,
+            cacheReadInputTokens: 453_000_000
+        )
+        XCTAssertEqual(
+            DisplayFormat.tokenSplit(usage),
+            "in 9.9k · out 4.7M · cache write 36.3M · cache read 453M"
+        )
+    }
+
+    func testCacheReadNoteAppearsOnlyWhenCacheReadsDominate() {
+        let dominated = TokenUsage(inputTokens: 10_000, cacheReadInputTokens: 90_000)
+        XCTAssertEqual(
+            DisplayFormat.cacheReadNote(dominated),
+            "90k of 100k is cache reads — billed at 1/10 the input rate"
+        )
+
+        // Exactly at the threshold, and below it: the raw total speaks for itself.
+        XCTAssertNil(DisplayFormat.cacheReadNote(
+            TokenUsage(inputTokens: 50_000, cacheReadInputTokens: 50_000)
+        ))
+        XCTAssertNil(DisplayFormat.cacheReadNote(TokenUsage(inputTokens: 1_000)))
+        XCTAssertNil(DisplayFormat.cacheReadNote(.zero))
+    }
+
+    /// Mirrors `PopoverView.modelUsageTotal`: the section's caption is about
+    /// every row summed, not any single model — a row that alone stays under
+    /// the threshold can still push the total over it once combined.
+    func testCacheReadNoteOverSummedModelRows() {
+        let rows = [
+            ModelUsage(
+                modelID: "claude-sonnet-5",
+                usage: TokenUsage(inputTokens: 30_000, cacheReadInputTokens: 20_000),
+                estimatedCostUSD: 0
+            ),
+            ModelUsage(
+                modelID: "claude-opus-5",
+                usage: TokenUsage(inputTokens: 10_000, cacheReadInputTokens: 60_000),
+                estimatedCostUSD: 0
+            ),
+        ]
+        let total = rows.reduce(TokenUsage.zero) { $0 + $1.usage }
+
+        XCTAssertEqual(total, TokenUsage(inputTokens: 40_000, cacheReadInputTokens: 80_000))
+        XCTAssertEqual(
+            DisplayFormat.cacheReadNote(total),
+            "80k of 120k is cache reads — billed at 1/10 the input rate"
+        )
+    }
+
     func testCostFormatting() {
         XCTAssertEqual(DisplayFormat.cost(4.82), "$4.82")
         XCTAssertEqual(DisplayFormat.cost(0), "$0.00")

@@ -40,7 +40,7 @@ final class AppModelTests: XCTestCase {
 
         func entrypointBreakdown(for window: TimeWindow) throws -> EntrypointBreakdown { throw Failure() }
         func modelUsage(last24h: Bool) throws -> [ModelUsage] { throw Failure() }
-        func burnRatePerHour() throws -> Double { throw Failure() }
+        func burnRateUsagePerHour() throws -> TokenUsage { throw Failure() }
         func estimatedCostToday() throws -> Double { throw Failure() }
         func detectedPlanTier() throws -> PlanTier { throw Failure() }
     }

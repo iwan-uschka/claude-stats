@@ -112,6 +112,35 @@ public enum DisplayFormat {
         "\(tokens(Int(tokensPerHour.rounded()))) tok/hr"
     }
 
+    // MARK: - Token splits
+
+    /// The four-way breakdown behind a token total, for a tooltip:
+    /// `in 9.9k · out 4.7M · cache write 36.3M · cache read 453M`.
+    public static func tokenSplit(_ usage: TokenUsage) -> String {
+        "in \(tokens(usage.inputTokens))"
+            + " · out \(tokens(usage.outputTokens))"
+            + " · cache write \(tokens(usage.cacheCreationInputTokens))"
+            + " · cache read \(tokens(usage.cacheReadInputTokens))"
+    }
+
+    /// Share of the total that cache reads have to exceed before a raw token
+    /// total is misleading enough to caption. Half is the point where the
+    /// headline number says more about replayed context than about new work.
+    public static let cacheReadNoteThreshold = 0.5
+
+    /// One-line footnote for a token total that cache reads dominate:
+    /// `453M of 496M is cache reads — billed at 1/10 the input rate`. `nil`
+    /// when cache reads are at or below ``cacheReadNoteThreshold`` of the
+    /// total, where the raw number needs no qualifying.
+    public static func cacheReadNote(_ usage: TokenUsage) -> String? {
+        let total = usage.totalTokens
+        guard total > 0 else { return nil }
+        let share = Double(usage.cacheReadInputTokens) / Double(total)
+        guard share > cacheReadNoteThreshold else { return nil }
+        return "\(tokens(usage.cacheReadInputTokens)) of \(tokens(total)) is cache reads"
+            + " — billed at 1/10 the input rate"
+    }
+
     /// USD with two decimals: `$4.82`.
     public static func cost(_ usd: Double) -> String {
         String(format: "$%.2f", usd)

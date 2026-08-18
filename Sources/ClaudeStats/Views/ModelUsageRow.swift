@@ -23,6 +23,7 @@ struct ModelUsageRow: View {
                 .frame(width: PopoverMetrics.costColumnWidth, alignment: .trailing)
         }
         .accessibilityElement(children: .combine)
+        .help(DisplayFormat.tokenSplit(usage.usage))
     }
 }
 
@@ -35,7 +36,11 @@ struct ModelUsageRow: View {
         Divider()
         // Unrecognised model ID: falls back to the raw ID as the label.
         ModelUsageRow(
-            usage: ModelUsage(modelID: "claude-experimental-9", tokens: 1_250, estimatedCostUSD: 0)
+            usage: ModelUsage(
+                modelID: "claude-experimental-9",
+                usage: TokenUsage(inputTokens: 250, outputTokens: 1_000),
+                estimatedCostUSD: 0
+            )
         )
     }
     .padding()

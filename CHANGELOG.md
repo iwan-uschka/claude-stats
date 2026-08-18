@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Added
+- "By model" rows and the burn rate now explain their token totals: a tooltip
+  with the four-way split (`in · out · cache write · cache read`), plus a muted
+  caption line when cache reads are more than half the total ("453M of 496M is
+  cache reads — billed at 1/10 the input rate"). The headline number is
+  unchanged — raw tokens — it just no longer reads as if it were all new work.
+
 ## [0.9.3] - 2026-08-18
 
 ### Added

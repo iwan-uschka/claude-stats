@@ -12,8 +12,11 @@ enum PopoverMetrics {
     /// Width of the token column in the "By model" section — wider than
     /// ``valueColumnWidth`` to fit the larger all-time token counts shown there.
     static let modelTokenColumnWidth: CGFloat = valueColumnWidth + 24
-    /// Width of the cost column in the "By model" section.
-    static let costColumnWidth: CGFloat = 54
+    /// Width of the cost column in the "By model" section. Wide enough for
+    /// 4-digit spend (`$1234.56`) — a heavy cache-read day can push a single
+    /// model's estimate well past the `$3.15`-sized figures this used to be
+    /// sized for.
+    static let costColumnWidth: CGFloat = 76
     static let rowSpacing: CGFloat = 8
     static let sectionSpacing: CGFloat = 10
 

@@ -278,6 +278,23 @@ final class LocalLogUsageStoreTests: XCTestCase {
         XCTAssertFalse(rows.contains { $0.modelID == "<synthetic>" })
     }
 
+    func testModelUsageRowsKeepTheTokenSplit() throws {
+        let rows = try makeStore().modelUsage(last24h: true)
+        let sonnet = try XCTUnwrap(rows.first { $0.family == .sonnet })
+
+        XCTAssertEqual(
+            sonnet.usage,
+            TokenUsage(
+                inputTokens: 6_900,
+                outputTokens: 1_900,
+                cacheCreationInputTokens: 2_000,
+                cacheReadInputTokens: 10_000,
+                ephemeral5mInputTokens: 2_000
+            )
+        )
+        XCTAssertEqual(sonnet.tokens, sonnet.usage.totalTokens)
+    }
+
     func testModelUsageAllTimeIncludesEventsOutsideEveryWindow() throws {
         let rows = try makeStore().modelUsage(last24h: false)
 
@@ -285,6 +302,32 @@ final class LocalLogUsageStoreTests: XCTestCase {
         let opus = try XCTUnwrap(rows.first { $0.family == .opus })
         XCTAssertEqual(sonnet.tokens, 23_300)      // + the 4d-old 2500
         XCTAssertEqual(opus.tokens, 1_000_150)     // + the 8d-old 1M
+    }
+
+    func testModelUsageAllTimeKeepsTheTokenSplit() throws {
+        let rows = try makeStore().modelUsage(last24h: false)
+        let sonnet = try XCTUnwrap(rows.first { $0.family == .sonnet })
+        let opus = try XCTUnwrap(rows.first { $0.family == .opus })
+
+        // Last-24h split (see testModelUsageRowsKeepTheTokenSplit) plus the
+        // 4d-old plain-input event — folded history, not just the raw total.
+        XCTAssertEqual(
+            sonnet.usage,
+            TokenUsage(
+                inputTokens: 8_900,
+                outputTokens: 2_400,
+                cacheCreationInputTokens: 2_000,
+                cacheReadInputTokens: 10_000,
+                ephemeral5mInputTokens: 2_000
+            )
+        )
+        // Last-24h split plus the 8d-old plain-input event.
+        XCTAssertEqual(
+            opus.usage,
+            TokenUsage(inputTokens: 1_000_100, outputTokens: 50)
+        )
+        XCTAssertEqual(sonnet.tokens, sonnet.usage.totalTokens)
+        XCTAssertEqual(opus.tokens, opus.usage.totalTokens)
     }
 
     func testModelUsageCostsUsePerFamilyPricing() throws {
@@ -324,6 +367,19 @@ final class LocalLogUsageStoreTests: XCTestCase {
     func testBurnRateCountsOnlyTheTrailingHour() throws {
         // 11:30 (13500) + 11:45 (150) + 11:50 (2000) + 11:55 synthetic (0).
         XCTAssertEqual(try makeStore().burnRatePerHour(), 15_650, accuracy: 1e-9)
+    }
+
+    func testBurnRateKeepsTheTokenSplit() throws {
+        XCTAssertEqual(
+            try makeStore().burnRateUsagePerHour(),
+            TokenUsage(
+                inputTokens: 2_100,
+                outputTokens: 1_550,
+                cacheCreationInputTokens: 2_000,
+                cacheReadInputTokens: 10_000,
+                ephemeral5mInputTokens: 2_000
+            )
+        )
     }
 
     func testEstimatedCostTodayUsesLocalMidnight() throws {
