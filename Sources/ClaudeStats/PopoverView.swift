@@ -78,11 +78,37 @@ struct PopoverView: View {
             } else {
                 WindowBarView(title: "5-hour window", window: .empty, now: now)
                 WindowBarView(title: "7-day window", window: .empty, now: now)
-                Text(model.quotaWarning ?? "source: none yet — requires Claude Code's statusLine hook (Settings → Quota source)")
+                // The cleared-cache notice wins over both fallbacks: it names a
+                // state the user just caused on purpose, so it explains the empty
+                // bars better than "none yet" or a staleness warning would.
+                Text(model.quotaCacheClearedNotice
+                    ?? model.quotaWarning
+                    ?? "source: none yet — requires Claude Code's statusLine hook (Settings → Quota source)")
                     .font(PopoverMetrics.captionFont)
-                    .foregroundStyle(model.quotaWarning != nil ? .orange : .secondary)
+                    .foregroundStyle(quotaFallbackStyle)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            clearCacheRow
+        }
+    }
+
+    /// Orange only for a staleness warning; the cleared-cache notice is an
+    /// expected, self-resolving state, not something to flag.
+    private var quotaFallbackStyle: Color {
+        if model.quotaCacheClearedNotice != nil { return Color.secondary }
+        return model.quotaWarning != nil ? Color.orange : Color.secondary
+    }
+
+    /// Deliberately not gated on `snapshot == nil`: the whole point is to clear a
+    /// value that looks live but is actually a stale write from another Claude
+    /// Code session, so it has to be reachable while a number is on screen.
+    private var clearCacheRow: some View {
+        HStack {
+            Spacer()
+            Button("Clear Quota Cache") { model.clearQuotaCache() }
+                .controlSize(.small)
+                .font(PopoverMetrics.captionFont)
+                .help("Deletes the cached statusline reading — use it when the percentage looks stuck or wrong. The next number comes from Claude Code's next statusline render.")
         }
     }
 
@@ -247,6 +273,10 @@ struct PopoverView: View {
 
 #Preview("Popover — stale warning, no prior snapshot") {
     PopoverView(model: .preview(snapshot: nil, warning: "Statusline cache is 14 minutes old."), clock: PopoverClock())
+}
+
+#Preview("Popover — quota cache just cleared") {
+    PopoverView(model: .previewCacheCleared(), clock: PopoverClock())
 }
 
 #Preview("Popover — 24h breakdown") {

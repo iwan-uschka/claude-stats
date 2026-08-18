@@ -3,19 +3,53 @@ import Foundation
 /// In-memory ``QuotaProviding`` returning plausible static data, so the app
 /// target builds and runs end-to-end before the real providers land.
 public struct MockQuotaProvider: QuotaProviding {
-    public var snapshot: QuotaSnapshot
+    /// Reference-type backing store so ``clearCache()`` can update state without
+    /// requiring `mutating` — the protocol's non-mutating contract is what lets
+    /// real providers (also structs) be called through an immutable `let`.
+    /// `@unchecked Sendable` is safe here: this mock only ever runs on a single
+    /// actor at a time (SwiftUI previews on `@MainActor`, or test code awaiting
+    /// one call before making the next) — nothing here executes concurrently.
+    private final class Box: @unchecked Sendable {
+        var snapshot: QuotaSnapshot?
+        var error: ClaudeStatsError?
+
+        init(snapshot: QuotaSnapshot?, error: ClaudeStatsError?) {
+            self.snapshot = snapshot
+            self.error = error
+        }
+    }
+
+    private let box: Box
+
+    /// `nil` once ``clearCache()`` has run — see that method.
+    public var snapshot: QuotaSnapshot? {
+        get { box.snapshot }
+        set { box.snapshot = newValue }
+    }
+
     /// When set, ``currentSnapshot()`` throws instead of returning — useful for
     /// exercising the app's error path.
-    public var error: ClaudeStatsError?
+    public var error: ClaudeStatsError? {
+        get { box.error }
+        set { box.error = newValue }
+    }
 
     public init(snapshot: QuotaSnapshot = MockQuotaProvider.sampleSnapshot(), error: ClaudeStatsError? = nil) {
-        self.snapshot = snapshot
-        self.error = error
+        self.box = Box(snapshot: snapshot, error: error)
     }
 
     public func currentSnapshot() async throws -> QuotaSnapshot {
-        if let error { throw error }
+        if let error = box.error { throw error }
+        guard let snapshot = box.snapshot else { throw ClaudeStatsError.noQuotaSourceAvailable }
         return snapshot
+    }
+
+    /// Clears the in-memory snapshot, matching the documented contract:
+    /// ``currentSnapshot()`` throws ``ClaudeStatsError/noQuotaSourceAvailable``
+    /// until a new snapshot is set (a fresh `MockQuotaProvider`, or assigning
+    /// ``snapshot`` directly for tests/previews simulating a later write).
+    public func clearCache() throws {
+        box.snapshot = nil
     }
 
     /// Matches the numbers in the popover sketch in `AGENTS.md`.
