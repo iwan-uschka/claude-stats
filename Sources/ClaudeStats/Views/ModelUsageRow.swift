@@ -23,6 +23,7 @@ struct ModelUsageRow: View {
                 .frame(width: PopoverMetrics.costColumnWidth, alignment: .trailing)
         }
         .accessibilityElement(children: .combine)
+        .help(DisplayFormat.tokenSplit(usage.usage))
     }
 }
 
@@ -35,7 +36,19 @@ struct ModelUsageRow: View {
         Divider()
         // Unrecognised model ID: falls back to the raw ID as the label.
         ModelUsageRow(
-            usage: ModelUsage(modelID: "claude-experimental-9", tokens: 1_250, estimatedCostUSD: 0)
+            usage: ModelUsage(
+                modelID: "claude-experimental-9",
+                usage: TokenUsage(inputTokens: 250, outputTokens: 1_000),
+                estimatedCostUSD: 0
+            )
+        )
+        // 4-digit spend: exercises the column width sized for `$1234.56`.
+        ModelUsageRow(
+            usage: ModelUsage(
+                modelID: "claude-opus-5",
+                usage: TokenUsage(inputTokens: 4_000_000, cacheReadInputTokens: 900_000_000),
+                estimatedCostUSD: 1_234.56
+            )
         )
     }
     .padding()

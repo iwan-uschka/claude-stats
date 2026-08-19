@@ -40,7 +40,7 @@ final class AppModelTests: XCTestCase {
 
         func entrypointBreakdown(for window: TimeWindow) throws -> EntrypointBreakdown { throw Failure() }
         func modelUsage(last24h: Bool) throws -> [ModelUsage] { throw Failure() }
-        func burnRatePerHour() throws -> Double { throw Failure() }
+        func burnRateUsagePerHour() throws -> TokenUsage { throw Failure() }
         func estimatedCostToday() throws -> Double { throw Failure() }
         func detectedPlanTier() throws -> PlanTier { throw Failure() }
     }
@@ -204,6 +204,24 @@ final class AppModelTests: XCTestCase {
         XCTAssertNil(model.quotaCacheClearedNotice)
         let callsAfterClear = await provider.callCount
         XCTAssertEqual(callsAfterClear, callsBeforeClear)
+    }
+
+    /// The cached total has to move with every reload — a stale sum would put
+    /// the popover's cache-read caption on the wrong numbers.
+    func testModelUsageTotalIsKeptInSyncWithTheLoadedRows() throws {
+        let store = MockUsageStore()
+        let model = AppModel(quotaProvider: ScriptedQuotaProvider(), usageStore: store)
+        XCTAssertEqual(model.modelUsageTotal, .zero)
+
+        model.refresh(force: true)
+
+        let expected = try store.modelUsage(last24h: true).reduce(TokenUsage.zero) { $0 + $1.usage }
+        XCTAssertNotEqual(expected, .zero)
+        XCTAssertEqual(model.modelUsageTotal, expected)
+
+        model.updateUsageStore(MockUsageStore(modelUsageLast24h: []))
+
+        XCTAssertEqual(model.modelUsageTotal, .zero)
     }
 
     func testPollAfterInstallRetriesUntilSnapshotLands() async {

@@ -11,10 +11,18 @@ import Foundation
 final class AppModel: ObservableObject {
     @Published private(set) var snapshot: QuotaSnapshot?
     @Published private(set) var planTier: PlanTier?
-    @Published private(set) var burnRatePerHour: Double?
+    /// Trailing-hour consumption, split by token kind so the popover can both
+    /// show the rate and explain how much of it is replayed cache reads.
+    @Published private(set) var burnRateUsage: TokenUsage?
     @Published private(set) var estimatedCostToday: Double?
     @Published private(set) var breakdown: EntrypointBreakdown?
-    @Published private(set) var modelUsage: [ModelUsage] = []
+    @Published private(set) var modelUsage: [ModelUsage] = [] {
+        didSet { modelUsageTotal = modelUsage.reduce(TokenUsage.zero) { $0 + $1.usage } }
+    }
+    /// Every ``modelUsage`` row summed, folded once per reload rather than on
+    /// each popover render — the "By model" caption is about the section's
+    /// numbers as a whole, and the popover re-renders every clock tick.
+    @Published private(set) var modelUsageTotal: TokenUsage = .zero
     @Published private(set) var usingSampleData: Bool
 
     /// Kept independent per subsystem so one reload's success can't clobber
@@ -222,7 +230,7 @@ final class AppModel: ObservableObject {
     private func reloadLocalStats() {
         do {
             planTier = try usageStore.detectedPlanTier()
-            burnRatePerHour = try usageStore.burnRatePerHour()
+            burnRateUsage = try usageStore.burnRateUsagePerHour()
             estimatedCostToday = try usageStore.estimatedCostToday()
             modelUsage = try usageStore.modelUsage(last24h: true)
             localStatsError = nil
@@ -277,7 +285,7 @@ extension AppModel {
         model.selectedWindow = window // already populates `breakdown` via didSet
         model.snapshot = snapshot
         model.planTier = try? store.detectedPlanTier()
-        model.burnRatePerHour = try? store.burnRatePerHour()
+        model.burnRateUsage = try? store.burnRateUsagePerHour()
         model.estimatedCostToday = try? store.estimatedCostToday()
         model.modelUsage = (try? store.modelUsage(last24h: true)) ?? []
         model.quotaError = error

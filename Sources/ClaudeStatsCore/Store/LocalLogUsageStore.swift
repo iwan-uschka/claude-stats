@@ -160,16 +160,16 @@ public struct LocalLogUsageStore: UsageStoring {
     ///
     /// Events whose `entrypoint` this version doesn't recognise are omitted —
     /// the breakdown's rows are a fixed, known set — but they still count in
-    /// ``modelUsage(last24h:)``, ``burnRatePerHour()`` and
+    /// ``modelUsage(last24h:)``, ``burnRateUsagePerHour()`` and
     /// ``estimatedCostToday()``, so no spend goes missing from the totals.
     public func entrypointBreakdown(for window: TimeWindow) throws -> EntrypointBreakdown {
         let now = nowProvider()
-        var totals: [Entrypoint: Int] = [:]
+        var totals: [Entrypoint: TokenUsage] = [:]
         for event in events(in: window.startDate(endingAt: now), to: now) {
             guard let entrypoint = event.entrypoint else { continue }
-            totals[entrypoint, default: 0] += event.usage.totalTokens
+            totals[entrypoint] = totals[entrypoint, default: .zero] + event.usage
         }
-        return EntrypointBreakdown(window: window, tokensByEntrypoint: totals)
+        return EntrypointBreakdown(window: window, usageByEntrypoint: totals)
     }
 
     /// Tokens and estimated cost grouped by ``ModelFamily``.
@@ -225,7 +225,7 @@ public struct LocalLogUsageStore: UsageStoring {
             return ModelUsage(
                 modelID: entry.modelID,
                 family: family,
-                tokens: entry.usage.totalTokens,
+                usage: entry.usage,
                 estimatedCostUSD: entry.cost
             )
         }
@@ -234,20 +234,20 @@ public struct LocalLogUsageStore: UsageStoring {
             return ModelUsage(
                 modelID: id,
                 family: nil,
-                tokens: entry.usage.totalTokens,
+                usage: entry.usage,
                 estimatedCostUSD: entry.cost
             )
         }
         return rows
     }
 
-    /// Tokens consumed in the trailing hour. The window is exactly one hour, so
-    /// this is a token count and a per-hour rate at the same time.
-    public func burnRatePerHour() throws -> Double {
+    /// Tokens consumed in the trailing hour, kept split by kind. The window is
+    /// exactly one hour, so these are token counts and per-hour rates at the
+    /// same time.
+    public func burnRateUsagePerHour() throws -> TokenUsage {
         let now = nowProvider()
-        let tokens = events(in: now.addingTimeInterval(-3600), to: now)
-            .reduce(0) { $0 + $1.usage.totalTokens }
-        return Double(tokens)
+        return events(in: now.addingTimeInterval(-3600), to: now)
+            .reduce(TokenUsage.zero) { $0 + $1.usage }
     }
 
     /// Estimated spend since local midnight, per ``calendar``. Events on models

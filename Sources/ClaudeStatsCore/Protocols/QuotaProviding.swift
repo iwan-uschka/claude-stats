@@ -36,8 +36,8 @@ public protocol UsageStoring: Sendable {
     ///   section; `false` for all locally-known history.
     func modelUsage(last24h: Bool) throws -> [ModelUsage]
 
-    /// Current consumption rate in tokens per hour.
-    func burnRatePerHour() throws -> Double
+    /// Current consumption in the trailing hour, split by token kind.
+    func burnRateUsagePerHour() throws -> TokenUsage
 
     /// Estimated spend in USD since local midnight.
     func estimatedCostToday() throws -> Double

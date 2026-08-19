@@ -125,11 +125,25 @@ struct PopoverView: View {
     private var planSection: some View {
         VStack(alignment: .leading, spacing: 3) {
             labelledLine("Plan", DisplayFormat.planDescription(model.planTier))
-            labelledLine(
-                "Burn rate",
-                model.burnRatePerHour.map(DisplayFormat.burnRate) ?? "—"
-            )
+            if let usage = model.burnRateUsage {
+                labelledLine("Burn rate", DisplayFormat.burnRate(Double(usage.totalTokens)))
+                    .help(DisplayFormat.tokenSplit(usage))
+            } else {
+                labelledLine("Burn rate", "—")
+            }
+            if let note = model.burnRateUsage.flatMap(DisplayFormat.cacheReadNote) {
+                cacheReadNoteLine(note)
+            }
         }
+    }
+
+    /// Explains a token total that replayed cache reads dominate, so the
+    /// headline number doesn't read as fresh work.
+    private func cacheReadNoteLine(_ note: String) -> some View {
+        Text(note)
+            .font(PopoverMetrics.captionFont)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     private func labelledLine(_ label: String, _ value: String) -> some View {
@@ -162,18 +176,23 @@ struct PopoverView: View {
                 .frame(width: 132)
             }
 
-            let rows = model.breakdown?.orderedRows ?? EntrypointBreakdown
-                .empty(window: model.selectedWindow).orderedRows
-            let peak = rows.map(\.tokens).max() ?? 0
+            let breakdown = model.breakdown ?? .empty(window: model.selectedWindow)
+            let rows = breakdown.orderedRows
+            let peak = rows.map(\.usage.totalTokens).max() ?? 0
 
             VStack(alignment: .leading, spacing: 5) {
                 ForEach(rows, id: \.entrypoint) { row in
                     EntrypointRow(
                         entrypoint: row.entrypoint,
-                        tokens: row.tokens,
+                        usage: row.usage,
                         peakTokens: peak
                     )
                 }
+            }
+            // Every entrypoint row summed — like "By model", the caption is
+            // about the section's numbers as a whole, not any single row.
+            if let note = DisplayFormat.cacheReadNote(breakdown.totalUsage) {
+                cacheReadNoteLine(note)
             }
         }
     }
@@ -201,6 +220,12 @@ struct PopoverView: View {
                     ForEach(model.modelUsage) { usage in
                         ModelUsageRow(usage: usage)
                     }
+                }
+                // Every model row summed — the note is about the section's
+                // numbers as a whole, and one line reads better than one per
+                // row. The sum itself is cached on ``AppModel``.
+                if let note = DisplayFormat.cacheReadNote(model.modelUsageTotal) {
+                    cacheReadNoteLine(note)
                 }
             }
         }

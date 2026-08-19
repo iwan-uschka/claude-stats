@@ -12,9 +12,18 @@ final class ClaudeStatsCoreTests: XCTestCase {
     }
 
     func testEntrypointBreakdownOrderedRowsFillsZeros() {
-        let breakdown = EntrypointBreakdown(window: .fiveHour, tokensByEntrypoint: [.cli: 10])
-        XCTAssertEqual(breakdown.orderedRows.map(\.tokens), [10, 0, 0])
+        let breakdown = EntrypointBreakdown(
+            window: .fiveHour,
+            usageByEntrypoint: [.cli: TokenUsage(inputTokens: 4, cacheReadInputTokens: 6)]
+        )
+        XCTAssertEqual(breakdown.orderedRows.map(\.usage.totalTokens), [10, 0, 0])
+        XCTAssertEqual(breakdown.orderedRows.map(\.usage), [
+            TokenUsage(inputTokens: 4, cacheReadInputTokens: 6),
+            .zero,
+            .zero,
+        ])
         XCTAssertEqual(breakdown.totalTokens, 10)
+        XCTAssertEqual(breakdown.totalUsage, TokenUsage(inputTokens: 4, cacheReadInputTokens: 6))
     }
 
     func testTimeWindowStartDate() {

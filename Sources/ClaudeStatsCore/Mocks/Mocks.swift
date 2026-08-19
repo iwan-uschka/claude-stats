@@ -74,7 +74,7 @@ public struct MockUsageStore: UsageStoring {
     public var breakdowns: [TimeWindow: EntrypointBreakdown]
     public var modelUsageLast24h: [ModelUsage]
     public var modelUsageAllTime: [ModelUsage]
-    public var burnRate: Double
+    public var burnRateUsage: TokenUsage
     public var costToday: Double
     public var planTier: PlanTier
 
@@ -82,14 +82,14 @@ public struct MockUsageStore: UsageStoring {
         breakdowns: [TimeWindow: EntrypointBreakdown] = MockUsageStore.sampleBreakdowns,
         modelUsageLast24h: [ModelUsage] = MockUsageStore.sampleModelUsage,
         modelUsageAllTime: [ModelUsage]? = nil,
-        burnRate: Double = 12_400,
+        burnRateUsage: TokenUsage = MockUsageStore.sampleBurnRateUsage,
         costToday: Double = 4.82,
         planTier: PlanTier = .max20
     ) {
         self.breakdowns = breakdowns
         self.modelUsageLast24h = modelUsageLast24h
         self.modelUsageAllTime = modelUsageAllTime ?? modelUsageLast24h
-        self.burnRate = burnRate
+        self.burnRateUsage = burnRateUsage
         self.costToday = costToday
         self.planTier = planTier
     }
@@ -102,35 +102,138 @@ public struct MockUsageStore: UsageStoring {
         last24h ? modelUsageLast24h : modelUsageAllTime
     }
 
-    public func burnRatePerHour() throws -> Double { burnRate }
+    public func burnRateUsagePerHour() throws -> TokenUsage { burnRateUsage }
 
     public func estimatedCostToday() throws -> Double { costToday }
 
     public func detectedPlanTier() throws -> PlanTier { planTier }
 
-    /// Token totals consistent with the default `burnRate` (12.4k tok/hr) across
-    /// every window, so the popover never shows two contradictory numbers for
-    /// the same underlying rate.
+    /// Trailing-hour split summing to 12.4k tok/hr, cache-read-heavy like real
+    /// sessions are.
+    public static let sampleBurnRateUsage = TokenUsage(
+        inputTokens: 200,
+        outputTokens: 700,
+        cacheCreationInputTokens: 1_500,
+        cacheReadInputTokens: 10_000
+    )
+
+    /// Token totals consistent with ``sampleBurnRateUsage`` (12.4k tok/hr)
+    /// across every window, so the popover never shows two contradictory
+    /// numbers for the same underlying rate. Each row is split in roughly the
+    /// same cache-read-heavy proportions as ``sampleBurnRateUsage``.
     public static let sampleBreakdowns: [TimeWindow: EntrypointBreakdown] = [
         .fiveHour: EntrypointBreakdown(
             window: .fiveHour,
-            tokensByEntrypoint: [.cli: 18_000, .vscode: 3_400, .sdkAgent: 40_600]
+            usageByEntrypoint: [
+                .cli: TokenUsage(
+                    inputTokens: 300,
+                    outputTokens: 1_000,
+                    cacheCreationInputTokens: 2_200,
+                    cacheReadInputTokens: 14_500
+                ),
+                .vscode: TokenUsage(
+                    inputTokens: 100,
+                    outputTokens: 200,
+                    cacheCreationInputTokens: 400,
+                    cacheReadInputTokens: 2_700
+                ),
+                .sdkAgent: TokenUsage(
+                    inputTokens: 600,
+                    outputTokens: 2_300,
+                    cacheCreationInputTokens: 4_900,
+                    cacheReadInputTokens: 32_800
+                ),
+            ]
         ),
         .twentyFourHour: EntrypointBreakdown(
             window: .twentyFourHour,
-            tokensByEntrypoint: [.cli: 90_000, .vscode: 28_000, .sdkAgent: 179_600]
+            usageByEntrypoint: [
+                .cli: TokenUsage(
+                    inputTokens: 1_500,
+                    outputTokens: 5_000,
+                    cacheCreationInputTokens: 11_000,
+                    cacheReadInputTokens: 72_500
+                ),
+                .vscode: TokenUsage(
+                    inputTokens: 500,
+                    outputTokens: 1_600,
+                    cacheCreationInputTokens: 3_400,
+                    cacheReadInputTokens: 22_500
+                ),
+                .sdkAgent: TokenUsage(
+                    inputTokens: 2_900,
+                    outputTokens: 10_200,
+                    cacheCreationInputTokens: 21_700,
+                    cacheReadInputTokens: 144_800
+                ),
+            ]
         ),
         .sevenDay: EntrypointBreakdown(
             window: .sevenDay,
-            tokensByEntrypoint: [.cli: 566_500, .vscode: 164_500, .sdkAgent: 1_352_200]
+            usageByEntrypoint: [
+                .cli: TokenUsage(
+                    inputTokens: 9_100,
+                    outputTokens: 32_000,
+                    cacheCreationInputTokens: 68_400,
+                    cacheReadInputTokens: 457_000
+                ),
+                .vscode: TokenUsage(
+                    inputTokens: 2_600,
+                    outputTokens: 9_300,
+                    cacheCreationInputTokens: 19_900,
+                    cacheReadInputTokens: 132_700
+                ),
+                .sdkAgent: TokenUsage(
+                    inputTokens: 21_800,
+                    outputTokens: 76_400,
+                    cacheCreationInputTokens: 163_400,
+                    cacheReadInputTokens: 1_090_600
+                ),
+            ]
         ),
     ]
 
     /// Matches the "By model" rows in the popover sketch in `AGENTS.md`.
     public static let sampleModelUsage: [ModelUsage] = [
-        ModelUsage(modelID: "claude-sonnet-5", tokens: 2_100_000, estimatedCostUSD: 3.15),
-        ModelUsage(modelID: "claude-opus-5", tokens: 180_000, estimatedCostUSD: 2.70),
-        ModelUsage(modelID: "claude-haiku-4-5", tokens: 640_000, estimatedCostUSD: 0.19),
-        ModelUsage(modelID: "claude-fable-5", tokens: 90_000, estimatedCostUSD: 0.08),
+        ModelUsage(
+            modelID: "claude-sonnet-5",
+            usage: TokenUsage(
+                inputTokens: 12_000,
+                outputTokens: 88_000,
+                cacheCreationInputTokens: 200_000,
+                cacheReadInputTokens: 1_800_000
+            ),
+            estimatedCostUSD: 3.15
+        ),
+        ModelUsage(
+            modelID: "claude-opus-5",
+            usage: TokenUsage(
+                inputTokens: 2_000,
+                outputTokens: 8_000,
+                cacheCreationInputTokens: 20_000,
+                cacheReadInputTokens: 150_000
+            ),
+            estimatedCostUSD: 2.70
+        ),
+        ModelUsage(
+            modelID: "claude-haiku-4-5",
+            usage: TokenUsage(
+                inputTokens: 5_000,
+                outputTokens: 35_000,
+                cacheCreationInputTokens: 100_000,
+                cacheReadInputTokens: 500_000
+            ),
+            estimatedCostUSD: 0.19
+        ),
+        ModelUsage(
+            modelID: "claude-fable-5",
+            usage: TokenUsage(
+                inputTokens: 1_000,
+                outputTokens: 4_000,
+                cacheCreationInputTokens: 10_000,
+                cacheReadInputTokens: 75_000
+            ),
+            estimatedCostUSD: 0.08
+        ),
     ]
 }
