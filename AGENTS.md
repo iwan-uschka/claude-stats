@@ -167,3 +167,33 @@ render.
   calls `setActivationPolicy(.accessory)` — launchd reads the key before any
   of our code runs, so there is no Dock-tile flash on launch. The runtime call
   stays authoritative for bundle-less `swift run` builds.
+
+### README screenshot
+
+`assets/screenshot-popover.png` is composited from four same-canvas-size
+layers in `assets/source/screenshot-popover/`, not hand-screenshotted as one
+image:
+
+- `menu-bar.png` — the blue menu-bar strip, opaque top rows, transparent
+  below.
+- `icon.png` — the status-item glyph, captured as a rectangular patch
+  (own background + glyph) roughly positioned over the menu bar.
+- `icon-mask.png` — an alpha mask (opaque = glyph silhouette, transparent
+  elsewhere) that replaces `icon.png`'s own alpha at composite time, so
+  `icon.png`'s rectangular capture bounds never show as a seam — only the
+  glyph shape actually gets drawn onto `menu-bar.png`.
+- `popup.png` — the popover body (rows, captions, buttons), transparent
+  above where the menu bar shows through.
+
+`bash scripts/build-screenshot.sh` composites them (`menu-bar` → masked
+`icon` → `popup`, in that order) and writes `assets/screenshot-popover.png`.
+Canvas size is taken from `popup.png`; `menu-bar.png` and `icon.png` are
+extended or cropped to match (anchored top-left) — so a taller or shorter
+popup capture is a drop-in replacement, no manual resizing needed.
+
+**Not** a drop-in: a new *icon*. A raw icon screenshot (its own background,
+no alpha mask, arbitrary size, not positioned on the shared canvas) has to be
+trimmed, scaled to match the glyph's existing on-canvas height, positioned,
+and turned into an `icon.png` + `icon-mask.png` pair *before* the script can
+use it — that conversion needs eyes on the pixels (crop bounds, scale
+factor, paste offset), not just a script run.
