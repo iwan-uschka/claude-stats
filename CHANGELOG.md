@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.9.4] - 2026-08-19
+
 ### Added
 - "By model" rows, "This Mac" rows, and the burn rate now explain their token
   totals: a tooltip with the four-way split (`in · out · cache write · cache
