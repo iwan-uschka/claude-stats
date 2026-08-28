@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Added
+- Promo notices from Claude Code's own state file (`~/.claude.json`) now render
+  under the quota bar they apply to — e.g. "+50% weekly limits promo through
+  Aug 31 · clau.de/cc-50-promo" under the 7-day bar — with the bare URL
+  clickable and a tooltip disclosing where it actually goes. Best-effort by
+  design: a missing, unreadable, malformed or stale notice is silently no
+  notice, never an error line. Hidden once the cached flag is more than 7 days
+  old.
+
 ## [0.9.4] - 2026-08-19
 
 ### Added

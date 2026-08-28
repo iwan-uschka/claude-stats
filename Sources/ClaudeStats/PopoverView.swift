@@ -64,8 +64,8 @@ struct PopoverView: View {
     private var quotaSection: some View {
         VStack(alignment: .leading, spacing: 6) {
             if let snapshot = model.snapshot {
-                WindowBarView(title: "5-hour window", window: snapshot.fiveHour, now: now)
-                WindowBarView(title: "7-day window", window: snapshot.sevenDay, now: now)
+                quotaWindowRow(.fiveHour, window: snapshot.fiveHour)
+                quotaWindowRow(.sevenDay, window: snapshot.sevenDay)
                 Text(sourceTag(for: snapshot))
                     .font(PopoverMetrics.captionFont)
                     .foregroundStyle(.secondary)
@@ -76,8 +76,8 @@ struct PopoverView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             } else {
-                WindowBarView(title: "5-hour window", window: .empty, now: now)
-                WindowBarView(title: "7-day window", window: .empty, now: now)
+                quotaWindowRow(.fiveHour, window: .empty)
+                quotaWindowRow(.sevenDay, window: .empty)
                 // The cleared-cache notice wins over both fallbacks: it names a
                 // state the user just caused on purpose, so it explains the empty
                 // bars better than "none yet" or a staleness warning would.
@@ -90,6 +90,60 @@ struct PopoverView: View {
             }
             clearCacheRow
         }
+    }
+
+    /// One quota bar plus whatever promo notice belongs under it.
+    ///
+    /// Used by *both* branches of ``quotaSection`` so a snapshot and an empty
+    /// state can't drift apart on which rows exist or what they're called.
+    /// The inner 2 pt (against the section's 6 pt) is what makes the notice
+    /// read as attached to this bar rather than as its own line.
+    private func quotaWindowRow(_ bar: QuotaWindowKind, window: QuotaWindow) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            WindowBarView(title: bar.title, window: window, now: now)
+            if let notice = model.promoNotice(for: bar) {
+                promoNoticeLine(notice, bar: bar)
+            }
+        }
+    }
+
+    /// Claude Code's own promo line for a bar, with any URL in it clickable.
+    ///
+    /// Full content width, no indent: indenting to `labelColumnWidth` leaves
+    /// ~220 pt, which wraps the real 59-character string onto three lines.
+    private func promoNoticeLine(_ notice: RateLimitPromoNotice, bar: QuotaWindowKind) -> some View {
+        // Colours are set *inside the runs*, never with an outer
+        // `.foregroundStyle(.secondary)` — that recolours the link range too
+        // and kills the only affordance saying it's clickable.
+        var attributed = AttributedString(notice.body.prefix)
+        attributed.foregroundColor = .secondary
+        if let label = notice.body.linkLabel, let url = notice.body.linkURL {
+            var link = AttributedString(label)
+            link.link = url
+            link.foregroundColor = .accentColor
+            link.underlineStyle = .single
+            attributed.append(link)
+        }
+        var tail = AttributedString(notice.body.suffix)
+        tail.foregroundColor = .secondary
+        attributed.append(tail)
+
+        // `Text(AttributedString)` and `Text(someStringVariable)` never take
+        // the `LocalizedStringKey` markdown path. A `Text` *literal* would —
+        // and this text comes from a user-writable file, so a planted
+        // `[label](evil://x)` would become a real link. Keep it an
+        // `AttributedString`.
+        //
+        // One `Text`, no `Link`, no `HStack`: only a single `Text` wraps
+        // mid-line, and this string is ~307 pt against 312 pt of content width.
+        return Text(attributed)
+            .font(PopoverMetrics.captionFont)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityLabel("\(bar.title): \(notice.text)")
+            // Disclosing the resolved https URL is the anti-phishing affordance
+            // for a scheme-less label — and matters more because any https
+            // host is linkified, not just a known one.
+            .help(notice.body.linkURL?.absoluteString ?? notice.text)
     }
 
     /// Orange only for a staleness warning; the cleared-cache notice is an
@@ -302,6 +356,14 @@ struct PopoverView: View {
 
 #Preview("Popover — quota cache just cleared") {
     PopoverView(model: .previewCacheCleared(), clock: PopoverClock())
+}
+
+#Preview("Popover — promo notice") {
+    PopoverView(model: .previewPromoNotice(), clock: PopoverClock())
+}
+
+#Preview("Popover — promo notice, no quota source") {
+    PopoverView(model: .previewPromoNoticeWithoutQuota(), clock: PopoverClock())
 }
 
 #Preview("Popover — 24h breakdown") {

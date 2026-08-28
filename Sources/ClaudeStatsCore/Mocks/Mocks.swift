@@ -69,6 +69,41 @@ public struct MockQuotaProvider: QuotaProviding {
     }
 }
 
+/// In-memory ``PromoNoticeProviding`` for previews and the app's sample-data
+/// mode.
+///
+/// A plain struct with no reference box, unlike ``MockQuotaProvider``: nothing
+/// here mutates — reads have no side effects and there is no cache to clear.
+public struct MockPromoNoticeProvider: PromoNoticeProviding {
+    public var notices: [RateLimitPromoNotice]
+
+    public init(notices: [RateLimitPromoNotice] = [MockPromoNoticeProvider.sampleNotice()]) {
+        self.notices = notices
+    }
+
+    /// Always a full read: with no file behind it there is nothing for the
+    /// unchanged-since gate to compare against, and `nil` keeps callers
+    /// re-reading, which is what a mock wants.
+    public func read(unchangedSince previous: ClaudeStateFileFingerprint?) -> PromoNoticeReadResult {
+        .read(notices: notices, fingerprint: nil)
+    }
+
+    /// The exact string cached on a real machine, so previews and the
+    /// `AGENTS.md` sketch show what the CLI shows rather than invented copy.
+    public static let sampleText = "+50% weekly limits promo through Aug 31 · clau.de/cc-50-promo"
+
+    public static func sampleNotice(bar: QuotaWindowKind = .sevenDay) -> RateLimitPromoNotice {
+        RateLimitPromoNotice(
+            bar: bar,
+            // `sampleText` is a linkable literal, so the fallback is
+            // unreachable — it exists only to keep this non-optional.
+            body: LinkifiedText.linkify(sampleText)
+                ?? LinkifiedText(prefix: sampleText, linkLabel: nil, linkURL: nil, suffix: ""),
+            variant: "claude"
+        )
+    }
+}
+
 /// In-memory ``UsageStoring`` returning plausible static data.
 public struct MockUsageStore: UsageStoring {
     public var breakdowns: [TimeWindow: EntrypointBreakdown]

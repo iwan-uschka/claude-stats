@@ -22,6 +22,36 @@ public protocol QuotaProviding: Sendable {
     func clearCache() throws
 }
 
+/// Outcome of one promo-notice read.
+///
+/// There is no failure case on purpose — see ``PromoNoticeProviding``.
+public enum PromoNoticeReadResult: Sendable, Hashable {
+    /// The state file is byte-for-byte what the caller last parsed; it should
+    /// keep whatever notices it already has.
+    case unchanged
+    /// A completed read. `notices` is empty when there is nothing to show —
+    /// no file, unreadable file, no promo key, or a flag cache too old to
+    /// trust. `fingerprint` is `nil` when nothing could be read at all, so the
+    /// next call retries rather than latching onto a state that never existed.
+    case read(notices: [RateLimitPromoNotice], fingerprint: ClaudeStateFileFingerprint?)
+}
+
+/// Source of the promo notices Claude Code caches in its own state file.
+///
+/// **Never throws.** Absent, unreadable, malformed or stale all mean "no
+/// promo", which is the overwhelmingly common case and not something the user
+/// could act on. A deliberate divergence from ``QuotaProviding``, whose errors
+/// *are* the point: a missing quota source is the difference between a number
+/// and no number, whereas a missing promo line is the normal state of the app.
+///
+/// Synchronous: the gated path is one `open` plus one `fstat`, and the ungated
+/// path is a low-single-digit-millisecond parse.
+public protocol PromoNoticeProviding: Sendable {
+    /// Reads the notices, skipping the parse when the backing file still
+    /// matches `previous`.
+    func read(unchangedSince previous: ClaudeStateFileFingerprint?) -> PromoNoticeReadResult
+}
+
 /// Aggregated local-log statistics (tier 1 of the data layer).
 ///
 /// All members are synchronous: implementations are expected to serve from an

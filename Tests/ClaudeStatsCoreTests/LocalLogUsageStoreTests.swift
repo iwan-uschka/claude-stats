@@ -620,6 +620,46 @@ final class LocalLogUsageStoreTests: XCTestCase {
         }
     }
 
+    // MARK: - State file candidates
+
+    /// `.claude.json` is a *sibling* of `~/.claude`, so with no override there
+    /// is exactly one place to look.
+    func testStateFileCandidatesDefaultsToHomeOnly() {
+        let home = URL(fileURLWithPath: "/fake/home", isDirectory: true)
+
+        let candidates = ClaudeConfigDirectory.stateFileCandidates(environment: [:], homeDirectory: home)
+
+        XCTAssertEqual(candidates.map(\.path), ["/fake/home/.claude.json"])
+    }
+
+    /// Whether `$CLAUDE_CONFIG_DIR` relocates the state file too is
+    /// undetermined upstream, so both places are probed — override first.
+    func testStateFileCandidatesProbesTheOverrideFirst() {
+        let home = URL(fileURLWithPath: "/fake/home", isDirectory: true)
+
+        let candidates = ClaudeConfigDirectory.stateFileCandidates(
+            environment: [ClaudeConfigDirectory.environmentVariable: "/fake/override"],
+            homeDirectory: home
+        )
+
+        XCTAssertEqual(
+            candidates.map(\.path),
+            ["/fake/override/.claude.json", "/fake/home/.claude.json"]
+        )
+    }
+
+    /// Same blank-override rule as `testResolveIgnoresBlankOverride`.
+    func testStateFileCandidatesIgnoresBlankOverride() {
+        let home = URL(fileURLWithPath: "/fake/home", isDirectory: true)
+
+        let candidates = ClaudeConfigDirectory.stateFileCandidates(
+            environment: [ClaudeConfigDirectory.environmentVariable: "   "],
+            homeDirectory: home
+        )
+
+        XCTAssertEqual(candidates.map(\.path), ["/fake/home/.claude.json"])
+    }
+
     // MARK: - Directory scanning
 
     func testInitFromConfigDirectoryScansEveryProjectSubdirectory() throws {

@@ -45,6 +45,37 @@ final class AppModelTests: XCTestCase {
         func detectedPlanTier() throws -> PlanTier { throw Failure() }
     }
 
+    /// Hands back whatever the test scripted, and records what the model asked
+    /// with — the fingerprint gate is part of the contract, not an internal
+    /// detail. `@unchecked Sendable` for the same reason as `MockQuotaProvider`'s
+    /// box: `PromoNoticeProviding` is `Sendable` and synchronous, and only the
+    /// single `@MainActor` test touching one ever runs.
+    private final class ScriptedPromoNoticeProvider: PromoNoticeProviding, @unchecked Sendable {
+        var result: PromoNoticeReadResult
+        private(set) var callCount = 0
+        private(set) var lastRequestedFingerprint: ClaudeStateFileFingerprint?
+
+        init(result: PromoNoticeReadResult = .read(notices: [], fingerprint: nil)) {
+            self.result = result
+        }
+
+        func read(unchangedSince previous: ClaudeStateFileFingerprint?) -> PromoNoticeReadResult {
+            callCount += 1
+            lastRequestedFingerprint = previous
+            return result
+        }
+    }
+
+    /// One place for the constructor churn: every test needs a promo provider,
+    /// and almost none of them care which one.
+    private func makeModel(
+        quota: any QuotaProviding,
+        store: any UsageStoring = MockUsageStore(),
+        promo: any PromoNoticeProviding = MockPromoNoticeProvider(notices: [])
+    ) -> AppModel {
+        AppModel(quotaProvider: quota, usageStore: store, promoNoticeProvider: promo)
+    }
+
     private func waitUntil(
         timeout: TimeInterval = 2,
         _ condition: @escaping () async -> Bool
@@ -58,7 +89,7 @@ final class AppModelTests: XCTestCase {
     func testRefreshOnSuccessSetsSnapshotAndClearsErrors() async {
         let provider = ScriptedQuotaProvider()
         await provider.setResult(.success(MockQuotaProvider.sampleSnapshot()))
-        let model = AppModel(quotaProvider: provider, usageStore: MockUsageStore())
+        let model = makeModel(quota: provider)
 
         model.refresh(force: true)
         await waitUntil { model.snapshot != nil }
@@ -72,7 +103,7 @@ final class AppModelTests: XCTestCase {
         let provider = ScriptedQuotaProvider()
         let sample = MockQuotaProvider.sampleSnapshot()
         await provider.setResult(.success(sample))
-        let model = AppModel(quotaProvider: provider, usageStore: MockUsageStore())
+        let model = makeModel(quota: provider)
         model.refresh(force: true)
         await waitUntil { model.snapshot != nil }
 
@@ -89,7 +120,7 @@ final class AppModelTests: XCTestCase {
         let provider = ScriptedQuotaProvider()
         let sample = MockQuotaProvider.sampleSnapshot()
         await provider.setResult(.success(sample))
-        let model = AppModel(quotaProvider: provider, usageStore: MockUsageStore())
+        let model = makeModel(quota: provider)
         model.refresh(force: true)
         await waitUntil { model.snapshot != nil }
 
@@ -105,7 +136,7 @@ final class AppModelTests: XCTestCase {
     func testActiveErrorsIncludesEveryLiveFailureNotJustTheHighestPriority() async {
         let provider = ScriptedQuotaProvider()
         await provider.setResult(.failure(ClaudeStatsError.noQuotaSourceAvailable))
-        let model = AppModel(quotaProvider: provider, usageStore: FailingUsageStore())
+        let model = makeModel(quota: provider, store: FailingUsageStore())
 
         model.refresh(force: true)
         await waitUntil { model.quotaError != nil }
@@ -119,7 +150,7 @@ final class AppModelTests: XCTestCase {
     func testClearQuotaCacheDropsSnapshotAndShowsNoticeInsteadOfError() async {
         let provider = ScriptedQuotaProvider()
         await provider.setResult(.success(MockQuotaProvider.sampleSnapshot()))
-        let model = AppModel(quotaProvider: provider, usageStore: MockUsageStore())
+        let model = makeModel(quota: provider)
         model.refresh(force: true)
         await waitUntil { model.snapshot != nil }
 
@@ -144,7 +175,7 @@ final class AppModelTests: XCTestCase {
     func testClearQuotaCacheOnStaleSourceSetsWarningAndDropsNotice() async {
         let provider = ScriptedQuotaProvider()
         await provider.setResult(.success(MockQuotaProvider.sampleSnapshot()))
-        let model = AppModel(quotaProvider: provider, usageStore: MockUsageStore())
+        let model = makeModel(quota: provider)
         model.refresh(force: true)
         await waitUntil { model.snapshot != nil }
 
@@ -164,7 +195,7 @@ final class AppModelTests: XCTestCase {
         let provider = ScriptedQuotaProvider()
         let sample = MockQuotaProvider.sampleSnapshot()
         await provider.setResult(.success(sample))
-        let model = AppModel(quotaProvider: provider, usageStore: MockUsageStore())
+        let model = makeModel(quota: provider)
 
         model.clearQuotaCache()
         await waitUntil(timeout: 5) { model.snapshot != nil }
@@ -176,7 +207,7 @@ final class AppModelTests: XCTestCase {
     func testClearQuotaCacheStillReportsAGenuineFailure() async {
         let provider = ScriptedQuotaProvider()
         await provider.setResult(.failure(ClaudeStatsError.unexpectedQuotaResponse("nope")))
-        let model = AppModel(quotaProvider: provider, usageStore: MockUsageStore())
+        let model = makeModel(quota: provider)
 
         model.clearQuotaCache()
         await waitUntil(timeout: 5) { model.quotaError != nil }
@@ -189,7 +220,7 @@ final class AppModelTests: XCTestCase {
         let provider = ScriptedQuotaProvider()
         let sample = MockQuotaProvider.sampleSnapshot()
         await provider.setResult(.success(sample))
-        let model = AppModel(quotaProvider: provider, usageStore: MockUsageStore())
+        let model = makeModel(quota: provider)
         model.refresh(force: true)
         await waitUntil { model.snapshot != nil }
 
@@ -210,7 +241,7 @@ final class AppModelTests: XCTestCase {
     /// the popover's cache-read caption on the wrong numbers.
     func testModelUsageTotalIsKeptInSyncWithTheLoadedRows() throws {
         let store = MockUsageStore()
-        let model = AppModel(quotaProvider: ScriptedQuotaProvider(), usageStore: store)
+        let model = makeModel(quota: ScriptedQuotaProvider(), store: store)
         XCTAssertEqual(model.modelUsageTotal, .zero)
 
         model.refresh(force: true)
@@ -227,12 +258,125 @@ final class AppModelTests: XCTestCase {
     func testPollAfterInstallRetriesUntilSnapshotLands() async {
         let provider = ScriptedQuotaProvider()
         await provider.setResult(.failure(ClaudeStatsError.noQuotaSourceAvailable))
-        let model = AppModel(quotaProvider: provider, usageStore: MockUsageStore())
+        let model = makeModel(quota: provider)
 
         model.pollAfterInstall()
         await provider.setResult(.success(MockQuotaProvider.sampleSnapshot()))
         await waitUntil(timeout: 5) { model.snapshot != nil }
 
         XCTAssertNotNil(model.snapshot)
+    }
+
+    // MARK: - Promo notices
+
+    private func sampleFingerprint(size: Int = 42) -> ClaudeStateFileFingerprint {
+        ClaudeStateFileFingerprint(
+            url: URL(fileURLWithPath: "/tmp/.claude.json"),
+            modifiedAt: Date(timeIntervalSince1970: 1_800_000_000),
+            size: size,
+            inode: 7
+        )
+    }
+
+    func testRefreshPopulatesPromoNotices() async {
+        let quota = ScriptedQuotaProvider()
+        await quota.setResult(.success(MockQuotaProvider.sampleSnapshot()))
+        let notice = MockPromoNoticeProvider.sampleNotice()
+        let promo = ScriptedPromoNoticeProvider(
+            result: .read(notices: [notice], fingerprint: sampleFingerprint())
+        )
+        let model = makeModel(quota: quota, promo: promo)
+
+        model.refresh(force: true)
+
+        XCTAssertEqual(model.promoNotices, [notice])
+        XCTAssertEqual(promo.callCount, 1)
+        // First read has nothing to compare against.
+        XCTAssertNil(promo.lastRequestedFingerprint)
+    }
+
+    func testPromoNoticeLookupMatchesOnlyTheNoticesOwnBar() async {
+        let promo = ScriptedPromoNoticeProvider(
+            result: .read(
+                notices: [MockPromoNoticeProvider.sampleNotice(bar: .sevenDay)],
+                fingerprint: sampleFingerprint()
+            )
+        )
+        let model = makeModel(quota: ScriptedQuotaProvider(), promo: promo)
+
+        model.refresh(force: true)
+
+        XCTAssertNotNil(model.promoNotice(for: .sevenDay))
+        XCTAssertNil(model.promoNotice(for: .fiveHour))
+    }
+
+    /// The silence contract: no promo is never a failure the user has to act on.
+    func testEmptyPromoReadNeverSurfacesAnError() async {
+        let quota = ScriptedQuotaProvider()
+        await quota.setResult(.success(MockQuotaProvider.sampleSnapshot()))
+        let promo = ScriptedPromoNoticeProvider(result: .read(notices: [], fingerprint: nil))
+        let model = makeModel(quota: quota, promo: promo)
+
+        model.refresh(force: true)
+        await waitUntil { model.snapshot != nil }
+
+        XCTAssertTrue(model.promoNotices.isEmpty)
+        XCTAssertNil(model.quotaError)
+        XCTAssertTrue(model.activeErrors.isEmpty)
+    }
+
+    func testUnchangedPromoReadKeepsTheNoticesAlreadyOnScreen() async {
+        let notice = MockPromoNoticeProvider.sampleNotice()
+        let fingerprint = sampleFingerprint()
+        let promo = ScriptedPromoNoticeProvider(
+            result: .read(notices: [notice], fingerprint: fingerprint)
+        )
+        let model = makeModel(quota: ScriptedQuotaProvider(), promo: promo)
+        model.refresh(force: true)
+        XCTAssertEqual(model.promoNotices, [notice])
+
+        promo.result = .unchanged
+        model.refresh(force: true)
+
+        XCTAssertEqual(model.promoNotices, [notice])
+        // The gate is driven by the fingerprint of what was last parsed.
+        XCTAssertEqual(promo.lastRequestedFingerprint, fingerprint)
+    }
+
+    /// A malformed payload with two entries for one bar has to resolve
+    /// deterministically — there is one line under the bar.
+    func testTwoNoticesForOneBarResolveToTheFirst() async {
+        let first = MockPromoNoticeProvider.sampleNotice(bar: .sevenDay)
+        let second = RateLimitPromoNotice(
+            bar: .sevenDay,
+            body: LinkifiedText(prefix: "second", linkLabel: nil, linkURL: nil, suffix: ""),
+            variant: nil
+        )
+        let promo = ScriptedPromoNoticeProvider(
+            result: .read(notices: [first, second], fingerprint: sampleFingerprint())
+        )
+        let model = makeModel(quota: ScriptedQuotaProvider(), promo: promo)
+
+        model.refresh(force: true)
+
+        XCTAssertEqual(model.promoNotice(for: .sevenDay), first)
+    }
+
+    /// The notice comes from a different file than the quota reading, so an
+    /// empty-state popover still shows it.
+    func testPromoNoticesSurviveAQuotaHardFailure() async {
+        let quota = ScriptedQuotaProvider()
+        await quota.setResult(.failure(ClaudeStatsError.noQuotaSourceAvailable))
+        let notice = MockPromoNoticeProvider.sampleNotice()
+        let promo = ScriptedPromoNoticeProvider(
+            result: .read(notices: [notice], fingerprint: sampleFingerprint())
+        )
+        let model = makeModel(quota: quota, promo: promo)
+
+        model.refresh(force: true)
+        await waitUntil { model.quotaError != nil }
+
+        XCTAssertNil(model.snapshot)
+        XCTAssertEqual(model.promoNotices, [notice])
     }
 }

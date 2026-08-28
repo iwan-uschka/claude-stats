@@ -25,6 +25,9 @@ enum ClaudeStatsApp {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let quotaProvider: any QuotaProviding
+    /// Best-effort reader for Claude Code's own promo notices — see
+    /// `PromoNoticeProviding`. Never fails, so there is nothing to fall back to.
+    private let promoNoticeProvider: any PromoNoticeProviding
     /// Only read once, at launch, to seed `AppModel`; `rebuildUsageStore`
     /// hands later generations straight to `model.updateUsageStore` instead
     /// of keeping a second copy here. Cleared once `AppModel` owns the store
@@ -81,6 +84,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // `AppModel.refresh()` surfaces `noQuotaSourceAvailable` as an error
         // instead of showing an estimated number.
         self.quotaProvider = StatuslineCacheReader()
+        self.promoNoticeProvider = RateLimitPromoNoticeReader()
 
         super.init()
     }
@@ -91,6 +95,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let model = AppModel(
             quotaProvider: quotaProvider,
             usageStore: usageStore,
+            promoNoticeProvider: promoNoticeProvider,
             usingSampleData: usingSampleData
         )
         self.usageStore = nil
