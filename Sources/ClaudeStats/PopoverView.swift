@@ -102,7 +102,7 @@ struct PopoverView: View {
         VStack(alignment: .leading, spacing: 2) {
             WindowBarView(title: bar.title, window: window, now: now)
             if let notice = model.promoNotice(for: bar) {
-                promoNoticeLine(notice, bar: bar)
+                promoNoticeLine(notice)
             }
         }
     }
@@ -111,7 +111,7 @@ struct PopoverView: View {
     ///
     /// Full content width, no indent: indenting to `labelColumnWidth` leaves
     /// ~220 pt, which wraps the real 59-character string onto three lines.
-    private func promoNoticeLine(_ notice: RateLimitPromoNotice, bar: QuotaWindowKind) -> some View {
+    private func promoNoticeLine(_ notice: RateLimitPromoNotice) -> some View {
         // Colours are set *inside the runs*, never with an outer
         // `.foregroundStyle(.secondary)` — that recolours the link range too
         // and kills the only affordance saying it's clickable.
@@ -139,7 +139,18 @@ struct PopoverView: View {
         return Text(attributed)
             .font(PopoverMetrics.captionFont)
             .fixedSize(horizontal: false, vertical: true)
-            .accessibilityLabel("\(bar.title): \(notice.text)")
+            // Split label/value instead of one flattened `.accessibilityLabel`
+            // so `.isLink` isn't just cosmetic: VoiceOver still needs an
+            // explicit action, since collapsing to one element loses the
+            // `AttributedString` link's own default activation.
+            .accessibilityLabel(notice.bar.title)
+            .accessibilityValue(notice.text)
+            .accessibilityAddTraits(notice.body.linkURL != nil ? .isLink : [])
+            .accessibilityAction {
+                if let url = notice.body.linkURL {
+                    NSWorkspace.shared.open(url)
+                }
+            }
             // Disclosing the resolved https URL is the anti-phishing affordance
             // for a scheme-less label — and matters more because any https
             // host is linkified, not just a known one.

@@ -328,6 +328,33 @@ final class RateLimitPromoNoticeReaderTests: XCTestCase {
 
     // MARK: - The unchanged-since gate
 
+    /// Mutable clock, safe to hand to the reader's `@Sendable` now-provider.
+    private final class Clock: @unchecked Sendable {
+        var now: Date
+        init(_ now: Date) { self.now = now }
+    }
+
+    /// The file never changes again after the app stops seeing Claude Code
+    /// startups, but the flag cache inside it keeps aging — the age gate has
+    /// to be re-applied on the `.unchanged` path, not just at parse time.
+    func testUnchangedFileExpiresOnceItAgesPastMaximumAge() throws {
+        let clock = Clock(now)
+        try write(fixture(entries: entry(text: "promo clau.de/x"), cachedAt: clock.now))
+        let reader = RateLimitPromoNoticeReader(
+            candidateURLs: [primaryURL, fallbackURL],
+            now: { clock.now }
+        )
+
+        let first = try read(reader)
+        XCTAssertEqual(first.notices.count, 1)
+
+        clock.now = clock.now.addingTimeInterval(RateLimitPromoNoticeReader.defaultMaximumAge + 60)
+        let second = try read(reader, unchangedSince: first.fingerprint)
+
+        XCTAssertTrue(second.notices.isEmpty)
+        XCTAssertEqual(second.fingerprint, first.fingerprint)
+    }
+
     func testUnchangedFileSkipsTheParse() throws {
         try write(realFixture())
         let reader = makeReader()

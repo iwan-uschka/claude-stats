@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Reads `cachedGrowthBookFeatures.tengu_rate_limit_promo_notices` out of
 /// Claude Code's private state file.
@@ -42,6 +43,12 @@ public struct RateLimitPromoNoticeReader: PromoNoticeProviding {
     public let maximumAge: TimeInterval
     private let now: @Sendable () -> Date
 
+    /// `cachedGrowthBookFeaturesAt` from the last parse, so the age gate can be
+    /// re-applied when the file itself hasn't changed — its mtime says nothing
+    /// about the flag cache's age, and a promo must not outlive its window just
+    /// because Claude Code stopped running.
+    private let lastCachedAt = OSAllocatedUnfairLock<Date?>(initialState: nil)
+
     public init(
         candidateURLs: [URL] = ClaudeConfigDirectory.stateFileCandidates(),
         maximumAge: TimeInterval = RateLimitPromoNoticeReader.defaultMaximumAge,
@@ -55,14 +62,25 @@ public struct RateLimitPromoNoticeReader: PromoNoticeProviding {
     public func read(unchangedSince previous: ClaudeStateFileFingerprint?) -> PromoNoticeReadResult {
         switch ClaudeStateFile.load(candidates: candidateURLs, unchangedSince: previous) {
         case .unchanged:
-            return .unchanged
+            guard let cachedAt = lastCachedAt.withLock({ $0 }),
+                now().timeIntervalSince(cachedAt) > maximumAge
+            else { return .unchanged }
+            // Aged out since the last parse: drop the notices but keep the
+            // fingerprint, so this stays a one-shot transition, not a re-parse
+            // loop on every later poll.
+            return .read(notices: [], fingerprint: previous)
         case .unavailable:
-            // No fingerprint to advance to: nothing was read, so the next call
-            // should look again rather than treat "missing" as a known state.
+            // Covers both "no candidate opened" and "one opened but wasn't
+            // usable" (directory, or contents that aren't a JSON object).
+            // `ClaudeStateFile` doesn't hand back a fingerprint for either, so
+            // the next call looks again rather than treating "no data" as a
+            // known state.
+            lastCachedAt.withLock { $0 = nil }
             return .read(notices: [], fingerprint: nil)
         case .loaded(let root, let fingerprint):
             // Returned even when empty, so the fingerprint advances and the
             // next refresh takes the cheap gated path.
+            lastCachedAt.withLock { $0 = QuotaJSON.date(root[Self.cachedAtKey]) }
             return .read(notices: notices(in: root), fingerprint: fingerprint)
         }
     }

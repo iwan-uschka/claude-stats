@@ -54,8 +54,9 @@ Two independent tiers, deliberately decoupled:
      budget (`local_estimate` confidence). Both were removed: the app is
      meant to show the account's real rate-limit window, not a guess, so a
      source that can't do that shouldn't silently stand in for one that can.
-   - **Promo notices (decoration, never an error).** Claude Code keeps a fifth
-     file, `~/.claude.json`, that it writes for itself. Among its
+   - **Promo notices (decoration, never an error).** Alongside the config tree,
+     Claude Code keeps a state file it writes for itself, `~/.claude.json`.
+     Among its
      *undocumented* internal keys,
      `cachedGrowthBookFeatures.tengu_rate_limit_promo_notices` holds the promo
      line the CLI renders above its own weekly bar (`{ bar, text, variant }`), and

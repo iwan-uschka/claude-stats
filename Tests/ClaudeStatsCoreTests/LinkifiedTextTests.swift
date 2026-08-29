@@ -132,6 +132,16 @@ final class LinkifiedTextTests: XCTestCase {
         XCTAssertNil(text.linkURL)
     }
 
+    func testNumericTLDIsNotAPlausibleHost() throws {
+        let text = try linkify("visit 192.168.1.1/x now")
+        XCTAssertNil(text.linkLabel)
+    }
+
+    func testHostLabelWithDisallowedCharacterIsRejected() throws {
+        let text = try linkify("clau_de.com/x")
+        XCTAssertNil(text.linkLabel)
+    }
+
     // MARK: - First match wins
 
     func testOnlyTheFirstCandidateIsLinked() throws {

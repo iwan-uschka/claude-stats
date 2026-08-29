@@ -660,15 +660,22 @@ final class LocalLogUsageStoreTests: XCTestCase {
         XCTAssertEqual(candidates.map(\.path), ["/fake/home/.claude.json"])
     }
 
+    /// `expandingTildeInPath` resolves `~` against the real process
+    /// `$HOME` (`NSHomeDirectory()`), not the injected `homeDirectory`
+    /// parameter — the override and the default-home path are genuinely
+    /// different pieces of state. Asserting against `NSHomeDirectory()`
+    /// keeps this hermetic rather than merely checking "some absolute path
+    /// came out."
     func testStateFileCandidatesExpandsTildeInOverride() {
         let home = URL(fileURLWithPath: "/fake/home", isDirectory: true)
+        let realHome = NSHomeDirectory()
 
         let candidates = ClaudeConfigDirectory.stateFileCandidates(
             environment: [ClaudeConfigDirectory.environmentVariable: "~/override"],
             homeDirectory: home
         )
 
-        XCTAssertTrue(candidates.first?.path.hasPrefix("/") ?? false, "tilde must be expanded, not left literal")
+        XCTAssertEqual(candidates.first?.path, "\(realHome)/override/.claude.json")
     }
 
     // MARK: - Directory scanning

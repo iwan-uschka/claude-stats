@@ -59,9 +59,10 @@ enum ClaudeStateFile {
         /// The file still matches the caller's previous fingerprint.
         case unchanged
         case loaded(root: [String: Any], fingerprint: ClaudeStateFileFingerprint)
-        /// No candidate could be opened, or the first one that opened held
-        /// something that isn't a JSON object. Both are "no data", never an
-        /// error — see ``RateLimitPromoNoticeReader``.
+        /// No candidate could be opened, the opened path wasn't a regular file
+        /// (fstat failed, or it was a directory/FIFO/device), or the first one
+        /// that opened held something that isn't a JSON object. All are "no
+        /// data", never an error — see ``RateLimitPromoNoticeReader``.
         case unavailable
     }
 
@@ -99,7 +100,13 @@ enum ClaudeStateFile {
             )
             if let previous, previous == fingerprint { return .unchanged }
 
-            let data = FileHandle(fileDescriptor: fd, closeOnDealloc: false).readDataToEndOfFile()
+            // `readToEnd()`, not the legacy `readDataToEndOfFile()`: the legacy
+            // API raises an uncaught Objective-C exception on a read error
+            // instead of returning one Swift can catch, which would crash the
+            // whole app instead of degrading to `.unavailable`.
+            guard let data = try? FileHandle(fileDescriptor: fd, closeOnDealloc: false).readToEnd() else {
+                return .unavailable
+            }
             guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
                 // Deliberately no diagnostic: anything describing what was in
                 // there risks leaking the file's contents.
