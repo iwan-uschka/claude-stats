@@ -73,15 +73,20 @@ enum ClaudeStateFile {
         unchangedSince previous: ClaudeStateFileFingerprint?
     ) -> LoadResult {
         for url in candidates {
-            let fd = open(url.path, O_RDONLY)
+            // O_NONBLOCK makes the open itself non-blocking for FIFOs and
+            // devices; it has no effect on reads from a regular file, which is
+            // the only case that survives the S_IFREG guard below. Without it
+            // a FIFO at a candidate path would block this call forever.
+            let fd = open(url.path, O_RDONLY | O_NONBLOCK)
             guard fd >= 0 else { continue }
             defer { close(fd) }
 
             var info = stat()
-            guard fstat(fd, &info) == 0 else { continue }
-            // A directory (or a fifo) at the path opens fine but can't be read
-            // as a state file.
-            guard info.st_mode & S_IFMT == S_IFREG else { continue }
+            guard fstat(fd, &info) == 0 else { return .unavailable }
+            // A directory at the path opens fine but can't be read as a state
+            // file — the first path that opens still wins, so this is
+            // terminal, not a reason to fall through to the next candidate.
+            guard info.st_mode & S_IFMT == S_IFREG else { return .unavailable }
 
             let fingerprint = ClaudeStateFileFingerprint(
                 url: url,

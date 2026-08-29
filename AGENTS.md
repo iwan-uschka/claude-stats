@@ -56,9 +56,9 @@ Two independent tiers, deliberately decoupled:
      source that can't do that shouldn't silently stand in for one that can.
    - **Promo notices (decoration, never an error).** Claude Code keeps a fifth
      file, `~/.claude.json`, that it writes for itself. Among its
-     *undocumented* internal keys, `cachedGrowthBookFeatures.
-     tengu_rate_limit_promo_notices` holds the promo line the CLI renders above
-     its own weekly bar (`{ bar, text, variant }`), and
+     *undocumented* internal keys,
+     `cachedGrowthBookFeatures.tengu_rate_limit_promo_notices` holds the promo
+     line the CLI renders above its own weekly bar (`{ bar, text, variant }`), and
      `cachedGrowthBookFeaturesAt` says when GrowthBook last served it. We
      render it under the matching bar — see
      `Sources/ClaudeStatsCore/Quota/RateLimitPromoNoticeReader.swift`.
@@ -82,11 +82,11 @@ Two independent tiers, deliberately decoupled:
        keys (`numStartups`, `seenNotifications`), so mtime is minutes old even
        when the flag cache is months stale. mtime is only ever the
        unchanged-since gate.
-     - **Any `https` URL in the text is linkified**, over a host allowlist.
-       Stated risk: the file is user-writable, so any local process running as
-       the user can plant clickable text in a Claude-branded popover. Mitigated
-       by shape guards, not by host — `https` only, other explicit schemes
-       rejected outright rather than prefixed, no userinfo/port, ASCII host
+     - **Any `https` URL in the text is linkified**, not restricted to a host
+       allowlist. Stated risk: the file is user-writable, so any local process
+       running as the user can plant clickable text in a Claude-branded
+       popover. Mitigated by shape guards, not by host — `https` only, other
+       explicit schemes rejected outright rather than prefixed, no userinfo/port, ASCII host
        that must equal the parser's own host — plus a tooltip disclosing the
        resolved URL. See `Support/LinkifiedText.swift`.
      - **No dismiss affordance.** `tengu_startup_announcements` in the same

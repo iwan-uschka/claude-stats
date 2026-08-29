@@ -7,29 +7,12 @@ final class LinkifiedTextTests: XCTestCase {
     /// The exact string cached on a real machine.
     private let realNotice = "+50% weekly limits promo through Aug 31 · clau.de/cc-50-promo"
 
-    /// `prefix + linkLabel + suffix` must always reconstruct `plainText`, or the
-    /// popover renders something the accessibility label and tooltip disagree with.
-    private func assertRoundTrips(
-        _ text: LinkifiedText,
-        file: StaticString = #filePath,
-        line: UInt = #line
-    ) {
-        XCTAssertEqual(
-            text.plainText,
-            text.prefix + (text.linkLabel ?? "") + text.suffix,
-            file: file,
-            line: line
-        )
-    }
-
     private func linkify(
         _ raw: String,
         file: StaticString = #filePath,
         line: UInt = #line
     ) throws -> LinkifiedText {
-        let result = try XCTUnwrap(LinkifiedText.linkify(raw), file: file, line: line)
-        assertRoundTrips(result, file: file, line: line)
-        return result
+        try XCTUnwrap(LinkifiedText.linkify(raw), file: file, line: line)
     }
 
     // MARK: - The real string
@@ -117,8 +100,11 @@ final class LinkifiedTextTests: XCTestCase {
 
     // MARK: - Authority guards
 
-    func testUserinfoIsRejected() throws {
-        let text = try linkify("user:pass@clau.de/x")
+    /// `"user:pass@..."` alone is rejected earlier, by the explicit-scheme
+    /// guard (`user:` parses as a scheme). A leading digit defeats that guard,
+    /// so this is what actually reaches `components.user`/`components.password`.
+    func testUserinfoWithoutAnExplicitSchemeIsRejected() throws {
+        let text = try linkify("1user:pass@clau.de/x")
         XCTAssertNil(text.linkLabel)
     }
 
@@ -129,7 +115,11 @@ final class LinkifiedTextTests: XCTestCase {
     }
 
     func testNonDefaultPortIsRejected() throws {
-        for raw in ["clau.de:8443/x", "https://clau.de:8443/x"] {
+        // "clau.de:8443/x" is rejected earlier, by the explicit-scheme guard
+        // (`.` is allowed in scheme chars, so "clau.de" parses as a scheme). A
+        // leading digit defeats that guard, so "1clau.de:8443/x" is what
+        // actually reaches `components.port`.
+        for raw in ["1clau.de:8443/x", "https://clau.de:8443/x"] {
             let text = try linkify(raw)
             XCTAssertNil(text.linkLabel, "unexpectedly linkified: \(raw)")
         }

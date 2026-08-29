@@ -362,6 +362,19 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(model.promoNotice(for: .sevenDay), first)
     }
 
+    /// The promo read sits behind the same throttle as the quota poll, so
+    /// filesystem churn can't cause a state-file read per write.
+    func testReloadPromoNoticesIsSkippedWhenQuotaPollIsThrottled() async {
+        let promo = ScriptedPromoNoticeProvider(result: .read(notices: [], fingerprint: nil))
+        let model = makeModel(quota: ScriptedQuotaProvider(), promo: promo)
+        model.refresh(force: true) // primes lastQuotaPoll
+        let callsAfterFirst = promo.callCount
+
+        model.refresh() // not forced, interval not elapsed
+
+        XCTAssertEqual(promo.callCount, callsAfterFirst)
+    }
+
     /// The notice comes from a different file than the quota reading, so an
     /// empty-state popover still shows it.
     func testPromoNoticesSurviveAQuotaHardFailure() async {
@@ -378,5 +391,22 @@ final class AppModelTests: XCTestCase {
 
         XCTAssertNil(model.snapshot)
         XCTAssertEqual(model.promoNotices, [notice])
+    }
+
+    /// A real (non-`.unchanged`) read with no notices must clear whatever was
+    /// already on screen — the promo campaign ending while the popover is open.
+    func testRealReadWithNoNoticesClearsAPreviouslyShownOne() async {
+        let notice = MockPromoNoticeProvider.sampleNotice()
+        let promo = ScriptedPromoNoticeProvider(
+            result: .read(notices: [notice], fingerprint: sampleFingerprint())
+        )
+        let model = makeModel(quota: ScriptedQuotaProvider(), promo: promo)
+        model.refresh(force: true)
+        XCTAssertEqual(model.promoNotices, [notice])
+
+        promo.result = .read(notices: [], fingerprint: sampleFingerprint(size: 43))
+        model.refresh(force: true)
+
+        XCTAssertTrue(model.promoNotices.isEmpty)
     }
 }

@@ -240,6 +240,17 @@ final class RateLimitPromoNoticeReaderTests: XCTestCase {
         XCTAssertEqual(try read(makeReader()).notices.first?.bar, .sevenDay)
     }
 
+    func testWhitespaceAndCaseInBarValueIsNormalized() throws {
+        try write(fixture(entries: entry(bar: " FIVE_HOUR ", text: "promo clau.de/x")))
+
+        XCTAssertEqual(try read(makeReader()).notices.first?.bar, .fiveHour)
+    }
+
+    func testWindowKindTitleMatchesPopoverLabels() {
+        XCTAssertEqual(QuotaWindowKind.fiveHour.title, "5-hour window")
+        XCTAssertEqual(QuotaWindowKind.sevenDay.title, "7-day window")
+    }
+
     /// Non-linkable text is a plain notice, not a dropped one.
     func testEntryWithoutAURLIsKeptAsPlainText() throws {
         try write(fixture(entries: entry(text: "+50% weekly limits promo through Aug 31")))
@@ -274,6 +285,22 @@ final class RateLimitPromoNoticeReaderTests: XCTestCase {
         try write(fixture(entries: entry(text: "promo clau.de/x"), cachedAt: cachedAt))
 
         XCTAssertEqual(try read(makeReader()).notices.count, 1)
+    }
+
+    /// The gate is `<=`, so a cache exactly `maximumAge` old is still shown.
+    func testFlagCacheExactlyAtMaximumAgeIsShown() throws {
+        let cachedAt = now.addingTimeInterval(-RateLimitPromoNoticeReader.defaultMaximumAge)
+        try write(fixture(entries: entry(text: "promo clau.de/x"), cachedAt: cachedAt))
+
+        XCTAssertEqual(try read(makeReader()).notices.count, 1)
+    }
+
+    func testCustomMaximumAgeIsHonoured() throws {
+        let cachedAt = now.addingTimeInterval(-3700) // 1h+ old
+        try write(fixture(entries: entry(text: "promo clau.de/x"), cachedAt: cachedAt))
+
+        XCTAssertTrue(try read(makeReader(maximumAge: 3600)).notices.isEmpty)
+        XCTAssertEqual(try read(makeReader(maximumAge: 7200)).notices.count, 1)
     }
 
     /// Clock skew shouldn't silently hide a live promo.
@@ -361,14 +388,17 @@ final class RateLimitPromoNoticeReaderTests: XCTestCase {
 
     // MARK: - Directory at the path
 
-    func testDirectoryAtACandidatePathIsSkipped() throws {
+    /// The first candidate that *opens* wins, even if it turns out to be
+    /// unusable — a directory at the first path is not a reason to silently
+    /// fall through and read a different candidate.
+    func testDirectoryAtTheFirstCandidatePathIsTerminal() throws {
         let asDirectory = directory.appendingPathComponent("directory-.claude.json", isDirectory: true)
         try FileManager.default.createDirectory(at: asDirectory, withIntermediateDirectories: true)
         try write(fixture(entries: entry(text: "promo clau.de/x")), to: fallbackURL)
 
         let result = try read(makeReader(candidates: [asDirectory, fallbackURL]))
 
-        XCTAssertEqual(result.notices.count, 1)
-        XCTAssertEqual(result.fingerprint?.url, fallbackURL)
+        XCTAssertTrue(result.notices.isEmpty)
+        XCTAssertNil(result.fingerprint)
     }
 }

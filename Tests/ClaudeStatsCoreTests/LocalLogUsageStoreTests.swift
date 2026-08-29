@@ -660,6 +660,17 @@ final class LocalLogUsageStoreTests: XCTestCase {
         XCTAssertEqual(candidates.map(\.path), ["/fake/home/.claude.json"])
     }
 
+    func testStateFileCandidatesExpandsTildeInOverride() {
+        let home = URL(fileURLWithPath: "/fake/home", isDirectory: true)
+
+        let candidates = ClaudeConfigDirectory.stateFileCandidates(
+            environment: [ClaudeConfigDirectory.environmentVariable: "~/override"],
+            homeDirectory: home
+        )
+
+        XCTAssertTrue(candidates.first?.path.hasPrefix("/") ?? false, "tilde must be expanded, not left literal")
+    }
+
     // MARK: - Directory scanning
 
     func testInitFromConfigDirectoryScansEveryProjectSubdirectory() throws {

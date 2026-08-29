@@ -69,8 +69,11 @@ public struct MockQuotaProvider: QuotaProviding {
     }
 }
 
-/// In-memory ``PromoNoticeProviding`` for previews and the app's sample-data
-/// mode.
+/// In-memory ``PromoNoticeProviding`` for previews.
+///
+/// Not used by the app's sample-data mode: the notice comes from
+/// `~/.claude.json`, not the session logs, so a machine with no readable
+/// `~/.claude` can still have a real promo cached.
 ///
 /// A plain struct with no reference box, unlike ``MockQuotaProvider``: nothing
 /// here mutates — reads have no side effects and there is no cache to clear.
