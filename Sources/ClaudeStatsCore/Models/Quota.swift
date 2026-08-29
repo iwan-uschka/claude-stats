@@ -31,6 +31,40 @@ public struct QuotaWindow: Sendable, Hashable, Codable {
     public static let empty = QuotaWindow(percentUsed: 0, resetsAt: nil)
 }
 
+/// Which of the two rate-limit windows something refers to.
+///
+/// Introduced for the promo notices, which name the bar they belong under —
+/// but ``title`` is the single source of the row labels the popover has always
+/// shown, so a notice and its bar can never disagree about what the row is
+/// called.
+public enum QuotaWindowKind: String, Sendable, Hashable, Codable, CaseIterable {
+    case fiveHour = "five_hour"
+    case sevenDay = "seven_day"
+
+    /// Parses the `bar` field of a `tengu_rate_limit_promo_notices` entry.
+    ///
+    /// Accepts both the snake_case spelling seen on disk and the camelCase one
+    /// used elsewhere in the same payloads. Anything else returns `nil`, which
+    /// **drops the notice entirely** rather than guessing: "+50% weekly limits"
+    /// is only true of one of the two bars, so an unrecognised `bar` has no
+    /// safe place to render.
+    public init?(promoBarValue: String) {
+        switch promoBarValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "five_hour", "fivehour": self = .fiveHour
+        case "seven_day", "sevenday": self = .sevenDay
+        default: return nil
+        }
+    }
+
+    /// The popover's row label for this window.
+    public var title: String {
+        switch self {
+        case .fiveHour: return "5-hour window"
+        case .sevenDay: return "7-day window"
+        }
+    }
+}
+
 /// How trustworthy a ``QuotaSnapshot`` is. Only one source is wired up
 /// (Claude Code's `statusLine` hook), so this currently has a single case.
 public enum QuotaConfidence: String, Sendable, Codable {

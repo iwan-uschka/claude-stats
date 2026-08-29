@@ -36,7 +36,7 @@ struct WindowBarView: View {
     let now = Date()
     return VStack(alignment: .leading, spacing: 6) {
         WindowBarView(
-            title: "5-hour window",
+            title: QuotaWindowKind.fiveHour.title,
             window: QuotaWindow(
                 percentUsed: 62,
                 resetsAt: now.addingTimeInterval(2 * 3600 + 14 * 60)
@@ -44,7 +44,7 @@ struct WindowBarView: View {
             now: now
         )
         WindowBarView(
-            title: "7-day window",
+            title: QuotaWindowKind.sevenDay.title,
             window: QuotaWindow(
                 percentUsed: 31,
                 resetsAt: now.addingTimeInterval(4 * 86_400 + 6 * 3600)

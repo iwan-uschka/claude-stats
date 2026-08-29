@@ -620,6 +620,64 @@ final class LocalLogUsageStoreTests: XCTestCase {
         }
     }
 
+    // MARK: - State file candidates
+
+    /// `.claude.json` is a *sibling* of `~/.claude`, so with no override there
+    /// is exactly one place to look.
+    func testStateFileCandidatesDefaultsToHomeOnly() {
+        let home = URL(fileURLWithPath: "/fake/home", isDirectory: true)
+
+        let candidates = ClaudeConfigDirectory.stateFileCandidates(environment: [:], homeDirectory: home)
+
+        XCTAssertEqual(candidates.map(\.path), ["/fake/home/.claude.json"])
+    }
+
+    /// Whether `$CLAUDE_CONFIG_DIR` relocates the state file too is
+    /// undetermined upstream, so both places are probed — override first.
+    func testStateFileCandidatesProbesTheOverrideFirst() {
+        let home = URL(fileURLWithPath: "/fake/home", isDirectory: true)
+
+        let candidates = ClaudeConfigDirectory.stateFileCandidates(
+            environment: [ClaudeConfigDirectory.environmentVariable: "/fake/override"],
+            homeDirectory: home
+        )
+
+        XCTAssertEqual(
+            candidates.map(\.path),
+            ["/fake/override/.claude.json", "/fake/home/.claude.json"]
+        )
+    }
+
+    /// Same blank-override rule as `testResolveIgnoresBlankOverride`.
+    func testStateFileCandidatesIgnoresBlankOverride() {
+        let home = URL(fileURLWithPath: "/fake/home", isDirectory: true)
+
+        let candidates = ClaudeConfigDirectory.stateFileCandidates(
+            environment: [ClaudeConfigDirectory.environmentVariable: "   "],
+            homeDirectory: home
+        )
+
+        XCTAssertEqual(candidates.map(\.path), ["/fake/home/.claude.json"])
+    }
+
+    /// `expandingTildeInPath` resolves `~` against the real process
+    /// `$HOME` (`NSHomeDirectory()`), not the injected `homeDirectory`
+    /// parameter — the override and the default-home path are genuinely
+    /// different pieces of state. Asserting against `NSHomeDirectory()`
+    /// keeps this hermetic rather than merely checking "some absolute path
+    /// came out."
+    func testStateFileCandidatesExpandsTildeInOverride() {
+        let home = URL(fileURLWithPath: "/fake/home", isDirectory: true)
+        let realHome = NSHomeDirectory()
+
+        let candidates = ClaudeConfigDirectory.stateFileCandidates(
+            environment: [ClaudeConfigDirectory.environmentVariable: "~/override"],
+            homeDirectory: home
+        )
+
+        XCTAssertEqual(candidates.first?.path, "\(realHome)/override/.claude.json")
+    }
+
     // MARK: - Directory scanning
 
     func testInitFromConfigDirectoryScansEveryProjectSubdirectory() throws {

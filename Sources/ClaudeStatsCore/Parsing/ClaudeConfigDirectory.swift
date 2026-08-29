@@ -37,12 +37,46 @@ public enum ClaudeConfigDirectory {
         environment: [String: String] = ProcessInfo.processInfo.environment,
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
     ) -> URL {
-        if let override = environment[environmentVariable]?
+        overrideDirectory(environment: environment)
+            ?? homeDirectory.appendingPathComponent(".claude", isDirectory: true)
+    }
+
+    /// The `$CLAUDE_CONFIG_DIR` override, trimmed/tilde-expanded, or `nil` when
+    /// unset or blank. Shared so the override rule can't drift between
+    /// ``candidate(environment:homeDirectory:)`` and
+    /// ``stateFileCandidates(environment:homeDirectory:)``.
+    private static func overrideDirectory(environment: [String: String]) -> URL? {
+        guard let override = environment[environmentVariable]?
             .trimmingCharacters(in: .whitespacesAndNewlines),
-            !override.isEmpty {
-            return URL(fileURLWithPath: (override as NSString).expandingTildeInPath, isDirectory: true)
+            !override.isEmpty
+        else { return nil }
+        return URL(fileURLWithPath: (override as NSString).expandingTildeInPath, isDirectory: true)
+    }
+
+    /// File name of Claude Code's own state file — a *sibling* of the config
+    /// directory, not a member of it.
+    public static let stateFileName = ".claude.json"
+
+    /// Where Claude Code's own state file might live, in probe order.
+    ///
+    /// The docs say `$CLAUDE_CONFIG_DIR` relocates "every `~/.claude` path", but
+    /// `.claude.json` is a *sibling* of `~/.claude`, not inside it — whether the
+    /// override moves it too is undetermined, so probe both. First one that
+    /// opens wins (see ``ClaudeStateFile``).
+    ///
+    /// Order: `$CLAUDE_CONFIG_DIR/.claude.json` (only when the variable is set
+    /// to a non-blank value, matching
+    /// ``candidate(environment:homeDirectory:)``), then `~/.claude.json`.
+    public static func stateFileCandidates(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) -> [URL] {
+        var candidates: [URL] = []
+        if let override = overrideDirectory(environment: environment) {
+            candidates.append(override.appendingPathComponent(stateFileName, isDirectory: false))
         }
-        return homeDirectory.appendingPathComponent(".claude", isDirectory: true)
+        candidates.append(homeDirectory.appendingPathComponent(stateFileName, isDirectory: false))
+        return candidates
     }
 
     private static func isDirectory(_ url: URL, fileManager: FileManager) -> Bool {

@@ -24,6 +24,7 @@ Pre-built releases (macOS app bundle, zipped) are available on the
 - Per-source breakdown (CLI / VS Code / SDK-agents) across 5h/24h/7d windows, and per-model token/cost totals
 - Local session-log parsing (`~/.claude/projects/*/*.jsonl`) — token counts, cost, burn rate always available, no network or credentials needed
 - Live 5-hour/7-day quota percentage from Claude Code's `statusLine` hook — see [Quota source](#quota-source)
+- Claude Code's own rate-limit promo notices, shown under the bar they apply to, with any link in them clickable
 - FSEvents-driven refresh — updates on write, not on a poll timer
 
 Full architecture and data-source design: see [AGENTS.md](AGENTS.md).

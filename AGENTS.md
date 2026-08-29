@@ -54,6 +54,49 @@ Two independent tiers, deliberately decoupled:
      budget (`local_estimate` confidence). Both were removed: the app is
      meant to show the account's real rate-limit window, not a guess, so a
      source that can't do that shouldn't silently stand in for one that can.
+   - **Promo notices (decoration, never an error).** Alongside the config tree,
+     Claude Code keeps a state file it writes for itself, `~/.claude.json`.
+     Among its
+     *undocumented* internal keys,
+     `cachedGrowthBookFeatures.tengu_rate_limit_promo_notices` holds the promo
+     line the CLI renders above its own weekly bar (`{ bar, text, variant }`), and
+     `cachedGrowthBookFeaturesAt` says when GrowthBook last served it. We
+     render it under the matching bar — see
+     `Sources/ClaudeStatsCore/Quota/RateLimitPromoNoticeReader.swift`.
+     Everything about this path is best-effort: it is another program's private
+     state, so absent / unreadable / malformed / stale all mean "no promo" and
+     **never** produce a `ClaudeStatsError` or an `activeErrors` entry.
+     - **Both candidate paths are probed** —
+       `$CLAUDE_CONFIG_DIR/.claude.json`, then `~/.claude.json`. The docs say
+       the override relocates "every `~/.claude` path", but this file is a
+       *sibling* of `~/.claude`, not inside it; which one wins is undetermined
+       upstream, so try both and take the first that opens.
+     - **No FSEvents coverage.** The file lives directly in `$HOME`, and
+       watching `$HOME` recursively is not an acceptable cost for one cached
+       feature flag. Reads ride the throttled quota refresh instead (≥30s,
+       ≤300s; manual Refresh always re-reads), gated on a nanosecond-mtime +
+       inode + size fingerprint so an unchanged 145 KB file costs one `open`
+       plus one `fstat`, not a parse.
+     - **Hidden when `cachedGrowthBookFeaturesAt` is older than 7 days**, and
+       when it is missing entirely (unknown age ≠ fresh). **The file's mtime is
+       not an age signal** — Claude Code rewrites it constantly for unrelated
+       keys (`numStartups`, `seenNotifications`), so mtime is minutes old even
+       when the flag cache is months stale. mtime is only ever the
+       unchanged-since gate.
+     - **Any `https` URL in the text is linkified**, not restricted to a host
+       allowlist. Stated risk: the file is user-writable, so any local process
+       running as the user can plant clickable text in a Claude-branded
+       popover. Mitigated by shape guards, not by host — `https` only, other
+       explicit schemes rejected outright rather than prefixed, no userinfo/port, ASCII host
+       that must equal the parser's own host — plus a tooltip disclosing the
+       resolved URL. See `Support/LinkifiedText.swift`.
+     - **No dismiss affordance.** `tengu_startup_announcements` in the same
+       blob carries `id` + `maxImpressions`; the promo key carries neither —
+       upstream gave dismissible notices an identity and deliberately did not
+       give this one.
+     - An unknown `bar` value **drops the notice**: "+50% weekly limits" is
+       only true of one of the two bars. `variant` is stored for fidelity and
+       does not drive styling.
 3. Refresh via `FSEventStream` (CoreServices) watching the config dir tree —
    not polling. Kernel wakes the app only on write; debounce bursts; reparse
    only changed files, not a full rescan.
@@ -93,6 +136,11 @@ Click opens a popover:
 ```
 5-hour window     ▓▓▓▓▓▓░░ 62%     resets in 2h 14m
 7-day window       ▓▓▓░░░░░ 31%     resets in 4d 6h
++50% weekly limits promo through Aug 31 · clau.de/cc-50-promo
+                                  ← Claude Code's own promo notice for this
+                                    bar, read from `~/.claude.json`; the bare
+                                    URL is clickable. Only when one is cached
+                                    and fresh.
 source: official · 40s ago                      ← confidence tag + freshness
                                   [ Clear Quota Cache ]   ← deletes the
                                     statusline cache and re-polls

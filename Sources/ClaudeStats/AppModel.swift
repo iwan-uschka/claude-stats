@@ -25,6 +25,16 @@ final class AppModel: ObservableObject {
     @Published private(set) var modelUsageTotal: TokenUsage = .zero
     @Published private(set) var usingSampleData: Bool
 
+    /// Promo lines Claude Code has cached for its own rate-limit bars, shown
+    /// under the matching bar in the popover.
+    ///
+    /// Deliberately untouched by every `runQuotaPoll()` failure path: the
+    /// notice comes from a different file than the quota reading, so a quota
+    /// source that went quiet is no reason to drop it — the empty-state
+    /// popover still shows it. It only goes away when a read actually says
+    /// there is nothing there.
+    @Published private(set) var promoNotices: [RateLimitPromoNotice] = []
+
     /// Kept independent per subsystem so one reload's success can't clobber
     /// another's still-live failure — see `activeErrors`.
     @Published private(set) var localStatsError: String?
@@ -52,10 +62,14 @@ final class AppModel: ObservableObject {
     }
 
     private let quotaProvider: any QuotaProviding
+    private let promoNoticeProvider: any PromoNoticeProviding
     private var usageStore: any UsageStoring
     private var refreshTask: Task<Void, Never>?
     private var lastQuotaPoll: Date?
     private var postInstallPollTask: Task<Void, Never>?
+    /// State of the file the last `promoNotices` came from, so an unchanged
+    /// file costs one `open` + one `fstat` instead of a 145 KB parse.
+    private var lastPromoFingerprint: ClaudeStateFileFingerprint?
 
     /// Minimum time between live quota polls. Refreshes are triggered by opening
     /// the popover or by new session activity, not by a repeating timer; manual
@@ -66,9 +80,20 @@ final class AppModel: ObservableObject {
     static let pollIntervalOptions: [TimeInterval] = [30, 60, 120, 300]
     private static let pollIntervalDefaultsKey = "de.bitgrip.claude-stats.quotaPollInterval"
 
-    init(quotaProvider: any QuotaProviding, usageStore: any UsageStoring, usingSampleData: Bool = false) {
+    /// `promoNoticeProvider` deliberately has no default. Defaulting it to the
+    /// real reader would make every test read the developer's own
+    /// `~/.claude.json`, which the suite's stated rule forbids; defaulting it
+    /// to a no-op would let `ClaudeStatsApp` forget the wiring with nothing
+    /// failing to catch it.
+    init(
+        quotaProvider: any QuotaProviding,
+        usageStore: any UsageStoring,
+        promoNoticeProvider: any PromoNoticeProviding,
+        usingSampleData: Bool = false
+    ) {
         self.quotaProvider = quotaProvider
         self.usageStore = usageStore
+        self.promoNoticeProvider = promoNoticeProvider
         self.usingSampleData = usingSampleData
 
         let stored = UserDefaults.standard.double(forKey: Self.pollIntervalDefaultsKey)
@@ -102,6 +127,12 @@ final class AppModel: ObservableObject {
         let shouldPollQuota = force || shouldRunUpdateCheck(lastCheck: lastQuotaPoll, now: Date(), interval: quotaPollInterval)
         guard shouldPollQuota else { return nil }
         lastQuotaPoll = Date()
+
+        // Behind the same throttle as the quota poll (≥30s, ≤300s) so
+        // filesystem churn can't cause a read per write, and inside it so a
+        // manual "Refresh" always re-reads. Synchronous on `@MainActor` is
+        // fine — see `PromoNoticeProviding`.
+        reloadPromoNotices()
 
         refreshTask?.cancel()
         refreshTask = runQuotaPoll()
@@ -227,6 +258,27 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// The promo notice for one bar, or `nil` when there is none.
+    ///
+    /// First match wins if a (malformed) payload ever carries two entries for
+    /// the same bar — the bar has one line under it, and picking the first
+    /// keeps that deterministic.
+    func promoNotice(for bar: QuotaWindowKind) -> RateLimitPromoNotice? {
+        promoNotices.first { $0.bar == bar }
+    }
+
+    /// Never sets an error: a promo notice is decoration, and there is no
+    /// action a user could take about its absence. See ``PromoNoticeProviding``.
+    private func reloadPromoNotices() {
+        switch promoNoticeProvider.read(unchangedSince: lastPromoFingerprint) {
+        case .unchanged:
+            break
+        case .read(let notices, let fingerprint):
+            promoNotices = notices
+            lastPromoFingerprint = fingerprint
+        }
+    }
+
     private func reloadLocalStats() {
         do {
             planTier = try usageStore.detectedPlanTier()
@@ -264,7 +316,8 @@ extension AppModel {
         window: TimeWindow = .fiveHour,
         snapshot: QuotaSnapshot? = MockQuotaProvider.sampleSnapshot(),
         error: String? = nil,
-        warning: String? = nil
+        warning: String? = nil,
+        promoNotices: [RateLimitPromoNotice] = []
     ) -> AppModel {
         let store = MockUsageStore()
         // Inlined here (not a public Core factory) so a preview-only "no
@@ -280,10 +333,12 @@ extension AppModel {
         )
         let model = AppModel(
             quotaProvider: MockQuotaProvider(snapshot: snapshot ?? previewPlaceholder),
-            usageStore: store
+            usageStore: store,
+            promoNoticeProvider: MockPromoNoticeProvider(notices: promoNotices)
         )
         model.selectedWindow = window // already populates `breakdown` via didSet
         model.snapshot = snapshot
+        model.promoNotices = promoNotices
         model.planTier = try? store.detectedPlanTier()
         model.burnRateUsage = try? store.burnRateUsagePerHour()
         model.estimatedCostToday = try? store.estimatedCostToday()
@@ -295,7 +350,26 @@ extension AppModel {
 
     /// Cold-start state: nothing has been read yet.
     static func previewEmpty() -> AppModel {
-        AppModel(quotaProvider: MockQuotaProvider(), usageStore: MockUsageStore())
+        AppModel(
+            quotaProvider: MockQuotaProvider(),
+            usageStore: MockUsageStore(),
+            promoNoticeProvider: MockPromoNoticeProvider(notices: [])
+        )
+    }
+
+    /// The promo banner with a live snapshot behind it.
+    static func previewPromoNotice() -> AppModel {
+        preview(promoNotices: [MockPromoNoticeProvider.sampleNotice()])
+    }
+
+    /// The promo banner with no quota source at all — it comes from a
+    /// different file, so it survives an empty-state popover.
+    static func previewPromoNoticeWithoutQuota() -> AppModel {
+        preview(
+            snapshot: nil,
+            error: ClaudeStatsError.noQuotaSourceAvailable.localizedDescription,
+            promoNotices: [MockPromoNoticeProvider.sampleNotice()]
+        )
     }
 
     /// Live source, but stale — quota still shown, plus a warning line.
