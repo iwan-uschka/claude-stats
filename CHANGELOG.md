@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.9.5] - 2026-08-29
+
 ### Added
 - Promo notices from Claude Code's own state file (`~/.claude.json`) now render
   under the quota bar they apply to — e.g. "+50% weekly limits promo through
