@@ -2,8 +2,11 @@ import AppKit
 import ClaudeStatsCore
 import SwiftUI
 
-/// Draws the status item's glyph: the Claude mark, then two thin vertical bars
-/// for the 5-hour and 7-day windows.
+/// Draws the status item's glyph: the Claude mark, then three thin vertical
+/// bars — 5-hour, 7-day, and the highest scoped weekly limit. All three are
+/// always drawn, same as the first two: with no scoped-limit reading, the
+/// third bar is simply empty (0% fill), exactly like an absent snapshot draws
+/// the first two as empty tracks rather than omitting them.
 ///
 /// Rendered into a *template* `NSImage` rather than hosted as a SwiftUI view.
 /// Template images are the only thing that gets the menu bar's full treatment
@@ -28,15 +31,32 @@ enum MenuBarGlyph {
     /// Alpha of the unused portion of a bar.
     static let trackAlpha: CGFloat = 0.3
 
-    static var width: CGFloat {
-        markSize + markToBarsGap + barWidth * 2 + barSpacing
-    }
+    /// Bars always drawn: 5-hour, 7-day, and scoped weekly — unconditionally,
+    /// same as the other two. There is no narrower glyph to fall back to.
+    static let barCount = 3
+
+    /// Total glyph width. Fixed: all three bars are always drawn, so there is
+    /// no variable-width state to compute from a snapshot.
+    static let width: CGFloat = markSize + markToBarsGap
+        + barWidth * CGFloat(barCount) + barSpacing * CGFloat(barCount - 1)
 
     /// Template image for the given window fills (each 0...1, clamped).
-    static func image(fiveHourFraction: Double, sevenDayFraction: Double) -> NSImage {
+    ///
+    /// `scopedWeeklyFraction` defaults to 0 (an empty third bar) when there is
+    /// no scoped reading, same as the other two fractions default to 0 for an
+    /// absent snapshot in ``image(for:)``. `scopedWeeklyLabel` only names the
+    /// bar for VoiceOver when there is one; neither says what the scoped
+    /// percentage is a share of — see ``QuotaScopedLimit``.
+    static func image(
+        fiveHourFraction: Double,
+        sevenDayFraction: Double,
+        scopedWeeklyFraction: Double = 0,
+        scopedWeeklyLabel: String? = nil
+    ) -> NSImage {
         let fractions = [
             DisplayFormat.clamped01(fiveHourFraction),
             DisplayFormat.clamped01(sevenDayFraction),
+            DisplayFormat.clamped01(scopedWeeklyFraction),
         ]
 
         let image = NSImage(
@@ -49,15 +69,27 @@ enum MenuBarGlyph {
         }
         image.isTemplate = true
         let devSuffix = BuildEnvironment.isDevelopmentBuild ? BuildEnvironment.devBuildSuffix : ""
-        image.accessibilityDescription = "Claude Stats\(devSuffix): \(Int(fractions[0] * 100))% five-hour, \(Int(fractions[1] * 100))% seven-day usage"
+        let scope = scopedWeeklyLabel.map { "\($0) " } ?? ""
+        image.accessibilityDescription = "Claude Stats\(devSuffix): \(Int(fractions[0] * 100))% five-hour, "
+            + "\(Int(fractions[1] * 100))% seven-day, \(Int(fractions[2] * 100))% \(scope)weekly usage"
         return image
     }
 
-    /// Snapshot-driven convenience; an absent snapshot draws empty bars.
+    /// Snapshot-driven convenience; an absent snapshot draws all three bars
+    /// empty.
+    ///
+    /// The scoped bar takes the highest-percentage entry —
+    /// ``QuotaSnapshot/scopedWeekly`` is already sorted descending, so `first`
+    /// is that one, and it stays the same entry across polls. No entry at all
+    /// (nil snapshot, or a snapshot with none) draws the third bar at 0%,
+    /// same as the first two draw at 0% with no snapshot.
     static func image(for snapshot: QuotaSnapshot?) -> NSImage {
-        image(
+        let scoped = snapshot?.scopedWeekly.first
+        return image(
             fiveHourFraction: snapshot?.fiveHour.fractionUsed ?? 0,
-            sevenDayFraction: snapshot?.sevenDay.fractionUsed ?? 0
+            sevenDayFraction: snapshot?.sevenDay.fractionUsed ?? 0,
+            scopedWeeklyFraction: scoped?.window.fractionUsed ?? 0,
+            scopedWeeklyLabel: scoped?.label
         )
     }
 
@@ -86,7 +118,7 @@ enum MenuBarGlyph {
             )
 
             // Track: the full bar at low alpha, so an empty window still reads
-            // as "two bars" rather than as a missing element.
+            // as one of three bars rather than as a missing element.
             context.addPath(
                 CGPath(
                     roundedRect: barRect,
@@ -130,11 +162,15 @@ enum MenuBarGlyph {
 /// Preview harness: shows the glyph over both menu bar backgrounds at a few
 /// fill levels. `swift build` can't show this, but Xcode's canvas can.
 #Preview("Menu bar glyph") {
-    let samples: [(String, Double, Double)] = [
-        ("empty", 0, 0),
-        ("mock", 0.62, 0.31),
-        ("high", 0.94, 0.71),
-        ("full", 1, 1),
+    let samples: [(String, Double, Double, Double)] = [
+        // Third bar always draws, same as the first two — empty here since
+        // there's no scoped reading.
+        ("empty", 0, 0, 0),
+        ("mock", 0.62, 0.31, 0),
+        ("high", 0.94, 0.71, 0),
+        ("full", 1, 1, 0),
+        ("scoped", 0.62, 0.31, 0.12),
+        ("scoped hi", 0.94, 0.71, 0.55),
     ]
 
     return VStack(spacing: 0) {
@@ -144,7 +180,9 @@ enum MenuBarGlyph {
                     VStack(spacing: 4) {
                         Image(nsImage: MenuBarGlyph.image(
                             fiveHourFraction: sample.1,
-                            sevenDayFraction: sample.2
+                            sevenDayFraction: sample.2,
+                            scopedWeeklyFraction: sample.3,
+                            scopedWeeklyLabel: sample.3 == 0 ? nil : "Fable"
                         ))
                         .renderingMode(.template)
                         Text(sample.0)

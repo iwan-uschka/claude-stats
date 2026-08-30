@@ -64,7 +64,11 @@ public struct MockQuotaProvider: QuotaProviding {
                 resetsAt: now.addingTimeInterval(4 * 86_400 + 6 * 3600)
             ),
             confidence: .official,
-            capturedAt: now.addingTimeInterval(-40)
+            capturedAt: now.addingTimeInterval(-40),
+            // The scoped entry as the real payload carries it: 0%, inactive,
+            // no reset timestamp — so previews exercise the row that shows a
+            // zero and an empty countdown column rather than a tidy fake.
+            scopedWeekly: [QuotaScopedLimit(label: "Fable", percentUsed: 0)]
         )
     }
 }

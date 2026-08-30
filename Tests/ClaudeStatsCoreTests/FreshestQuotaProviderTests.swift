@@ -12,14 +12,30 @@ final class FreshestQuotaProviderTests: XCTestCase {
         }
 
         let result: Result<QuotaSnapshot, ClaudeStatsError>
+        /// `nil` falls back to the protocol default (derive from `result`) —
+        /// set only to simulate a source like ``CachedUtilizationReader``,
+        /// whose ``QuotaProviding/currentScopedWeekly()`` bypasses whatever
+        /// made `currentSnapshot()` itself fail.
+        let scopedWeeklyResult: Result<[QuotaScopedLimit], ClaudeStatsError>?
         let box = Box()
 
-        init(_ result: Result<QuotaSnapshot, ClaudeStatsError>) {
+        init(
+            _ result: Result<QuotaSnapshot, ClaudeStatsError>,
+            scopedWeekly scopedWeeklyResult: Result<[QuotaScopedLimit], ClaudeStatsError>? = nil
+        ) {
             self.result = result
+            self.scopedWeeklyResult = scopedWeeklyResult
         }
 
         func currentSnapshot() async throws -> QuotaSnapshot {
             try result.get()
+        }
+
+        func currentScopedWeekly() async throws -> [QuotaScopedLimit] {
+            guard let scopedWeeklyResult else {
+                return try result.get().scopedWeekly
+            }
+            return try scopedWeeklyResult.get()
         }
 
         func clearCache() throws {
@@ -32,13 +48,15 @@ final class FreshestQuotaProviderTests: XCTestCase {
     private func snapshot(
         _ confidence: QuotaConfidence,
         percent: Double,
-        capturedAgo: TimeInterval
+        capturedAgo: TimeInterval,
+        scopedWeekly: [QuotaScopedLimit] = []
     ) -> QuotaSnapshot {
         QuotaSnapshot(
             fiveHour: QuotaWindow(percentUsed: percent),
             sevenDay: QuotaWindow(percentUsed: percent),
             confidence: confidence,
-            capturedAt: now.addingTimeInterval(-capturedAgo)
+            capturedAt: now.addingTimeInterval(-capturedAgo),
+            scopedWeekly: scopedWeekly
         )
     }
 
@@ -68,6 +86,86 @@ final class FreshestQuotaProviderTests: XCTestCase {
 
         XCTAssertEqual(result.confidence, .cachedOfficial)
         XCTAssertEqual(result.fiveHour.percentUsed, 97)
+    }
+
+    /// Only the cached-state source's payload has `limits[]` at all — the
+    /// statusline hook's schema carries no such field, not merely an empty
+    /// one. So scoped rows always come from `cachedState` regardless of which
+    /// snapshot wins the freshness compare for everything else: an account
+    /// with the hook installed (the common case, and almost always fresher)
+    /// must not lose the scoped bars just because the hook's own reading won.
+    func testScopedWeeklyLimitsAlwaysComeFromCachedState() async throws {
+        let scoped = [QuotaScopedLimit(label: "Fable", percentUsed: 0)]
+
+        let statuslineWins = FreshestQuotaProvider(
+            statusline: StubProvider(.success(snapshot(.official, percent: 62, capturedAgo: 30))),
+            cachedState: StubProvider(
+                .success(snapshot(.cachedOfficial, percent: 11, capturedAgo: 900, scopedWeekly: scoped))
+            )
+        )
+        let fromStatusline = try await statuslineWins.currentSnapshot()
+        XCTAssertEqual(fromStatusline.confidence, .official)
+        XCTAssertEqual(fromStatusline.scopedWeekly, scoped)
+
+        let cachedWins = FreshestQuotaProvider(
+            statusline: StubProvider(.success(snapshot(.official, percent: 62, capturedAgo: 900))),
+            cachedState: StubProvider(
+                .success(snapshot(.cachedOfficial, percent: 11, capturedAgo: 30, scopedWeekly: scoped))
+            )
+        )
+        let fromCachedState = try await cachedWins.currentSnapshot()
+        XCTAssertEqual(fromCachedState.confidence, .cachedOfficial)
+        XCTAssertEqual(fromCachedState.scopedWeekly, scoped)
+
+        // And when `cachedState` itself has none to report, none appear —
+        // this isn't a second independent source of scoped data, just the
+        // one source's field surviving the freshness pick.
+        let noScopedAtAll = FreshestQuotaProvider(
+            statusline: StubProvider(.success(snapshot(.official, percent: 62, capturedAgo: 30))),
+            cachedState: StubProvider(.success(snapshot(.cachedOfficial, percent: 11, capturedAgo: 900)))
+        )
+        let result = try await noScopedAtAll.currentSnapshot()
+        XCTAssertEqual(result.scopedWeekly, [])
+    }
+
+    /// The real-world case the graft above didn't cover: the hook is fresh
+    /// and succeeding, but `cachedState`'s *snapshot* has crossed its own
+    /// staleness threshold (``CachedUtilizationReader``'s 30 minutes) and so
+    /// fails outright — `(.success, .failure)`. Its scoped rows must not
+    /// disappear just because its account-wide windows are too old to win.
+    func testScopedWeeklyLimitsSurviveACachedStateSnapshotThatFailsOnStaleness() async throws {
+        let scoped = [QuotaScopedLimit(label: "Fable", percentUsed: 0)]
+
+        let provider = FreshestQuotaProvider(
+            statusline: StubProvider(.success(snapshot(.official, percent: 62, capturedAgo: 30))),
+            cachedState: StubProvider(
+                .failure(.staleQuotaSource(age: 13_400)),
+                scopedWeekly: .success(scoped)
+            )
+        )
+
+        let result = try await provider.currentSnapshot()
+
+        XCTAssertEqual(result.confidence, .official)
+        XCTAssertEqual(result.scopedWeekly, scoped)
+    }
+
+    /// The best-effort fetch is genuinely best-effort: if `cachedState` can't
+    /// produce scoped rows at all (e.g. no `limits[]` in the payload), the
+    /// hook's snapshot still wins with none, not an error.
+    func testMissingScopedWeeklyDoesNotFailTheGraftAttempt() async throws {
+        let provider = FreshestQuotaProvider(
+            statusline: StubProvider(.success(snapshot(.official, percent: 62, capturedAgo: 30))),
+            cachedState: StubProvider(
+                .failure(.noQuotaSourceAvailable),
+                scopedWeekly: .failure(.noQuotaSourceAvailable)
+            )
+        )
+
+        let result = try await provider.currentSnapshot()
+
+        XCTAssertEqual(result.confidence, .official)
+        XCTAssertEqual(result.scopedWeekly, [])
     }
 
     /// Same underlying reading reaching us both ways: prefer the one that was

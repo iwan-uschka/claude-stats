@@ -88,23 +88,98 @@ public enum QuotaConfidence: String, Sendable, Codable {
     public var displayLabel: String { rawValue }
 }
 
+/// One scoped weekly sub-limit, as reported by a `weekly_scoped` entry in
+/// `cachedUsageUtilization.utilization.limits[]`.
+///
+/// Entirely generic: the row is labelled from whatever
+/// `scope.model.display_name` says, so a model Claude Code starts reporting
+/// tomorrow needs no code change here.
+///
+/// ## What ``percentUsed`` is a share of is unknown
+///
+/// The payload gives a bare `percent` with no denominator, and every entry
+/// observed so far read 0. Nothing in this app — row label, tooltip, glyph —
+/// may claim the number is a share of a model-specific sub-cap *or* of the
+/// account's weekly total: neither has been verified. It is reported as
+/// Claude Code's own number, nothing more.
+public struct QuotaScopedLimit: Sendable, Hashable, Codable, Identifiable {
+    /// Display name of the scope, from `scope.model.display_name` (falling back
+    /// to `scope.surface`) — e.g. `"Fable"`.
+    public let label: String
+    /// Percentage as reported, 0...100. See the type note: the denominator is
+    /// undocumented.
+    public let percentUsed: Double
+    /// When the scoped window rolls over, when the payload says so — routinely
+    /// `null` for an inactive entry.
+    public let resetsAt: Date?
+    /// The payload's `is_active`; stored, not yet used for styling.
+    public let isActive: Bool
+    /// The payload's `severity` (`"normal"`, `"critical"`, …); stored for
+    /// fidelity, not yet styled.
+    public let severity: String?
+
+    public init(
+        label: String,
+        percentUsed: Double,
+        resetsAt: Date? = nil,
+        isActive: Bool = false,
+        severity: String? = nil
+    ) {
+        self.label = label
+        self.percentUsed = percentUsed
+        self.resetsAt = resetsAt
+        self.isActive = isActive
+        self.severity = severity
+    }
+
+    /// The label is the identity: one row per scope. The payload itself can
+    /// repeat one (two surfaces reporting the same model name, say) —
+    /// `QuotaJSON.scopedLimits(in:)` is what actually enforces uniqueness,
+    /// by dropping duplicates before this type ever sees them.
+    public var id: String { label }
+
+    /// Adapter for the bar UI, which is written against ``QuotaWindow``.
+    public var window: QuotaWindow {
+        QuotaWindow(percentUsed: percentUsed, resetsAt: resetsAt)
+    }
+}
+
 /// A point-in-time reading of both rate-limit windows.
 public struct QuotaSnapshot: Sendable, Hashable, Codable {
     public var fiveHour: QuotaWindow
     public var sevenDay: QuotaWindow
     public var confidence: QuotaConfidence
     public var capturedAt: Date
+    /// Per-model weekly sub-limits, highest percentage first. Empty for any
+    /// source that doesn't report them (the statusline payload carries no
+    /// `limits[]`), which is why it defaults — every existing call site builds a
+    /// snapshot without one.
+    public var scopedWeekly: [QuotaScopedLimit]
 
     public init(
         fiveHour: QuotaWindow,
         sevenDay: QuotaWindow,
         confidence: QuotaConfidence,
-        capturedAt: Date
+        capturedAt: Date,
+        scopedWeekly: [QuotaScopedLimit] = []
     ) {
         self.fiveHour = fiveHour
         self.sevenDay = sevenDay
         self.confidence = confidence
         self.capturedAt = capturedAt
+        self.scopedWeekly = scopedWeekly
+    }
+
+    /// Hand-written so a payload encoded before ``scopedWeekly`` existed still
+    /// decodes: Swift's synthesized `init(from:)` ignores property defaults and
+    /// would fail on the missing key.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        fiveHour = try container.decode(QuotaWindow.self, forKey: .fiveHour)
+        sevenDay = try container.decode(QuotaWindow.self, forKey: .sevenDay)
+        confidence = try container.decode(QuotaConfidence.self, forKey: .confidence)
+        capturedAt = try container.decode(Date.self, forKey: .capturedAt)
+        scopedWeekly = try container.decodeIfPresent([QuotaScopedLimit].self, forKey: .scopedWeekly) ?? []
     }
 
     /// Default staleness threshold for a cached statusline capture (~10 min).

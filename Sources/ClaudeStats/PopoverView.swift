@@ -66,6 +66,9 @@ struct PopoverView: View {
             if let snapshot = model.snapshot {
                 quotaWindowRow(.fiveHour, window: snapshot.fiveHour)
                 quotaWindowRow(.sevenDay, window: snapshot.sevenDay)
+                ForEach(snapshot.scopedWeekly) { limit in
+                    scopedWeeklyRow(limit)
+                }
                 Text(sourceTag(for: snapshot))
                     .font(PopoverMetrics.captionFont)
                     .foregroundStyle(.secondary)
@@ -96,8 +99,9 @@ struct PopoverView: View {
     ///
     /// Used by *both* branches of ``quotaSection`` so a snapshot and an empty
     /// state can't drift apart on which rows exist or what they're called.
-    /// The inner 2 pt (against the section's 6 pt) is what makes the notice
-    /// read as attached to this bar rather than as its own line.
+    /// The notice's own vertical padding (see ``promoNoticeLine(_:)``) sets
+    /// the breathing room around it; this VStack's 2 pt only closes the
+    /// remaining gap to the bar above.
     private func quotaWindowRow(_ bar: QuotaWindowKind, window: QuotaWindow) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             WindowBarView(title: bar.title, window: window, now: now)
@@ -105,6 +109,26 @@ struct PopoverView: View {
                 promoNoticeLine(notice)
             }
         }
+    }
+
+    /// One per-model weekly sub-limit, as Claude Code reports it.
+    ///
+    /// The tooltip deliberately says nothing about what the percentage is a
+    /// share of: the payload gives a bare `percent` with no denominator, and
+    /// whether it measures a model-specific sub-cap or the account's weekly
+    /// total is unverified — see ``QuotaScopedLimit``. Claiming either would be
+    /// inventing a fact the source doesn't carry. The countdown column is
+    /// empty when the entry has no `resets_at`, which is the common case — an
+    /// absent reset here means "not reported", not "reset pending" the way it
+    /// does for the two account-wide bars.
+    private func scopedWeeklyRow(_ limit: QuotaScopedLimit) -> some View {
+        WindowBarView(
+            title: "\(limit.label) (weekly)",
+            window: limit.window,
+            now: now,
+            showsPendingResetPlaceholder: false
+        )
+        .help("Claude Code's own scoped weekly limit for \(limit.label), reported exactly as it comes from Claude Code. What the percentage is measured against is not documented.")
     }
 
     /// Claude Code's own promo line for a bar, with any URL in it clickable.
@@ -120,7 +144,7 @@ struct PopoverView: View {
         if let label = notice.body.linkLabel, let url = notice.body.linkURL {
             var link = AttributedString(label)
             link.link = url
-            link.foregroundColor = .accentColor
+            link.foregroundColor = PopoverMetrics.brandLinkColor
             link.underlineStyle = .single
             attributed.append(link)
         }
@@ -139,6 +163,7 @@ struct PopoverView: View {
         return Text(attributed)
             .font(PopoverMetrics.captionFont)
             .fixedSize(horizontal: false, vertical: true)
+            .padding(.vertical, 4)
             // Split label/value instead of one flattened `.accessibilityLabel`
             // so `.isLink` isn't just cosmetic: VoiceOver still needs an
             // explicit action, since collapsing to one element loses the

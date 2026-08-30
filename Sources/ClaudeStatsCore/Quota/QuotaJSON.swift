@@ -99,6 +99,105 @@ enum QuotaJSON {
         return QuotaWindow(percentUsed: percent, resetsAt: resetsAt)
     }
 
+    // MARK: - Scoped weekly limits (`limits[]`)
+
+    /// Array key holding the flat, scoped limit entries.
+    static let limitsKeys = ["limits"]
+
+    /// The only `kind` this reads. `weekly_all` and `session` entries in the
+    /// same array restate `seven_day` / `five_hour`, and parsing them would
+    /// duplicate the two main bars.
+    static let scopedWeeklyKind = "weekly_scoped"
+
+    /// Percentage key spellings for a `limits[]` entry — flat `percent` here,
+    /// unlike the typed windows' ``percentKeys``. `utilization` is accepted too,
+    /// since that is what the same number is called one level up.
+    static let scopedPercentKeys = ["percent", "utilization"]
+
+    static func bool(_ value: Any?) -> Bool? {
+        switch value {
+        case let bool as Bool: return bool
+        case let number as NSNumber: return number.boolValue
+        case let string as String:
+            switch string.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+            case "true", "yes", "1": return true
+            case "false", "no", "0": return false
+            default: return nil
+            }
+        default: return nil
+        }
+    }
+
+    /// A non-empty display string, from either a bare string or an object that
+    /// names itself (`{ "display_name": … }`).
+    private static func name(_ value: Any?) -> String? {
+        let raw: String?
+        if let string = value as? String {
+            raw = string
+        } else if let dict = object(value) {
+            raw = ["display_name", "displayName", "name", "id"].lazy
+                .compactMap { dict[$0] as? String }.first
+        } else {
+            raw = nil
+        }
+        return raw
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .flatMap { $0.isEmpty ? nil : $0 }
+    }
+
+    /// Builds one scoped limit from a `limits[]` entry, or `nil` when the entry
+    /// is a different `kind`, names no scope, or carries no percentage.
+    ///
+    /// A missing `percent` is *not* 0% — same principle as ``window(_:)``.
+    static func scopedLimit(_ value: Any?) -> QuotaScopedLimit? {
+        guard let dict = object(value) else { return nil }
+        guard let kind = dict["kind"] as? String,
+            kind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == scopedWeeklyKind
+        else { return nil }
+
+        let scope = object(dict["scope"])
+        // `scope.model.display_name` is the label; `scope.surface` is the only
+        // other thing in the payload that names a scope. With neither, the row
+        // would have nothing to call itself.
+        guard let label = scope.flatMap({ name($0["model"]) })
+            ?? scope.flatMap({ name($0["surface"]) })
+        else { return nil }
+
+        guard let percent = scopedPercentKeys.lazy.compactMap({ double(dict[$0]) }).first else {
+            return nil
+        }
+
+        return QuotaScopedLimit(
+            label: label,
+            percentUsed: percent,
+            resetsAt: resetKeys.lazy.compactMap { date(dict[$0]) }.first,
+            isActive: bool(dict["is_active"]) ?? bool(dict["isActive"]) ?? false,
+            severity: name(dict["severity"])
+        )
+    }
+
+    /// Every `weekly_scoped` entry in `root`'s `limits[]`, highest percentage
+    /// first (ties broken by label) so the popover order and the glyph's pick of
+    /// `first` are stable across polls.
+    ///
+    /// Deduplicated by label: ``QuotaScopedLimit/id`` is the label, and
+    /// `scopeLimit(_:)`'s `scope.surface` fallback means two entries can
+    /// legitimately share one (e.g. two surfaces reporting the same model
+    /// name), which would otherwise hand `ForEach` a duplicate identity. The
+    /// entry kept is whichever sorted first — the higher percentage.
+    static func scopedLimits(in root: [String: Any]) -> [QuotaScopedLimit] {
+        guard let entries = limitsKeys.lazy.compactMap({ root[$0] as? [Any] }).first else {
+            return []
+        }
+        let sorted = entries.compactMap(scopedLimit).sorted {
+            $0.percentUsed == $1.percentUsed
+                ? $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending
+                : $0.percentUsed > $1.percentUsed
+        }
+        var seenLabels = Set<String>()
+        return sorted.filter { seenLabels.insert($0.label.lowercased()).inserted }
+    }
+
     /// Extracts both windows from a container that holds `five_hour` /
     /// `seven_day` either directly or nested under a wrapper key.
     ///

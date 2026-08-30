@@ -82,6 +82,9 @@ final class StatuslineCacheReaderTests: XCTestCase {
         XCTAssertEqual(snapshot.capturedAt.timeIntervalSince1970,
                        capturedAt.timeIntervalSince1970, accuracy: 1)
         XCTAssertFalse(snapshot.isStale(asOf: now))
+        // The statusline payload has no `limits[]`, so this source never
+        // reports a scoped weekly limit — the third bar is cached-state only.
+        XCTAssertEqual(snapshot.scopedWeekly, [])
         // resets_at is epoch seconds in the statusline payload.
         XCTAssertEqual(snapshot.fiveHour.resetsAt?.timeIntervalSince1970,
                        capturedAt.timeIntervalSince1970 + 3600)

@@ -15,6 +15,22 @@ public protocol QuotaProviding: Sendable {
     /// snapshot — callers check ``QuotaSnapshot/isStale(asOf:threshold:)``.
     func currentSnapshot() async throws -> QuotaSnapshot
 
+    /// Best-effort per-model scoped limits, bypassing this source's own
+    /// staleness gate.
+    ///
+    /// ``currentSnapshot()`` throws ``ClaudeStatsError/staleQuotaSource(age:)``
+    /// whole — a stale account-wide window and a stale scoped row are thrown
+    /// out together, which is right for the two main bars (a wrong percentage
+    /// is worse than none) but wrong for ``FreshestQuotaProvider``'s graft: it
+    /// wants ``CachedUtilizationReader``'s scoped rows even when that source's
+    /// windows are too old to serve as the winning snapshot, so long as the
+    /// *other* source (the statusline hook) is covering the account-wide
+    /// numbers. Default implementation just reads them off ``currentSnapshot()``,
+    /// which is correct for a source with no separate staleness gate to bypass
+    /// (``StatuslineCacheReader`` never populates ``QuotaSnapshot/scopedWeekly``
+    /// at all, so this is `[]` there either way).
+    func currentScopedWeekly() async throws -> [QuotaScopedLimit]
+
     /// Discards whatever on-disk or cached state backs this source, so the next
     /// ``currentSnapshot()`` reflects only data written after this call.
     ///
@@ -25,6 +41,12 @@ public protocol QuotaProviding: Sendable {
     /// state is discarded — another composed source may still produce a
     /// reading on the next call.
     func clearCache() throws
+}
+
+extension QuotaProviding {
+    public func currentScopedWeekly() async throws -> [QuotaScopedLimit] {
+        try await currentSnapshot().scopedWeekly
+    }
 }
 
 /// Outcome of one promo-notice read.

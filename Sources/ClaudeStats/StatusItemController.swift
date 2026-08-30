@@ -5,8 +5,9 @@ import SwiftUI
 
 /// Owns the `NSStatusItem` and its popover.
 ///
-/// The button shows the ``MenuBarGlyph`` template image (Claude mark + two thin
-/// window bars) and is redrawn whenever ``AppModel`` publishes a new snapshot.
+/// The button shows the ``MenuBarGlyph`` template image (Claude mark + three
+/// thin window bars: 5-hour, 7-day, scoped weekly) and is redrawn whenever
+/// ``AppModel`` publishes a new snapshot.
 @MainActor
 final class StatusItemController: NSObject, NSPopoverDelegate {
     /// Diameter of the dev-build indicator dot — see ``addDevBuildIndicator``.
@@ -73,10 +74,6 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
     /// contains and renders it monochrome, so a colored dev-build marker has
     /// to live outside the image, as a real subview on the button.
     private func addDevBuildIndicator(to button: NSStatusBarButton) {
-        // The button's bounds are the menu bar's own thickness, not the drawn
-        // glyph's size — the (smaller) image is centered inside it. Anchor the
-        // dot to the image's actual corner, not the button's, so it lands on
-        // the glyph rather than in the surrounding padding.
         let bounds = button.bounds
         let imageOrigin = CGPoint(
             x: (bounds.width - MenuBarGlyph.width) / 2,

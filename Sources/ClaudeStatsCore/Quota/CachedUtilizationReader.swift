@@ -27,11 +27,22 @@ import Foundation
 /// }
 /// ```
 ///
-/// The two typed windows are the source for the two bars. `limits[]` carries
-/// the same numbers again in a flat, scoped form (`session` == `five_hour`,
-/// `weekly_all` == `seven_day`) and is left for the scoped-bar work; nothing
-/// here reads it. `accountUuid` is carried by the payload but unused — there is
-/// nothing on this side to compare it against.
+/// The two typed windows are the source for the two main bars. `limits[]`
+/// restates those same numbers in a flat form (`session` == `five_hour`,
+/// `weekly_all` == `seven_day`) — both kinds are deliberately skipped here, so
+/// they can't duplicate or shadow the typed fields. Only its `weekly_scoped`
+/// entries are read, each becoming a ``QuotaScopedLimit`` labelled from
+/// `scope.model.display_name`:
+///
+/// ```json
+/// { "kind": "weekly_scoped", "group": "weekly", "percent": 0, "severity": "normal",
+///   "resets_at": null, "is_active": false,
+///   "scope": { "model": { "id": null, "display_name": "Fable" }, "surface": null } }
+/// ```
+///
+/// What that `percent` is a share of is **not** documented — see
+/// ``QuotaScopedLimit``. `accountUuid` is carried by the payload but unused —
+/// there is nothing on this side to compare it against.
 ///
 /// ## Staleness: 30 minutes, not the statusline's 10
 ///
@@ -74,6 +85,54 @@ public struct CachedUtilizationReader: QuotaProviding {
     }
 
     public func currentSnapshot() async throws -> QuotaSnapshot {
+        let (cached, utilization) = try loadUtilization()
+
+        guard let windows = QuotaJSON.windows(in: utilization) else {
+            throw ClaudeStatsError.noQuotaSourceAvailable
+        }
+
+        // No fallback to the file's mtime, let alone to `now()`: Claude Code
+        // rewrites `~/.claude.json` constantly for unrelated keys, so its mtime
+        // would report a months-old reading as seconds fresh. `fetchedAtMs` is
+        // the only honest age signal here, and without it the age is unknown.
+        guard let capturedAt = QuotaJSON.capturedAtKeys.lazy
+            .compactMap({ QuotaJSON.date(cached[$0]) }).first
+        else {
+            throw ClaudeStatsError.noQuotaSourceAvailable
+        }
+
+        let snapshot = QuotaSnapshot(
+            fiveHour: windows.fiveHour,
+            sevenDay: windows.sevenDay,
+            confidence: .cachedOfficial,
+            capturedAt: capturedAt,
+            scopedWeekly: QuotaJSON.scopedLimits(in: utilization)
+        )
+
+        guard !snapshot.isStale(asOf: now(), threshold: stalenessThreshold) else {
+            throw ClaudeStatsError.staleQuotaSource(age: snapshot.age(asOf: now()))
+        }
+        return snapshot
+    }
+
+    /// Same payload as ``currentSnapshot()``, but never gated on staleness.
+    ///
+    /// See the protocol doc on ``QuotaProviding/currentScopedWeekly()`` for
+    /// why: ``FreshestQuotaProvider`` wants this source's scoped rows even
+    /// when its windows are too old to win the freshness compare, so a stale
+    /// `cachedUsageUtilization` blob doesn't have to take the scoped bars down
+    /// along with it while the statusline hook keeps the account-wide numbers
+    /// current.
+    public func currentScopedWeekly() async throws -> [QuotaScopedLimit] {
+        let (_, utilization) = try loadUtilization()
+        return QuotaJSON.scopedLimits(in: utilization)
+    }
+
+    /// Loads and unwraps `cachedUsageUtilization.utilization`, common to both
+    /// ``currentSnapshot()`` and ``currentScopedWeekly()``. Neither the
+    /// windows nor `fetchedAtMs` are required here — callers that need them
+    /// check separately, since ``currentScopedWeekly()`` doesn't.
+    private func loadUtilization() throws -> (cached: [String: Any], utilization: [String: Any]) {
         let root: [String: Any]
         // No fingerprint: a quota poll always wants the current numbers, and
         // the unchanged-since gate has nothing to hand back if it fires.
@@ -98,33 +157,11 @@ public struct CachedUtilizationReader: QuotaProviding {
         // not a fault: the key is absent on machines that have never had a
         // rate-limited response.
         guard let cached = QuotaJSON.object(root[Self.cachedUtilizationKey]),
-            let utilization = QuotaJSON.object(cached[Self.utilizationKey]),
-            let windows = QuotaJSON.windows(in: utilization)
+            let utilization = QuotaJSON.object(cached[Self.utilizationKey])
         else {
             throw ClaudeStatsError.noQuotaSourceAvailable
         }
-
-        // No fallback to the file's mtime, let alone to `now()`: Claude Code
-        // rewrites `~/.claude.json` constantly for unrelated keys, so its mtime
-        // would report a months-old reading as seconds fresh. `fetchedAtMs` is
-        // the only honest age signal here, and without it the age is unknown.
-        guard let capturedAt = QuotaJSON.capturedAtKeys.lazy
-            .compactMap({ QuotaJSON.date(cached[$0]) }).first
-        else {
-            throw ClaudeStatsError.noQuotaSourceAvailable
-        }
-
-        let snapshot = QuotaSnapshot(
-            fiveHour: windows.fiveHour,
-            sevenDay: windows.sevenDay,
-            confidence: .cachedOfficial,
-            capturedAt: capturedAt
-        )
-
-        guard !snapshot.isStale(asOf: now(), threshold: stalenessThreshold) else {
-            throw ClaudeStatsError.staleQuotaSource(age: snapshot.age(asOf: now()))
-        }
-        return snapshot
+        return (cached, utilization)
     }
 
     /// Deliberately does nothing.

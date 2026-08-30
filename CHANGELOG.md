@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+### Added
+- Per-model weekly limits. Claude Code's cached usage payload carries scoped
+  weekly sub-limits alongside the two account-wide windows
+  (`utilization.limits[]`), and each one now gets its own popover row —
+  `Fable (weekly)`, labelled straight from the payload, so a model that turns
+  up tomorrow needs no update. The menu bar glyph gets a third bar for the
+  highest of them, always drawn — same as the other two, empty when there's
+  nothing to show. Entirely as reported: 0% shows as 0%, no countdown appears
+  when the payload gives no reset time, and neither the row nor its tooltip
+  claims what the percentage is a share of — that is undocumented, and
+  guessing at a denominator would be inventing a number.
+
+### Changed
+- The promo notice's link now uses Claude's own terracotta instead of the
+  system accent colour, which followed the OS accent and read as an unrelated
+  system affordance rather than Claude's own promo.
+- Promo notices sit in a little more vertical space, and the popover's shared
+  label column widened from 84 pt to 92 pt to fit per-model weekly row labels
+  without wrapping.
+
 ## [0.9.6] - 2026-08-30
 
 ### Changed
