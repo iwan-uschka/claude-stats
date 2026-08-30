@@ -35,7 +35,7 @@ Full architecture and data-source design: see [AGENTS.md](AGENTS.md).
 Code's own cached rate-limit numbers out of `~/.claude.json`, which it writes
 for itself — tagged `official (cached)` in the freshness line. Run Claude Code
 once and the bars fill in. Claude Code refreshes that cache on its own
-schedule, so a reading can be several minutes old; anything older than 30
+schedule, so a reading can be an hour or more old; anything older than 60
 minutes is treated as stale.
 
 **Optional: sharper freshness.** Claude Code's `statusLine` feature emits the

@@ -182,7 +182,8 @@ final class AppModel: ObservableObject {
                 // the error carries: a stale number beats no number, the same
                 // principle `FreshestQuotaProvider` already applies internally.
                 self.quotaWarning = error.localizedDescription
-                if self.snapshot == nil, case .staleQuotaSource(let snapshot, _) = error {
+                if case .staleQuotaSource(let snapshot, _) = error,
+                   self.snapshot == nil || self.snapshot!.capturedAt < snapshot.capturedAt {
                     self.snapshot = snapshot
                 }
                 self.quotaError = nil

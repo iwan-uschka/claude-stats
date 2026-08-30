@@ -80,7 +80,15 @@ public struct FreshestQuotaProvider: QuotaProviding {
         case (.failure, .success(let cached)):
             return cached
         case (.failure(let hookError), .failure(let cachedError)):
-            throw Self.combined(hookError, cachedError)
+            var error = Self.combined(hookError, cachedError)
+            // Best effort, same rationale as the `(.success, .failure)` case
+            // above: a stale reading with no scoped rows of its own can still
+            // graft `cachedState`'s, which carries no separate freshness gate.
+            if case .staleQuotaSource(var snapshot, let age) = error, snapshot.scopedWeekly.isEmpty {
+                snapshot.scopedWeekly = (try? await cachedState.currentScopedWeekly()) ?? []
+                error = .staleQuotaSource(snapshot: snapshot, age: age)
+            }
+            throw error
         }
     }
 

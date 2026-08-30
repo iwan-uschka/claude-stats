@@ -209,7 +209,8 @@ struct PopoverView: View {
         )
         // Each source has its own cadence: the statusline hook fires per
         // render (~10 min), Claude Code refreshes its cached blob on a much
-        // slower schedule (~30 min) — one threshold would mislabel the other.
+        // slower schedule (~60 min, sometimes hours) — one threshold would
+        // mislabel the other.
         let threshold: TimeInterval = switch snapshot.confidence {
         case .official: QuotaSnapshot.defaultStalenessThreshold
         case .cachedOfficial: CachedUtilizationReader.defaultStalenessThreshold
