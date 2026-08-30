@@ -198,6 +198,102 @@ enum QuotaJSON {
         return sorted.filter { seenLabels.insert($0.label.lowercased()).inserted }
     }
 
+    // MARK: - Usage credits (`spend` + `extra_usage`)
+
+    /// Percentage key spellings for the `spend` object — flat `percent`, like a
+    /// `limits[]` entry, but spelled out separately so the two can't drift.
+    static let spendPercentKeys = ["percent", "percent_used", "percentUsed"]
+
+    /// Money in minor units: `{ "amount_minor": 3300, "currency": "EUR", "exponent": 2 }`.
+    ///
+    /// `exponent` defaults to 2 when absent (every currency seen so far), and a
+    /// value outside 0...6 rejects the amount rather than being clamped — a
+    /// nonsense exponent means the whole reading is untrustworthy, and a wrong
+    /// number here is money off by a factor of ten.
+    static func money(_ value: Any?) -> MoneyAmount? {
+        guard let dict = object(value) else { return nil }
+        guard let minor = double(dict["amount_minor"] ?? dict["amountMinor"]) else { return nil }
+        guard let currency = name(dict["currency"]) else { return nil }
+        let exponent = Int(double(dict["exponent"]) ?? 2)
+        guard (0...6).contains(exponent) else { return nil }
+        return MoneyAmount(
+            amountMinor: Int(minor.rounded()),
+            currency: currency.uppercased(),
+            exponent: exponent
+        )
+    }
+
+    /// Reads `utilization.spend`, vetoed by `utilization.extra_usage`.
+    ///
+    /// **Not** part of the `limits[]` walk: `spend` is its own object with its
+    /// own shape (money, not a percentage with a scope), so it gets its own
+    /// path rather than being bent through ``scopedLimit(_:)``.
+    ///
+    /// ```json
+    /// "spend": {
+    ///   "used":  { "amount_minor": 0,    "currency": "EUR", "exponent": 2 },
+    ///   "limit": { "amount_minor": 3300, "currency": "EUR", "exponent": 2 },
+    ///   "percent": 0, "severity": "normal", "enabled": true, "disabled_reason": null
+    /// },
+    /// "extra_usage": {
+    ///   "is_enabled": true, "monthly_limit": 3300, "used_credits": 0,
+    ///   "spend_limit_reached": false, "user_disabled": false, "disabled_reason": null
+    /// }
+    /// ```
+    ///
+    /// Every unmet condition yields no credits — never a partial bar, never a
+    /// throw. In order:
+    ///
+    /// 1. `extra_usage` **vetoes first**. `is_enabled: false` or
+    ///    `user_disabled: true` means credits are off for this org/user, and
+    ///    `spend` is then a leftover that can still describe the old cap. (The
+    ///    2026-08-27 payload is exactly that shape with no `spend` at all.)
+    /// 2. `spend.enabled` must be explicitly `true`.
+    /// 3. `spend.percent` must be present — a missing percentage is not 0%,
+    ///    same principle as ``window(_:)``.
+    /// 4. `used` and `limit` must both parse **and agree on the currency**;
+    ///    two currencies in one bar can't be rendered as one spend figure.
+    ///
+    /// A `disabled_reason` from either object rides along on the result even
+    /// when there are no credits, for the tooltip — see ``UsageCreditsReading``.
+    static func usageCredits(in utilization: [String: Any]) -> UsageCreditsReading {
+        let spend = nestedObject(in: utilization, keys: ["spend"])
+        let extra = nestedObject(in: utilization, keys: ["extra_usage", "extraUsage"])
+        let reason = [spend?["disabled_reason"], spend?["disabledReason"],
+                      extra?["disabled_reason"], extra?["disabledReason"]]
+            .lazy.compactMap { name($0) }.first
+        let unavailable = UsageCreditsReading(credits: nil, disabledReason: reason)
+
+        if let extra {
+            let isEnabled = bool(extra["is_enabled"]) ?? bool(extra["isEnabled"])
+            let userDisabled = bool(extra["user_disabled"]) ?? bool(extra["userDisabled"])
+            if isEnabled == false || userDisabled == true { return unavailable }
+        }
+
+        guard let spend, bool(spend["enabled"]) == true else { return unavailable }
+        guard let percent = spendPercentKeys.lazy.compactMap({ double(spend[$0]) }).first else {
+            return unavailable
+        }
+        guard let used = money(spend["used"]), let limit = money(spend["limit"]),
+            used.currency == limit.currency
+        else { return unavailable }
+
+        return UsageCreditsReading(
+            credits: UsageCredits(
+                used: used,
+                limit: limit,
+                percentUsed: percent,
+                severity: name(spend["severity"]),
+                limitReached: extra.flatMap {
+                    bool($0["spend_limit_reached"]) ?? bool($0["spendLimitReached"])
+                } ?? false
+            ),
+            // A reason alongside live credits would be stale by definition —
+            // whatever disabled them, they are on now.
+            disabledReason: nil
+        )
+    }
+
     /// Extracts both windows from a container that holds `five_hour` /
     /// `seven_day` either directly or nested under a wrapper key.
     ///

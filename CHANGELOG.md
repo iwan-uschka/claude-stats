@@ -3,6 +3,25 @@
 ## [Unreleased]
 
 ### Added
+- Organisation usage credits. Claude Code's cached usage payload grew a `spend`
+  object (and a sibling `extra_usage` one) carrying the extra-usage spend as
+  actual money, and accounts that have credits enabled now get a fourth row in
+  the popover — `Usage credits ▨▨░░░░ €0.00 of €33.00` — plus a fourth, hatched
+  bar in the menu bar glyph. The hatch marks it as a different kind of
+  measurement: money against a monthly cap, not a rate-limit window. Money is
+  formatted from the payload's own currency and decimal places, so an account
+  billed in a zero-decimal currency reads correctly rather than 100× too small,
+  and the value column shows the amounts rather than a percentage — 0% of an
+  unstated budget says nothing. The cap is monthly and the payload reports no
+  reset time for it, so the countdown column stays empty.
+- Credits are transient, and their absence is the normal state, not an error:
+  no credits means no row and no fourth bar — no placeholder, no warning,
+  nothing in the error list — and the glyph goes back to three bars. Every
+  unmet condition in the payload (credits switched off, a stale `spend` an
+  admin has since disabled, a missing percentage, two currencies that disagree)
+  produces no row rather than a half-filled one. The one thing ever said about
+  their absence is the payload's own `disabled_reason`, as a tooltip on the
+  freshness line.
 - Per-model weekly limits. Claude Code's cached usage payload carries scoped
   weekly sub-limits alongside the two account-wide windows
   (`utilization.limits[]`), and each one now gets its own popover row —

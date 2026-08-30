@@ -69,9 +69,10 @@ struct PopoverView: View {
                 ForEach(snapshot.scopedWeekly) { limit in
                     scopedWeeklyRow(limit)
                 }
-                Text(sourceTag(for: snapshot))
-                    .font(PopoverMetrics.captionFont)
-                    .foregroundStyle(.secondary)
+                if let credits = snapshot.usageCredits {
+                    usageCreditsRow(credits)
+                }
+                sourceTagLine(for: snapshot)
                 if let warning = model.quotaWarning {
                     Text(warning)
                         .font(PopoverMetrics.captionFont)
@@ -129,6 +130,73 @@ struct PopoverView: View {
             showsPendingResetPlaceholder: false
         )
         .help("Claude Code's own scoped weekly limit for \(limit.label), reported exactly as it comes from Claude Code. What the percentage is measured against is not documented.")
+    }
+
+    /// Organisation usage credits: money spent against a monthly cap, not a
+    /// rate-limit window — hence the hatched bar, which marks it as a different
+    /// kind of measurement rather than a fourth window.
+    ///
+    /// The value column shows money, not the percentage: `0%` of an unstated
+    /// budget says nothing, where `€0.00 of €33.00` says both. It is formatted
+    /// from the payload's own `currency` and `exponent` (see
+    /// ``DisplayFormat/money(_:locale:)``) — never a hardcoded symbol or a
+    /// hardcoded divide by 100, which would be silently wrong for an org billed
+    /// in a zero-decimal currency.
+    ///
+    /// The countdown column is empty because the payload reports no rollover
+    /// timestamp for the monthly cap; the value spans both trailing columns
+    /// instead, so it still ends flush with the countdowns above it.
+    ///
+    /// There is no absent-credits branch anywhere: no credits means no row —
+    /// see ``UsageCredits`` on why that is the normal state and not an error.
+    private func usageCreditsRow(_ credits: UsageCredits) -> some View {
+        HStack(spacing: PopoverMetrics.rowSpacing) {
+            Text("Usage credits")
+                .font(PopoverMetrics.bodyFont)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(width: PopoverMetrics.labelColumnWidth, alignment: .leading)
+
+            UsageBar(fraction: credits.window.fractionUsed, fillStyle: .hatched)
+                .frame(minWidth: 48)
+
+            Text(DisplayFormat.moneySpend(used: credits.used, limit: credits.limit))
+                .font(PopoverMetrics.valueFont)
+                .frame(width: PopoverMetrics.percentAndCountdownColumnWidth, alignment: .trailing)
+        }
+        .accessibilityElement(children: .combine)
+        .help(usageCreditsHelp(credits))
+    }
+
+    private func usageCreditsHelp(_ credits: UsageCredits) -> String {
+        var text = "Extra usage credits for this month, as Claude Code reports them:"
+            + " \(DisplayFormat.moneySpend(used: credits.used, limit: credits.limit)) spent"
+            + " of the monthly limit. The cap is monthly and the payload reports no"
+            + " reset time for it, so there is no countdown."
+        if credits.limitReached {
+            text += " The monthly limit has been reached — extra usage is paused until it resets."
+        }
+        return text
+    }
+
+    /// The freshness tag, carrying the `disabled_reason` tooltip when there is
+    /// one.
+    ///
+    /// That reason has nowhere else to go: with no credits there is no credits
+    /// row to hang it on, and it must not become an error line — "credits are
+    /// off" is a normal configuration, not a fault. `.help` is only attached
+    /// when a reason exists, so the tag never shows an empty tooltip.
+    @ViewBuilder
+    private func sourceTagLine(for snapshot: QuotaSnapshot) -> some View {
+        let tag = Text(sourceTag(for: snapshot))
+            .font(PopoverMetrics.captionFont)
+            .foregroundStyle(.secondary)
+
+        if snapshot.usageCredits == nil, let reason = snapshot.usageCreditsDisabledReason {
+            tag.help("Usage credits aren't being reported for this account: \(reason)")
+        } else {
+            tag
+        }
     }
 
     /// Claude Code's own promo line for a bar, with any URL in it clickable.
@@ -408,6 +476,23 @@ struct PopoverView: View {
 
 #Preview("Popover — promo notice, no quota source") {
     PopoverView(model: .previewPromoNoticeWithoutQuota(), clock: PopoverClock())
+}
+
+#Preview("Popover — usage credits") {
+    PopoverView(model: .previewUsageCredits(), clock: PopoverClock())
+}
+
+#Preview("Popover — usage credits, limit reached") {
+    PopoverView(
+        model: .previewUsageCredits(credits: UsageCredits(
+            used: MoneyAmount(amountMinor: 3_300, currency: "EUR", exponent: 2),
+            limit: MoneyAmount(amountMinor: 3_300, currency: "EUR", exponent: 2),
+            percentUsed: 100,
+            severity: "critical",
+            limitReached: true
+        )),
+        clock: PopoverClock()
+    )
 }
 
 #Preview("Popover — 24h breakdown") {

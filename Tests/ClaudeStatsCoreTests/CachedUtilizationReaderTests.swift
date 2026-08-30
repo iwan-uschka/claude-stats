@@ -49,9 +49,11 @@ final class CachedUtilizationReaderTests: XCTestCase {
 
     /// The payload as it actually appears on a real machine, trimmed only of
     /// the unrelated top-level keys (`projects`, `userID`, …). Keys this reader
-    /// deliberately ignores — `spend`, `accountUuid`, the null scoped windows,
-    /// and the `session` / `weekly_all` entries of `limits[]` — are kept, so a
-    /// future reader for them can't quietly change what this one sees.
+    /// deliberately ignores — `accountUuid`, the null scoped windows, and the
+    /// `session` / `weekly_all` entries of `limits[]` — are kept, so a future
+    /// reader for them can't quietly change what this one sees. No `spend` /
+    /// `extra_usage` here: those have their own fixtures below, and this one
+    /// doubles as the "payload with no usage credits" case.
     private func stateFile(fetchedAt: Date) -> String {
         """
         {
@@ -401,6 +403,264 @@ final class CachedUtilizationReaderTests: XCTestCase {
 
         let scopedWeekly = try await makeReader().currentScopedWeekly()
         XCTAssertEqual(scopedWeekly.map(\.label), ["Fable"])
+    }
+
+    // MARK: - Usage credits
+
+    /// A state file whose `utilization` carries `extras` (a `spend` and/or
+    /// `extra_usage` object) alongside the two windows, fetched a minute ago.
+    private func stateFile(extras: String) -> String {
+        """
+        {
+          "cachedUsageUtilization": {
+            "fetchedAtMs": \(Int(now.timeIntervalSince1970 * 1000) - 60_000),
+            "utilization": {
+              "five_hour": { "utilization": 11, "resets_at": "2026-08-28T16:50:00.401807+00:00" },
+              "seven_day": { "utilization": 97, "resets_at": "2026-08-28T23:00:00.401826+00:00" },
+              \(extras)
+            }
+          }
+        }
+        """
+    }
+
+    /// `spend` + `extra_usage` verbatim as observed on 2026-08-28: credits on,
+    /// nothing spent against a €33 monthly cap.
+    private let spendAndExtraUsage = """
+        "spend": {
+          "used":  { "amount_minor": 0, "currency": "EUR", "exponent": 2 },
+          "limit": { "amount_minor": 3300, "currency": "EUR", "exponent": 2 },
+          "percent": 0, "severity": "normal", "enabled": true, "disabled_reason": null
+        },
+        "extra_usage": {
+          "is_enabled": true, "monthly_limit": 3300, "used_credits": 0,
+          "currency": "EUR", "decimal_places": 2, "utilization": null,
+          "disabled_reason": null, "user_disabled": false, "spend_limit_reached": false,
+          "credits_ever_enabled": true, "daily": null, "weekly": null
+        }
+        """
+
+    func testRealSpendPayloadBecomesUsageCredits() async throws {
+        try write(stateFile(extras: spendAndExtraUsage))
+
+        let snapshot = try await makeReader().currentSnapshot()
+        let credits = try XCTUnwrap(snapshot.usageCredits)
+
+        XCTAssertEqual(credits.used, MoneyAmount(amountMinor: 0, currency: "EUR", exponent: 2))
+        XCTAssertEqual(credits.limit, MoneyAmount(amountMinor: 3_300, currency: "EUR", exponent: 2))
+        // 0% is reported as 0%, exactly like a scoped limit.
+        XCTAssertEqual(credits.percentUsed, 0)
+        XCTAssertEqual(credits.severity, "normal")
+        XCTAssertFalse(credits.limitReached)
+        // Money, from the payload's own currency and exponent.
+        XCTAssertEqual(
+            DisplayFormat.moneySpend(
+                used: credits.used, limit: credits.limit, locale: Locale(identifier: "en_US")
+            ),
+            "€0.00 of €33.00"
+        )
+        // No rollover timestamp in the payload, so no countdown.
+        XCTAssertNil(credits.window.resetsAt)
+    }
+
+    /// The day before the `spend` object appeared: no `spend` key at all, and
+    /// an `extra_usage` that says credits are off. Absence, not an error.
+    func testPayloadWithoutSpendYieldsNoUsageCredits() async throws {
+        try write(stateFile(extras: """
+            "extra_usage": {
+              "is_enabled": false, "monthly_limit": null, "used_credits": null,
+              "user_disabled": true, "credits_ever_enabled": true, "disabled_reason": null
+            }
+            """))
+
+        let snapshot = try await makeReader().currentSnapshot()
+
+        XCTAssertNil(snapshot.usageCredits)
+        XCTAssertNil(snapshot.usageCreditsDisabledReason)
+        // The rest of the reading is untouched by the absence.
+        XCTAssertEqual(snapshot.fiveHour.percentUsed, 11)
+    }
+
+    func testDisabledSpendYieldsNoUsageCredits() async throws {
+        try write(stateFile(extras: """
+            "spend": {
+              "used":  { "amount_minor": 0, "currency": "EUR", "exponent": 2 },
+              "limit": { "amount_minor": 3300, "currency": "EUR", "exponent": 2 },
+              "percent": 0, "severity": "normal", "enabled": false, "disabled_reason": null
+            }
+            """))
+
+        let snapshot = try await makeReader().currentSnapshot()
+        XCTAssertNil(snapshot.usageCredits)
+    }
+
+    /// `spend` can outlive the credits it describes, so `extra_usage` gets the
+    /// veto: a user-disabled account has no credits row even with a populated,
+    /// enabled `spend`.
+    func testUserDisabledExtraUsageVetoesAPopulatedSpend() async throws {
+        try write(stateFile(extras: """
+            "spend": {
+              "used":  { "amount_minor": 500, "currency": "EUR", "exponent": 2 },
+              "limit": { "amount_minor": 3300, "currency": "EUR", "exponent": 2 },
+              "percent": 15, "severity": "normal", "enabled": true, "disabled_reason": null
+            },
+            "extra_usage": { "is_enabled": true, "user_disabled": true, "spend_limit_reached": false }
+            """))
+
+        let snapshot = try await makeReader().currentSnapshot()
+        XCTAssertNil(snapshot.usageCredits)
+    }
+
+    func testDisabledExtraUsageVetoesAPopulatedSpend() async throws {
+        try write(stateFile(extras: """
+            "spend": {
+              "used":  { "amount_minor": 500, "currency": "EUR", "exponent": 2 },
+              "limit": { "amount_minor": 3300, "currency": "EUR", "exponent": 2 },
+              "percent": 15, "enabled": true
+            },
+            "extra_usage": { "is_enabled": false, "user_disabled": false }
+            """))
+
+        let snapshot = try await makeReader().currentSnapshot()
+        XCTAssertNil(snapshot.usageCredits)
+    }
+
+    /// Two currencies can't be rendered as one spend figure, and half a figure
+    /// would be worse than none.
+    func testMismatchedCurrenciesYieldNoUsageCredits() async throws {
+        try write(stateFile(extras: """
+            "spend": {
+              "used":  { "amount_minor": 500, "currency": "USD", "exponent": 2 },
+              "limit": { "amount_minor": 3300, "currency": "EUR", "exponent": 2 },
+              "percent": 15, "enabled": true
+            }
+            """))
+
+        let snapshot = try await makeReader().currentSnapshot()
+        XCTAssertNil(snapshot.usageCredits)
+    }
+
+    /// Same principle as ``QuotaJSON/window(_:)``: a missing percentage is not
+    /// 0%.
+    func testSpendWithoutPercentYieldsNoUsageCredits() async throws {
+        try write(stateFile(extras: """
+            "spend": {
+              "used":  { "amount_minor": 0, "currency": "EUR", "exponent": 2 },
+              "limit": { "amount_minor": 3300, "currency": "EUR", "exponent": 2 },
+              "severity": "normal", "enabled": true
+            }
+            """))
+
+        let snapshot = try await makeReader().currentSnapshot()
+        XCTAssertNil(snapshot.usageCredits)
+    }
+
+    func testMissingAmountOrCurrencyYieldsNoUsageCredits() async throws {
+        try write(stateFile(extras: """
+            "spend": {
+              "used":  { "currency": "EUR", "exponent": 2 },
+              "limit": { "amount_minor": 3300, "currency": "EUR", "exponent": 2 },
+              "percent": 0, "enabled": true
+            }
+            """))
+        let withoutAmount = try await makeReader().currentSnapshot()
+        XCTAssertNil(withoutAmount.usageCredits)
+
+        try write(stateFile(extras: """
+            "spend": {
+              "used":  { "amount_minor": 0, "exponent": 2 },
+              "limit": { "amount_minor": 3300, "currency": "EUR", "exponent": 2 },
+              "percent": 0, "enabled": true
+            }
+            """))
+        let withoutCurrency = try await makeReader().currentSnapshot()
+        XCTAssertNil(withoutCurrency.usageCredits)
+    }
+
+    /// A zero-decimal currency: `exponent: 0` means the minor units are whole
+    /// yen, and the formatted string carries no decimals.
+    func testZeroDecimalCurrencyKeepsItsExponent() async throws {
+        try write(stateFile(extras: """
+            "spend": {
+              "used":  { "amount_minor": 1200, "currency": "JPY", "exponent": 0 },
+              "limit": { "amount_minor": 50000, "currency": "JPY", "exponent": 0 },
+              "percent": 2.4, "severity": "normal", "enabled": true
+            },
+            "extra_usage": { "is_enabled": true, "user_disabled": false }
+            """))
+
+        let snapshot = try await makeReader().currentSnapshot()
+        let credits = try XCTUnwrap(snapshot.usageCredits)
+
+        XCTAssertEqual(credits.used.exponent, 0)
+        XCTAssertEqual(credits.percentUsed, 2.4)
+        XCTAssertEqual(
+            DisplayFormat.moneySpend(
+                used: credits.used, limit: credits.limit, locale: Locale(identifier: "en_US")
+            ),
+            "¥1,200 of ¥50,000"
+        )
+    }
+
+    func testSpendLimitReachedIsCarriedThrough() async throws {
+        try write(stateFile(extras: """
+            "spend": {
+              "used":  { "amount_minor": 3300, "currency": "EUR", "exponent": 2 },
+              "limit": { "amount_minor": 3300, "currency": "EUR", "exponent": 2 },
+              "percent": 100, "severity": "critical", "enabled": true
+            },
+            "extra_usage": {
+              "is_enabled": true, "user_disabled": false, "spend_limit_reached": true
+            }
+            """))
+
+        let snapshot = try await makeReader().currentSnapshot()
+        let credits = try XCTUnwrap(snapshot.usageCredits)
+
+        XCTAssertTrue(credits.limitReached)
+        XCTAssertEqual(credits.severity, "critical")
+        XCTAssertEqual(credits.window.fractionUsed, 1)
+    }
+
+    /// Decoration for a tooltip, never an error — and only while there are no
+    /// credits to show.
+    func testDisabledReasonIsCarriedWhenCreditsAreAbsent() async throws {
+        try write(stateFile(extras: """
+            "extra_usage": {
+              "is_enabled": false, "user_disabled": false,
+              "disabled_reason": "billing_not_configured"
+            }
+            """))
+
+        let snapshot = try await makeReader().currentSnapshot()
+
+        XCTAssertNil(snapshot.usageCredits)
+        XCTAssertEqual(snapshot.usageCreditsDisabledReason, "billing_not_configured")
+    }
+
+    func testDisabledReasonIsDroppedWhenCreditsArePresent() async throws {
+        try write(stateFile(extras: spendAndExtraUsage))
+
+        let snapshot = try await makeReader().currentSnapshot()
+
+        XCTAssertNotNil(snapshot.usageCredits)
+        XCTAssertNil(snapshot.usageCreditsDisabledReason)
+    }
+
+    /// The credits half of ``testCurrentScopedWeeklyBypassesTheStalenessGate``:
+    /// a month-to-date spend total an hour behind is still the right number.
+    func testCurrentUsageCreditsBypassesTheStalenessGate() async throws {
+        try write(stateFile(extras: spendAndExtraUsage).replacingOccurrences(
+            of: "\(Int(now.timeIntervalSince1970 * 1000) - 60_000)",
+            with: "\(Int(now.timeIntervalSince1970 * 1000) - 3_601_000)"
+        ))
+
+        await assertThrowsStale(age: 3_601) {
+            try await self.makeReader().currentSnapshot()
+        }
+
+        let reading = try await makeReader().currentUsageCredits()
+        XCTAssertEqual(reading.credits?.limit.amountMinor, 3_300)
     }
 
     // MARK: - Staleness

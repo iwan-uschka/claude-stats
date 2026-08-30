@@ -306,6 +306,49 @@ final class AppModelTests: XCTestCase {
         XCTAssertNotNil(model.snapshot)
     }
 
+    // MARK: - Usage credits
+
+    /// The statusline payload has no `spend` object at all, so a poll served by
+    /// that source alone simply has no credits — and that is silence, not an
+    /// error. ``MockQuotaProvider/sampleSnapshot(now:)`` is deliberately
+    /// creditless for the same reason.
+    func testStatuslineOnlySnapshotCarriesNoUsageCredits() async {
+        let provider = ScriptedQuotaProvider()
+        await provider.setResult(.success(MockQuotaProvider.sampleSnapshot()))
+        let model = makeModel(quota: provider)
+
+        model.refresh(force: true)
+        await waitUntil { model.snapshot != nil }
+
+        XCTAssertNil(model.snapshot?.usageCredits)
+        XCTAssertNil(model.snapshot?.usageCreditsDisabledReason)
+        XCTAssertTrue(model.activeErrors.isEmpty)
+    }
+
+    /// Credits are transient — an admin can switch them off between two polls.
+    /// The row goes away and nothing else changes: no error, no warning, no
+    /// dropped snapshot.
+    func testUsageCreditsDisappearingBetweenPollsOnlyRemovesTheRow() async {
+        let provider = ScriptedQuotaProvider()
+        let now = Date()
+        await provider.setResult(.success(MockQuotaProvider.sampleSnapshotWithUsageCredits(now: now)))
+        let model = makeModel(quota: provider)
+        model.refresh(force: true)
+        await waitUntil { model.snapshot?.usageCredits != nil }
+
+        let callsBefore = await provider.callCount
+        await provider.setResult(.success(MockQuotaProvider.sampleSnapshot(now: now)))
+        model.refresh(force: true)
+        await waitUntil { await provider.callCount > callsBefore }
+        await waitUntil { model.snapshot?.usageCredits == nil }
+
+        XCTAssertNotNil(model.snapshot)
+        XCTAssertNil(model.snapshot?.usageCredits)
+        XCTAssertNil(model.quotaError)
+        XCTAssertNil(model.quotaWarning)
+        XCTAssertTrue(model.activeErrors.isEmpty)
+    }
+
     // MARK: - Promo notices
 
     private func sampleFingerprint(size: Int = 42) -> ClaudeStateFileFingerprint {

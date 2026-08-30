@@ -400,6 +400,13 @@ extension AppModel {
         )
     }
 
+    /// With organisation usage credits reported — the hatched fourth row.
+    static func previewUsageCredits(
+        credits: UsageCredits = MockQuotaProvider.sampleUsageCredits()
+    ) -> AppModel {
+        preview(snapshot: MockQuotaProvider.sampleSnapshotWithUsageCredits(credits: credits))
+    }
+
     /// Live source, but stale — quota still shown, plus a warning line.
     static func previewStaleWarning() -> AppModel {
         preview(warning: "Statusline cache is 14 minutes old.")

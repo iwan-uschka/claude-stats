@@ -155,24 +155,52 @@ public struct QuotaSnapshot: Sendable, Hashable, Codable {
     /// `limits[]`), which is why it defaults — every existing call site builds a
     /// snapshot without one.
     public var scopedWeekly: [QuotaScopedLimit]
+    /// Organisation usage credits, when the source reports them at all.
+    ///
+    /// `nil` is the normal state, not a failure — see ``UsageCredits``. Only
+    /// ``CachedUtilizationReader``'s payload carries them; the statusline hook's
+    /// has no `spend` object, so a snapshot from that source always leaves this
+    /// `nil` (``FreshestQuotaProvider`` grafts the other source's reading on,
+    /// same as it does for ``scopedWeekly``).
+    public var usageCredits: UsageCredits?
+    /// Why there are no ``usageCredits``, when the payload said so
+    /// (`disabled_reason`). Decoration for a tooltip; never an error, and
+    /// meaningless while ``usageCredits`` is non-`nil`.
+    public var usageCreditsDisabledReason: String?
 
     public init(
         fiveHour: QuotaWindow,
         sevenDay: QuotaWindow,
         confidence: QuotaConfidence,
         capturedAt: Date,
-        scopedWeekly: [QuotaScopedLimit] = []
+        scopedWeekly: [QuotaScopedLimit] = [],
+        usageCredits: UsageCredits? = nil,
+        usageCreditsDisabledReason: String? = nil
     ) {
         self.fiveHour = fiveHour
         self.sevenDay = sevenDay
         self.confidence = confidence
         self.capturedAt = capturedAt
         self.scopedWeekly = scopedWeekly
+        self.usageCredits = usageCredits
+        self.usageCreditsDisabledReason = usageCreditsDisabledReason
     }
 
-    /// Hand-written so a payload encoded before ``scopedWeekly`` existed still
-    /// decodes: Swift's synthesized `init(from:)` ignores property defaults and
-    /// would fail on the missing key.
+    /// Applies one source's usage-credits reading, credits and reason together.
+    ///
+    /// The two fields are one answer — assigning the credits without the reason
+    /// (or vice versa) leaves the snapshot claiming a reason for credits it
+    /// has — so ``FreshestQuotaProvider``'s graft goes through here rather than
+    /// touching either property directly.
+    public mutating func apply(_ reading: UsageCreditsReading) {
+        usageCredits = reading.credits
+        usageCreditsDisabledReason = reading.disabledReason
+    }
+
+    /// Hand-written so a payload encoded before ``scopedWeekly`` or
+    /// ``usageCredits`` existed still decodes: Swift's synthesized
+    /// `init(from:)` ignores property defaults and would fail on the missing
+    /// keys.
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         fiveHour = try container.decode(QuotaWindow.self, forKey: .fiveHour)
@@ -180,6 +208,10 @@ public struct QuotaSnapshot: Sendable, Hashable, Codable {
         confidence = try container.decode(QuotaConfidence.self, forKey: .confidence)
         capturedAt = try container.decode(Date.self, forKey: .capturedAt)
         scopedWeekly = try container.decodeIfPresent([QuotaScopedLimit].self, forKey: .scopedWeekly) ?? []
+        usageCredits = try container.decodeIfPresent(UsageCredits.self, forKey: .usageCredits)
+        usageCreditsDisabledReason = try container.decodeIfPresent(
+            String.self, forKey: .usageCreditsDisabledReason
+        )
     }
 
     /// Default staleness threshold for a cached statusline capture (~10 min).

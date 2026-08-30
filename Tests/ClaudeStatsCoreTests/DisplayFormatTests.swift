@@ -232,6 +232,82 @@ final class DisplayFormatTests: XCTestCase {
         XCTAssertEqual(DisplayFormat.cost(3.1), "$3.10")
     }
 
+    // MARK: - money
+    //
+    // Every case pins the locale: these assert the *currency* handling, and a
+    // machine set to de_DE would otherwise fail on `33,00 €`. The locale is a
+    // parameter precisely so the app can keep using the user's own.
+
+    private let enUS = Locale(identifier: "en_US")
+
+    func testMoneyFormatsMinorUnitsUsingTheReportedExponent() {
+        XCTAssertEqual(
+            DisplayFormat.money(MoneyAmount(amountMinor: 0, currency: "EUR", exponent: 2), locale: enUS),
+            "€0.00"
+        )
+        XCTAssertEqual(
+            DisplayFormat.money(MoneyAmount(amountMinor: 3_300, currency: "EUR", exponent: 2), locale: enUS),
+            "€33.00"
+        )
+        XCTAssertEqual(
+            DisplayFormat.money(MoneyAmount(amountMinor: 3_300, currency: "USD", exponent: 2), locale: enUS),
+            "$33.00"
+        )
+    }
+
+    /// A zero-decimal currency reports `exponent: 0`, so its minor units *are*
+    /// whole yen — dividing by a hardcoded 100 would show ¥33 for ¥3,300.
+    func testMoneyFormatsAZeroDecimalCurrencyWithoutDecimals() {
+        XCTAssertEqual(
+            DisplayFormat.money(MoneyAmount(amountMinor: 3_300, currency: "JPY", exponent: 0), locale: enUS),
+            "¥3,300"
+        )
+    }
+
+    func testMoneyGroupsLargeAmounts() {
+        XCTAssertEqual(
+            DisplayFormat.money(
+                MoneyAmount(amountMinor: 1_234_567, currency: "EUR", exponent: 2),
+                locale: enUS
+            ),
+            "€12,345.67"
+        )
+    }
+
+    /// The value column of the credits row: money on both sides, never a
+    /// percentage.
+    func testMoneySpendReadsUsedOfLimit() {
+        XCTAssertEqual(
+            DisplayFormat.moneySpend(
+                used: MoneyAmount(amountMinor: 0, currency: "EUR", exponent: 2),
+                limit: MoneyAmount(amountMinor: 3_300, currency: "EUR", exponent: 2),
+                locale: enUS
+            ),
+            "€0.00 of €33.00"
+        )
+        XCTAssertEqual(
+            DisplayFormat.moneySpend(
+                used: MoneyAmount(amountMinor: 1_200, currency: "JPY", exponent: 0),
+                limit: MoneyAmount(amountMinor: 50_000, currency: "JPY", exponent: 0),
+                locale: enUS
+            ),
+            "¥1,200 of ¥50,000"
+        )
+    }
+
+    /// The locale decides placement and separators; the payload decides the
+    /// currency and the number of decimals.
+    func testMoneyFollowsTheGivenLocalesConventions() {
+        XCTAssertEqual(
+            DisplayFormat.money(
+                MoneyAmount(amountMinor: 3_300, currency: "EUR", exponent: 2),
+                locale: Locale(identifier: "de_DE")
+            ),
+            // German puts the symbol last, behind a non-breaking space.
+            "33,00\u{00A0}€"
+        )
+    }
+
     // MARK: - percent
 
     func testPercentFromFraction() {

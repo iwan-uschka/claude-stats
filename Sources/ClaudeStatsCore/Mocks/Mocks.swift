@@ -71,6 +71,32 @@ public struct MockQuotaProvider: QuotaProviding {
             scopedWeekly: [QuotaScopedLimit(label: "Fable", percentUsed: 0)]
         )
     }
+
+    /// The `spend` object as observed on 2026-08-28: credits on, nothing spent
+    /// yet against a €33 monthly cap.
+    public static func sampleUsageCredits() -> UsageCredits {
+        UsageCredits(
+            used: MoneyAmount(amountMinor: 0, currency: "EUR", exponent: 2),
+            limit: MoneyAmount(amountMinor: 3_300, currency: "EUR", exponent: 2),
+            percentUsed: 0,
+            severity: "normal",
+            limitReached: false
+        )
+    }
+
+    /// ``sampleSnapshot(now:)`` plus usage credits.
+    ///
+    /// A separate factory rather than a field on the default sample: credits
+    /// are absent on most accounts, and the app's sample-data mode must not
+    /// invent a monthly spend cap for an account that has none.
+    public static func sampleSnapshotWithUsageCredits(
+        now: Date = Date(),
+        credits: UsageCredits = MockQuotaProvider.sampleUsageCredits()
+    ) -> QuotaSnapshot {
+        var snapshot = sampleSnapshot(now: now)
+        snapshot.usageCredits = credits
+        return snapshot
+    }
 }
 
 /// In-memory ``PromoNoticeProviding`` for previews.

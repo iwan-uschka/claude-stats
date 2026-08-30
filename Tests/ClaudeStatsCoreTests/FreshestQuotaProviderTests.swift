@@ -17,14 +17,19 @@ final class FreshestQuotaProviderTests: XCTestCase {
         /// whose ``QuotaProviding/currentScopedWeekly()`` bypasses whatever
         /// made `currentSnapshot()` itself fail.
         let scopedWeeklyResult: Result<[QuotaScopedLimit], ClaudeStatsError>?
+        /// Same idea as `scopedWeeklyResult`, for the credits half of the
+        /// staleness bypass.
+        let usageCreditsResult: Result<UsageCreditsReading, ClaudeStatsError>?
         let box = Box()
 
         init(
             _ result: Result<QuotaSnapshot, ClaudeStatsError>,
-            scopedWeekly scopedWeeklyResult: Result<[QuotaScopedLimit], ClaudeStatsError>? = nil
+            scopedWeekly scopedWeeklyResult: Result<[QuotaScopedLimit], ClaudeStatsError>? = nil,
+            usageCredits usageCreditsResult: Result<UsageCreditsReading, ClaudeStatsError>? = nil
         ) {
             self.result = result
             self.scopedWeeklyResult = scopedWeeklyResult
+            self.usageCreditsResult = usageCreditsResult
         }
 
         func currentSnapshot() async throws -> QuotaSnapshot {
@@ -38,6 +43,17 @@ final class FreshestQuotaProviderTests: XCTestCase {
             return try scopedWeeklyResult.get()
         }
 
+        func currentUsageCredits() async throws -> UsageCreditsReading {
+            guard let usageCreditsResult else {
+                let snapshot = try result.get()
+                return UsageCreditsReading(
+                    credits: snapshot.usageCredits,
+                    disabledReason: snapshot.usageCreditsDisabledReason
+                )
+            }
+            return try usageCreditsResult.get()
+        }
+
         func clearCache() throws {
             box.clearCacheCallCount += 1
         }
@@ -49,16 +65,24 @@ final class FreshestQuotaProviderTests: XCTestCase {
         _ confidence: QuotaConfidence,
         percent: Double,
         capturedAgo: TimeInterval,
-        scopedWeekly: [QuotaScopedLimit] = []
+        scopedWeekly: [QuotaScopedLimit] = [],
+        usageCredits: UsageCredits? = nil
     ) -> QuotaSnapshot {
         QuotaSnapshot(
             fiveHour: QuotaWindow(percentUsed: percent),
             sevenDay: QuotaWindow(percentUsed: percent),
             confidence: confidence,
             capturedAt: now.addingTimeInterval(-capturedAgo),
-            scopedWeekly: scopedWeekly
+            scopedWeekly: scopedWeekly,
+            usageCredits: usageCredits
         )
     }
+
+    private let credits = UsageCredits(
+        used: MoneyAmount(amountMinor: 0, currency: "EUR", exponent: 2),
+        limit: MoneyAmount(amountMinor: 3_300, currency: "EUR", exponent: 2),
+        percentUsed: 0
+    )
 
     // MARK: - Freshest wins
 
@@ -169,6 +193,69 @@ final class FreshestQuotaProviderTests: XCTestCase {
 
         XCTAssertEqual(result.confidence, .official)
         XCTAssertEqual(result.scopedWeekly, [])
+    }
+
+    /// `spend` lives only in `cachedState`'s payload, exactly like `limits[]`,
+    /// so the credits row has to survive the statusline hook winning the
+    /// freshness compare.
+    func testUsageCreditsAlwaysComeFromCachedState() async throws {
+        let statuslineWins = FreshestQuotaProvider(
+            statusline: StubProvider(.success(snapshot(.official, percent: 62, capturedAgo: 30))),
+            cachedState: StubProvider(
+                .success(snapshot(.cachedOfficial, percent: 11, capturedAgo: 900, usageCredits: credits))
+            )
+        )
+
+        let result = try await statuslineWins.currentSnapshot()
+
+        XCTAssertEqual(result.confidence, .official)
+        XCTAssertEqual(result.usageCredits, credits)
+
+        // And nothing is invented when `cachedState` reports none.
+        let noCredits = FreshestQuotaProvider(
+            statusline: StubProvider(.success(snapshot(.official, percent: 62, capturedAgo: 30))),
+            cachedState: StubProvider(.success(snapshot(.cachedOfficial, percent: 11, capturedAgo: 900)))
+        )
+        let withoutCredits = try await noCredits.currentSnapshot()
+        XCTAssertNil(withoutCredits.usageCredits)
+    }
+
+    /// The credits half of the staleness bypass: a month-to-date spend total
+    /// doesn't stop being right because the account-wide windows next to it are
+    /// an hour old.
+    func testUsageCreditsSurviveACachedStateSnapshotThatFailsOnStaleness() async throws {
+        let provider = FreshestQuotaProvider(
+            statusline: StubProvider(.success(snapshot(.official, percent: 62, capturedAgo: 30))),
+            cachedState: StubProvider(
+                .failure(.staleQuotaSource(
+                    snapshot: snapshot(.cachedOfficial, percent: 11, capturedAgo: 13_400),
+                    age: 13_400
+                )),
+                usageCredits: .success(UsageCreditsReading(credits: credits))
+            )
+        )
+
+        let result = try await provider.currentSnapshot()
+
+        XCTAssertEqual(result.confidence, .official)
+        XCTAssertEqual(result.usageCredits, credits)
+    }
+
+    /// Best-effort, like the scoped graft: a `cachedState` that can't report
+    /// credits at all leaves the row out rather than failing the poll.
+    func testMissingUsageCreditsDoesNotFailTheGraftAttempt() async throws {
+        let provider = FreshestQuotaProvider(
+            statusline: StubProvider(.success(snapshot(.official, percent: 62, capturedAgo: 30))),
+            cachedState: StubProvider(
+                .failure(.noQuotaSourceAvailable),
+                usageCredits: .failure(.noQuotaSourceAvailable)
+            )
+        )
+
+        let result = try await provider.currentSnapshot()
+
+        XCTAssertEqual(result.confidence, .official)
+        XCTAssertNil(result.usageCredits)
     }
 
     /// Same underlying reading reaching us both ways: prefer the one that was

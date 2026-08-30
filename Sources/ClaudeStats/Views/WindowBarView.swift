@@ -35,14 +35,14 @@ struct WindowBarView: View {
 
             Text(DisplayFormat.percent(percentValue: window.percentUsed))
                 .font(PopoverMetrics.valueFont)
-                .frame(width: 34, alignment: .trailing)
+                .frame(width: PopoverMetrics.percentColumnWidth, alignment: .trailing)
 
             Text(window.timeUntilReset(from: now) == nil && !showsPendingResetPlaceholder
                 ? ""
                 : DisplayFormat.resetCountdown(window.timeUntilReset(from: now)))
                 .font(PopoverMetrics.captionFont)
                 .foregroundStyle(.secondary)
-                .frame(width: 92, alignment: .trailing)
+                .frame(width: PopoverMetrics.countdownColumnWidth, alignment: .trailing)
         }
         .accessibilityElement(children: .combine)
     }

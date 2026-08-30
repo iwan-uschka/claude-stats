@@ -31,6 +31,19 @@ public protocol QuotaProviding: Sendable {
     /// at all, so this is `[]` there either way).
     func currentScopedWeekly() async throws -> [QuotaScopedLimit]
 
+    /// Best-effort usage credits, bypassing this source's own staleness gate —
+    /// the money counterpart of ``currentScopedWeekly()``, existing for exactly
+    /// the same reason.
+    ///
+    /// Only ``CachedUtilizationReader``'s payload has a `spend` object at all,
+    /// so ``FreshestQuotaProvider`` has to graft this source's reading onto
+    /// whichever snapshot wins the freshness compare — otherwise the credits row
+    /// would vanish on any account where the (creditless) statusline hook is
+    /// installed and, as usual, fresher. The default implementation reads it off
+    /// ``currentSnapshot()``, which is right for a source with no separate gate
+    /// to bypass.
+    func currentUsageCredits() async throws -> UsageCreditsReading
+
     /// Discards whatever on-disk or cached state backs this source, so the next
     /// ``currentSnapshot()`` reflects only data written after this call.
     ///
@@ -46,6 +59,14 @@ public protocol QuotaProviding: Sendable {
 extension QuotaProviding {
     public func currentScopedWeekly() async throws -> [QuotaScopedLimit] {
         try await currentSnapshot().scopedWeekly
+    }
+
+    public func currentUsageCredits() async throws -> UsageCreditsReading {
+        let snapshot = try await currentSnapshot()
+        return UsageCreditsReading(
+            credits: snapshot.usageCredits,
+            disabledReason: snapshot.usageCreditsDisabledReason
+        )
     }
 }
 
