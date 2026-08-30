@@ -300,6 +300,45 @@ final class CachedUtilizationReaderTests: XCTestCase {
         XCTAssertEqual(snapshot.scopedWeekly.map(\.label), ["Fable", "Sonnet"])
     }
 
+    /// `utilization` is the percentage's other spelling, one level up in the
+    /// same payload — ``QuotaJSON/scopedPercentKeys`` accepts both.
+    func testUtilizationSpellingIsAcceptedForScopedPercent() async throws {
+        try write(stateFile(limits: """
+            { "kind": "weekly_scoped", "utilization": 5,
+              "scope": { "model": { "display_name": "Opus" } } }
+            """))
+
+        let snapshot = try await makeReader().currentSnapshot()
+
+        XCTAssertEqual(snapshot.scopedWeekly.map(\.percentUsed), [5])
+    }
+
+    /// `kind` is trimmed and lowercased before comparison, same as the other
+    /// lenient key handling in ``QuotaJSON``.
+    func testKindMatchingIsCaseAndWhitespaceInsensitive() async throws {
+        try write(stateFile(limits: """
+            { "kind": " Weekly_Scoped ", "percent": 9,
+              "scope": { "model": { "display_name": "Opus" } } }
+            """))
+
+        let snapshot = try await makeReader().currentSnapshot()
+
+        XCTAssertEqual(snapshot.scopedWeekly.map(\.percentUsed), [9])
+    }
+
+    /// `is_active` has a camelCase fallback, same as the rest of `QuotaJSON`'s
+    /// key spellings.
+    func testCamelCaseIsActiveIsAccepted() async throws {
+        try write(stateFile(limits: """
+            { "kind": "weekly_scoped", "percent": 6, "isActive": true,
+              "scope": { "model": { "display_name": "Opus" } } }
+            """))
+
+        let snapshot = try await makeReader().currentSnapshot()
+
+        XCTAssertEqual(snapshot.scopedWeekly.first?.isActive, true)
+    }
+
     func testMissingLimitsArrayYieldsNoScopedLimits() async throws {
         try write("""
         {
@@ -313,6 +352,25 @@ final class CachedUtilizationReaderTests: XCTestCase {
         let snapshot = try await makeReader().currentSnapshot()
 
         XCTAssertEqual(snapshot.scopedWeekly, [])
+    }
+
+    /// The whole reason ``QuotaProviding/currentScopedWeekly()`` exists:
+    /// `currentSnapshot()` throws once the reading is older than the
+    /// staleness threshold, but the scoped rows in that same reading are
+    /// still worth handing to ``FreshestQuotaProvider`` when the statusline
+    /// hook is covering the account-wide numbers.
+    func testCurrentScopedWeeklyBypassesTheStalenessGate() async throws {
+        try write(stateFile(limits: fableEntry).replacingOccurrences(
+            of: "\(Int(now.timeIntervalSince1970 * 1000) - 60_000)",
+            with: "\(Int(now.timeIntervalSince1970 * 1000) - 1_801_000)"
+        ))
+
+        await assertThrows(.staleQuotaSource(age: 1_801)) {
+            try await self.makeReader().currentSnapshot()
+        }
+
+        let scopedWeekly = try await makeReader().currentScopedWeekly()
+        XCTAssertEqual(scopedWeekly.map(\.label), ["Fable"])
     }
 
     // MARK: - Staleness

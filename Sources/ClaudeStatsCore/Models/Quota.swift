@@ -132,8 +132,10 @@ public struct QuotaScopedLimit: Sendable, Hashable, Codable, Identifiable {
         self.severity = severity
     }
 
-    /// The label is the identity: one row per scope, and the payload never
-    /// repeats one.
+    /// The label is the identity: one row per scope. The payload itself can
+    /// repeat one (two surfaces reporting the same model name, say) —
+    /// `QuotaJSON.scopedLimits(in:)` is what actually enforces uniqueness,
+    /// by dropping duplicates before this type ever sees them.
     public var id: String { label }
 
     /// Adapter for the bar UI, which is written against ``QuotaWindow``.

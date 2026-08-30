@@ -85,33 +85,9 @@ public struct CachedUtilizationReader: QuotaProviding {
     }
 
     public func currentSnapshot() async throws -> QuotaSnapshot {
-        let root: [String: Any]
-        // No fingerprint: a quota poll always wants the current numbers, and
-        // the unchanged-since gate has nothing to hand back if it fires.
-        switch ClaudeStateFile.load(candidates: candidateURLs, unchangedSince: nil) {
-        case .loaded(let loaded, _):
-            root = loaded
-        case .malformed:
-            // Present but corrupt — distinct from "Claude Code has never
-            // cached a reading", and the only shape of this the user could
-            // plausibly act on.
-            throw ClaudeStatsError.unexpectedQuotaResponse(
-                "\(ClaudeConfigDirectory.stateFileName) is not a JSON object"
-            )
-        case .unavailable, .unchanged:
-            // `.unchanged` is unreachable — it is only ever returned against a
-            // previous fingerprint, and this call passes none.
-            throw ClaudeStatsError.noQuotaSourceAvailable
-        }
+        let (cached, utilization) = try loadUtilization()
 
-        // Every one of these is "Claude Code hasn't cached usage for this
-        // account yet" (a fresh install, or a plan with no rate-limit windows),
-        // not a fault: the key is absent on machines that have never had a
-        // rate-limited response.
-        guard let cached = QuotaJSON.object(root[Self.cachedUtilizationKey]),
-            let utilization = QuotaJSON.object(cached[Self.utilizationKey]),
-            let windows = QuotaJSON.windows(in: utilization)
-        else {
+        guard let windows = QuotaJSON.windows(in: utilization) else {
             throw ClaudeStatsError.noQuotaSourceAvailable
         }
 
@@ -137,6 +113,55 @@ public struct CachedUtilizationReader: QuotaProviding {
             throw ClaudeStatsError.staleQuotaSource(age: snapshot.age(asOf: now()))
         }
         return snapshot
+    }
+
+    /// Same payload as ``currentSnapshot()``, but never gated on staleness.
+    ///
+    /// See the protocol doc on ``QuotaProviding/currentScopedWeekly()`` for
+    /// why: ``FreshestQuotaProvider`` wants this source's scoped rows even
+    /// when its windows are too old to win the freshness compare, so a stale
+    /// `cachedUsageUtilization` blob doesn't have to take the scoped bars down
+    /// along with it while the statusline hook keeps the account-wide numbers
+    /// current.
+    public func currentScopedWeekly() async throws -> [QuotaScopedLimit] {
+        let (_, utilization) = try loadUtilization()
+        return QuotaJSON.scopedLimits(in: utilization)
+    }
+
+    /// Loads and unwraps `cachedUsageUtilization.utilization`, common to both
+    /// ``currentSnapshot()`` and ``currentScopedWeekly()``. Neither the
+    /// windows nor `fetchedAtMs` are required here — callers that need them
+    /// check separately, since ``currentScopedWeekly()`` doesn't.
+    private func loadUtilization() throws -> (cached: [String: Any], utilization: [String: Any]) {
+        let root: [String: Any]
+        // No fingerprint: a quota poll always wants the current numbers, and
+        // the unchanged-since gate has nothing to hand back if it fires.
+        switch ClaudeStateFile.load(candidates: candidateURLs, unchangedSince: nil) {
+        case .loaded(let loaded, _):
+            root = loaded
+        case .malformed:
+            // Present but corrupt — distinct from "Claude Code has never
+            // cached a reading", and the only shape of this the user could
+            // plausibly act on.
+            throw ClaudeStatsError.unexpectedQuotaResponse(
+                "\(ClaudeConfigDirectory.stateFileName) is not a JSON object"
+            )
+        case .unavailable, .unchanged:
+            // `.unchanged` is unreachable — it is only ever returned against a
+            // previous fingerprint, and this call passes none.
+            throw ClaudeStatsError.noQuotaSourceAvailable
+        }
+
+        // Every one of these is "Claude Code hasn't cached usage for this
+        // account yet" (a fresh install, or a plan with no rate-limit windows),
+        // not a fault: the key is absent on machines that have never had a
+        // rate-limited response.
+        guard let cached = QuotaJSON.object(root[Self.cachedUtilizationKey]),
+            let utilization = QuotaJSON.object(cached[Self.utilizationKey])
+        else {
+            throw ClaudeStatsError.noQuotaSourceAvailable
+        }
+        return (cached, utilization)
     }
 
     /// Deliberately does nothing.

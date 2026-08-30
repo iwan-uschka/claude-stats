@@ -22,64 +22,41 @@ final class MenuBarGlyphTests: XCTestCase {
 
     // MARK: - Width
 
-    func testWidthGrowsByExactlyOneBarForTheThirdBar() {
-        let two = MenuBarGlyph.width(barCount: 2)
-        let three = MenuBarGlyph.width(barCount: 3)
-
+    /// The glyph is always three bars wide — no narrower state to fall back
+    /// to, so this is the only width there is.
+    func testWidthIsAlwaysThreeBars() {
         XCTAssertEqual(
-            two,
+            MenuBarGlyph.width,
             MenuBarGlyph.markSize + MenuBarGlyph.markToBarsGap
-                + MenuBarGlyph.barWidth * 2 + MenuBarGlyph.barSpacing,
+                + MenuBarGlyph.barWidth * 3 + MenuBarGlyph.barSpacing * 2,
             accuracy: 0.001
-        )
-        XCTAssertEqual(
-            three - two,
-            MenuBarGlyph.barWidth + MenuBarGlyph.barSpacing,
-            accuracy: 0.001
-        )
-    }
-
-    /// The two-bar width is the default, so the dev-build dot and any other
-    /// caller of the bare property keep their previous geometry.
-    func testBareWidthPropertyIsTheTwoBarWidth() {
-        XCTAssertEqual(MenuBarGlyph.width, MenuBarGlyph.width(barCount: 2), accuracy: 0.001)
-    }
-
-    // MARK: - Bar count
-
-    func testBarCountIsTwoWithoutScopedLimitsAndThreeWithThem() {
-        XCTAssertEqual(MenuBarGlyph.barCount(for: nil), 2)
-        XCTAssertEqual(MenuBarGlyph.barCount(for: snapshot(scopedWeekly: [])), 2)
-        XCTAssertEqual(
-            MenuBarGlyph.barCount(for: snapshot(scopedWeekly: [
-                QuotaScopedLimit(label: "Fable", percentUsed: 0),
-            ])),
-            3
-        )
-        // However many scopes the payload carries, the glyph shows one — the
-        // popover is where the full list lives.
-        XCTAssertEqual(
-            MenuBarGlyph.barCount(for: snapshot(scopedWeekly: [
-                QuotaScopedLimit(label: "Sonnet", percentUsed: 42),
-                QuotaScopedLimit(label: "Opus", percentUsed: 12),
-                QuotaScopedLimit(label: "Fable", percentUsed: 0),
-            ])),
-            3
         )
     }
 
     // MARK: - Rendered image
 
-    func testImageIsOneBarWiderWhenASnapshotCarriesAScopedLimit() {
+    /// Same width and height whether or not the snapshot carries a scoped
+    /// limit — the third bar is always drawn, just empty when there's nothing
+    /// to show.
+    func testImageSizeDoesNotDependOnScopedLimits() {
         let plain = MenuBarGlyph.image(for: snapshot(scopedWeekly: []))
         let scoped = MenuBarGlyph.image(for: snapshot(scopedWeekly: [
             QuotaScopedLimit(label: "Fable", percentUsed: 0),
         ]))
 
-        XCTAssertEqual(plain.size.width, MenuBarGlyph.width(barCount: 2), accuracy: 0.001)
-        XCTAssertEqual(scoped.size.width, MenuBarGlyph.width(barCount: 3), accuracy: 0.001)
+        XCTAssertEqual(plain.size.width, MenuBarGlyph.width, accuracy: 0.001)
+        XCTAssertEqual(scoped.size.width, MenuBarGlyph.width, accuracy: 0.001)
+        XCTAssertEqual(plain.size.width, scoped.size.width, accuracy: 0.001)
         XCTAssertEqual(plain.size.height, MenuBarGlyph.height, accuracy: 0.001)
         XCTAssertEqual(scoped.size.height, MenuBarGlyph.height, accuracy: 0.001)
+    }
+
+    func testImageSizeDoesNotDependOnTheSnapshotBeingNil() {
+        XCTAssertEqual(
+            MenuBarGlyph.image(for: nil).size.width,
+            MenuBarGlyph.image(for: snapshot(scopedWeekly: [])).size.width,
+            accuracy: 0.001
+        )
     }
 
     /// The bar takes the highest-percentage scope, which is
@@ -91,16 +68,23 @@ final class MenuBarGlyphTests: XCTestCase {
         ]))
 
         let description = try XCTUnwrap(image.accessibilityDescription)
-        XCTAssertTrue(description.hasSuffix("62% five-hour, 31% seven-day usage, 42% Sonnet weekly"),
+        XCTAssertTrue(description.hasSuffix("62% five-hour, 31% seven-day, 42% Sonnet weekly usage"),
                       "unexpected description: \(description)")
     }
 
-    func testAccessibilityDescriptionKeepsTwoWindowsWithoutAScopedLimit() throws {
+    /// No scoped limit still names the (empty) third bar, unlabelled — the
+    /// row is always there, same as the other two.
+    func testAccessibilityDescriptionNamesAnEmptyThirdBarWithoutAScopedLimit() throws {
         let image = MenuBarGlyph.image(for: snapshot(scopedWeekly: []))
 
         let description = try XCTUnwrap(image.accessibilityDescription)
-        XCTAssertTrue(description.hasSuffix("62% five-hour, 31% seven-day usage"),
+        XCTAssertTrue(description.hasSuffix("62% five-hour, 31% seven-day, 0% weekly usage"),
                       "unexpected description: \(description)")
-        XCTAssertFalse(description.contains("weekly"))
+    }
+
+    func testAccessibilityDescriptionForANilSnapshotIsAllZero() throws {
+        let description = try XCTUnwrap(MenuBarGlyph.image(for: nil).accessibilityDescription)
+        XCTAssertTrue(description.hasSuffix("0% five-hour, 0% seven-day, 0% weekly usage"),
+                      "unexpected description: \(description)")
     }
 }

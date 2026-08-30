@@ -179,15 +179,23 @@ enum QuotaJSON {
     /// Every `weekly_scoped` entry in `root`'s `limits[]`, highest percentage
     /// first (ties broken by label) so the popover order and the glyph's pick of
     /// `first` are stable across polls.
+    ///
+    /// Deduplicated by label: ``QuotaScopedLimit/id`` is the label, and
+    /// `scopeLimit(_:)`'s `scope.surface` fallback means two entries can
+    /// legitimately share one (e.g. two surfaces reporting the same model
+    /// name), which would otherwise hand `ForEach` a duplicate identity. The
+    /// entry kept is whichever sorted first — the higher percentage.
     static func scopedLimits(in root: [String: Any]) -> [QuotaScopedLimit] {
         guard let entries = limitsKeys.lazy.compactMap({ root[$0] as? [Any] }).first else {
             return []
         }
-        return entries.compactMap(scopedLimit).sorted {
+        let sorted = entries.compactMap(scopedLimit).sorted {
             $0.percentUsed == $1.percentUsed
                 ? $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending
                 : $0.percentUsed > $1.percentUsed
         }
+        var seenLabels = Set<String>()
+        return sorted.filter { seenLabels.insert($0.label).inserted }
     }
 
     /// Extracts both windows from a container that holds `five_hour` /

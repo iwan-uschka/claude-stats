@@ -164,13 +164,12 @@ Two independent tiers, deliberately decoupled:
 
 - Claude mark (see `assets/claude-mark.svg`) on the left, in place of a
   generic SF Symbol.
-- 2 thin vertical bars, monochrome fixed fill (no color-shift-to-red), no
-  text labels — 5-hour window % and 7-day window %. Minimal total width,
-  matching Stats' CPU/GPU/RAM glyph but thinner. A **third bar** appears when
-  the payload reports a scoped weekly limit, showing the highest-percentage
-  scope only (the popover lists them all); the glyph's width is a function of
-  the bar count, so it grows by exactly one bar and never reserves space for a
-  bar that isn't there.
+- 3 thin vertical bars, monochrome fixed fill (no color-shift-to-red), no
+  text labels — 5-hour window %, 7-day window %, and the highest-percentage
+  scoped weekly limit (the popover lists them all). Minimal total width,
+  matching Stats' CPU/GPU/RAM glyph but thinner. All three are always drawn,
+  same as the other two: with no scoped-limit reading (or no snapshot at all),
+  the third bar is simply empty — there is no narrower, two-bar state.
 
 Click opens a popover:
 

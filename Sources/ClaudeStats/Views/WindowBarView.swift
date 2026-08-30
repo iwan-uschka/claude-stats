@@ -8,6 +8,16 @@ struct WindowBarView: View {
     /// Passed in rather than read from the clock so the countdown ticks with the
     /// popover's timer and previews stay deterministic.
     var now: Date
+    /// Whether a `nil` `window.resetsAt` renders as "reset pending" or as an
+    /// empty column.
+    ///
+    /// The two account-wide bars always have documented reset semantics, so
+    /// `nil` there really does mean a reset is pending. Scoped weekly rows'
+    /// `resets_at` is the common case being absent entirely undocumented —
+    /// "not reported", not "pending" — see ``QuotaScopedLimit``. Defaults to
+    /// the original, always-shows-placeholder behavior so the two main bars
+    /// don't have to opt back in.
+    var showsPendingResetPlaceholder: Bool = true
 
     var body: some View {
         HStack(spacing: PopoverMetrics.rowSpacing) {
@@ -27,7 +37,9 @@ struct WindowBarView: View {
                 .font(PopoverMetrics.valueFont)
                 .frame(width: 34, alignment: .trailing)
 
-            Text(DisplayFormat.resetCountdown(window.timeUntilReset(from: now)))
+            Text(window.resetsAt == nil && !showsPendingResetPlaceholder
+                ? ""
+                : DisplayFormat.resetCountdown(window.timeUntilReset(from: now)))
                 .font(PopoverMetrics.captionFont)
                 .foregroundStyle(.secondary)
                 .frame(width: 92, alignment: .trailing)

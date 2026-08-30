@@ -5,9 +5,9 @@ import SwiftUI
 
 /// Owns the `NSStatusItem` and its popover.
 ///
-/// The button shows the ``MenuBarGlyph`` template image (Claude mark + two thin
-/// window bars, plus a third when the snapshot carries a scoped weekly limit)
-/// and is redrawn whenever ``AppModel`` publishes a new snapshot.
+/// The button shows the ``MenuBarGlyph`` template image (Claude mark + three
+/// thin window bars: 5-hour, 7-day, scoped weekly) and is redrawn whenever
+/// ``AppModel`` publishes a new snapshot.
 @MainActor
 final class StatusItemController: NSObject, NSPopoverDelegate {
     /// Diameter of the dev-build indicator dot — see ``addDevBuildIndicator``.
@@ -19,8 +19,6 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
     /// Ticks only while the popover is on screen — see ``PopoverClock``.
     private let clock = PopoverClock()
     private var cancellables = Set<AnyCancellable>()
-    /// Kept so the dot can be re-anchored when the glyph changes width — it
-    /// grows by one bar the first time a scoped weekly limit appears.
     private var devBuildDot: NSView?
 
     init(model: AppModel) {
@@ -69,10 +67,6 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
 
     private func updateGlyph(for snapshot: QuotaSnapshot?) {
         statusItem.button?.image = MenuBarGlyph.image(for: snapshot)
-        // The glyph is one bar wider once a scoped weekly limit is reported, so
-        // the dot's anchor — derived from the drawn image's width, not the
-        // button's — has to follow it.
-        repositionDevBuildIndicator(glyphWidth: MenuBarGlyph.width(for: snapshot))
     }
 
     /// Overlays a small colored dot on the status item's top-left corner.
@@ -88,7 +82,7 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
         dot.autoresizingMask = [.maxXMargin, .minYMargin]
         button.addSubview(dot)
         devBuildDot = dot
-        repositionDevBuildIndicator(glyphWidth: MenuBarGlyph.width(for: model.snapshot))
+        repositionDevBuildIndicator()
     }
 
     /// Places the dot on the glyph's top-left corner.
@@ -96,11 +90,12 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
     /// The button's bounds are the menu bar's own thickness, not the drawn
     /// glyph's size — the (smaller) image is centered inside it. Anchor the dot
     /// to the image's actual corner, not the button's, so it lands on the glyph
-    /// rather than in the surrounding padding.
-    private func repositionDevBuildIndicator(glyphWidth: CGFloat) {
+    /// rather than in the surrounding padding. The glyph's width is fixed
+    /// (``MenuBarGlyph/width``), so this only needs to run once, at setup.
+    private func repositionDevBuildIndicator() {
         guard let dot = devBuildDot, let bounds = statusItem.button?.bounds else { return }
         let imageOrigin = CGPoint(
-            x: (bounds.width - glyphWidth) / 2,
+            x: (bounds.width - MenuBarGlyph.width) / 2,
             y: (bounds.height - MenuBarGlyph.height) / 2
         )
         dot.frame = CGRect(

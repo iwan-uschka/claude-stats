@@ -65,7 +65,16 @@ public struct FreshestQuotaProvider: QuotaProviding {
             winner.scopedWeekly = cached.scopedWeekly
             return winner
         case (.success(let hook), .failure):
-            return hook
+            // The whole `cachedState` snapshot failed — commonly because its
+            // windows are stale, which says nothing about whether its scoped
+            // rows are worth showing (they carry no separate freshness gate
+            // of their own either way — see ``QuotaScopedLimit``). Best
+            // effort, via the one method that bypasses that staleness gate:
+            // a hook this fresh with no scoped data of its own is exactly the
+            // case ``currentScopedWeekly()`` exists for.
+            var winner = hook
+            winner.scopedWeekly = (try? await cachedState.currentScopedWeekly()) ?? []
+            return winner
         case (.failure, .success(let cached)):
             return cached
         case (.failure(let hookError), .failure(let cachedError)):
