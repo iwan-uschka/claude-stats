@@ -41,8 +41,9 @@ final class AppModel: ObservableObject {
     @Published private(set) var breakdownError: String?
     @Published private(set) var quotaError: String?
     /// Set instead of `quotaError` for `.staleQuotaSource` — the source has a
-    /// real (if old) reading, not nothing, so ``snapshot`` is left in place
-    /// and this is shown as a warning, not an error.
+    /// real (if old) reading, not nothing, so ``snapshot`` is kept (or, on a
+    /// cold start, filled in from the rejected reading the error carries) and
+    /// this is shown as a warning, not an error. See `runQuotaPoll()`.
     @Published private(set) var quotaWarning: String?
     /// Set by ``clearQuotaCache()`` and shown in place of an error banner while
     /// the cache is deliberately empty — the next reading has to come from
@@ -163,12 +164,28 @@ final class AppModel: ObservableObject {
                 self.quotaCacheClearedNotice = nil
             } catch let error as ClaudeStatsError where error.isStaleQuotaSource {
                 guard !Task.isCancelled else { return }
-                // The source has a real reading, just an old one — leave
-                // `snapshot` as-is (the popover's own staleness check already
-                // marks it) and surface this as a warning, not an error. A
-                // stale-but-present reading also means the "wait for a fresh
-                // render" notice no longer describes the state.
+                // The source has a real reading, just an old one — surface this
+                // as a warning, not an error. A stale-but-present reading also
+                // means the "wait for a fresh render" notice no longer
+                // describes the state.
+                //
+                // Normally `snapshot` is left exactly as-is: it holds the last
+                // reading that *was* fresh when it landed, which beats the
+                // older one this error carries, and the popover's own staleness
+                // check already marks it.
+                //
+                // But when there is no such reading — a cold start where the
+                // source was already stale on the very first poll, or after
+                // `clearQuotaCache()` emptied it — leaving it `nil` means empty
+                // bars forever alongside the warning, even though the reader
+                // had real numbers in hand. Fall back to the rejected reading
+                // the error carries: a stale number beats no number, the same
+                // principle `FreshestQuotaProvider` already applies internally.
                 self.quotaWarning = error.localizedDescription
+                if case .staleQuotaSource(let snapshot, _) = error,
+                   self.snapshot == nil || self.snapshot!.capturedAt < snapshot.capturedAt {
+                    self.snapshot = snapshot
+                }
                 self.quotaError = nil
                 self.quotaCacheClearedNotice = nil
             } catch ClaudeStatsError.noQuotaSourceAvailable where self.quotaCacheClearedNotice != nil {
@@ -401,16 +418,16 @@ extension AppModel {
     /// staleness warning to surface.
     static func previewDegraded() -> AppModel {
         let now = Date()
-        let model = preview(
-            window: .sevenDay,
-            snapshot: QuotaSnapshot(
-                fiveHour: QuotaWindow(percentUsed: 104, resetsAt: now.addingTimeInterval(90)),
-                sevenDay: QuotaWindow(percentUsed: 88, resetsAt: nil),
-                confidence: .official,
-                capturedAt: now.addingTimeInterval(-42 * 60)
-            )
+        let snapshot = QuotaSnapshot(
+            fiveHour: QuotaWindow(percentUsed: 104, resetsAt: now.addingTimeInterval(90)),
+            sevenDay: QuotaWindow(percentUsed: 88, resetsAt: nil),
+            confidence: .official,
+            capturedAt: now.addingTimeInterval(-42 * 60)
         )
-        model.quotaWarning = ClaudeStatsError.staleQuotaSource(age: 42 * 60).localizedDescription
+        let model = preview(window: .sevenDay, snapshot: snapshot)
+        model.quotaWarning = ClaudeStatsError
+            .staleQuotaSource(snapshot: snapshot, age: 42 * 60)
+            .localizedDescription
         return model
     }
 }

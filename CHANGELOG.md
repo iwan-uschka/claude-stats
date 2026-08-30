@@ -21,6 +21,12 @@
 - Promo notices sit in a little more vertical space, and the popover's shared
   label column widened from 84 pt to 92 pt to fit per-model weekly row labels
   without wrapping.
+- A stale quota source no longer means empty bars on a cold start: the old
+  numbers it did have are shown with the orange staleness warning instead of
+  nothing, and the warning's advice now matches the source — "open a terminal"
+  applies to the statusline hook, not to Claude Code's own usage cache.
+- Claude Code's cached reading is treated as stale after 60 minutes rather than
+  30; `fetchedAtMs` was measured unmoved for 3.7+ hours during active sessions.
 
 ## [0.9.6] - 2026-08-30
 

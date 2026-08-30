@@ -47,7 +47,7 @@ import Foundation
 /// The hook only fires while Claude Code is actively rendering a status line in
 /// some terminal, so this cache goes cold as soon as the user stops working.
 /// Anything older than ``stalenessThreshold`` throws
-/// ``ClaudeStatsError/staleQuotaSource(age:)`` instead of showing a
+/// ``ClaudeStatsError/staleQuotaSource(snapshot:age:)`` instead of showing a
 /// confidently wrong number, and a missing cache (never installed, or never
 /// fired) throws ``ClaudeStatsError/noQuotaSourceAvailable`` instead — a
 /// distinct case, since "not installed" and "installed but quiet" call for
@@ -129,7 +129,7 @@ public struct StatuslineCacheReader: QuotaProviding {
         )
 
         guard !snapshot.isStale(asOf: now(), threshold: stalenessThreshold) else {
-            throw ClaudeStatsError.staleQuotaSource(age: snapshot.age(asOf: now()))
+            throw ClaudeStatsError.staleQuotaSource(snapshot: snapshot, age: snapshot.age(asOf: now()))
         }
         return snapshot
     }

@@ -130,7 +130,7 @@ final class FreshestQuotaProviderTests: XCTestCase {
 
     /// The real-world case the graft above didn't cover: the hook is fresh
     /// and succeeding, but `cachedState`'s *snapshot* has crossed its own
-    /// staleness threshold (``CachedUtilizationReader``'s 30 minutes) and so
+    /// staleness threshold (``CachedUtilizationReader``'s 60 minutes) and so
     /// fails outright — `(.success, .failure)`. Its scoped rows must not
     /// disappear just because its account-wide windows are too old to win.
     func testScopedWeeklyLimitsSurviveACachedStateSnapshotThatFailsOnStaleness() async throws {
@@ -139,7 +139,10 @@ final class FreshestQuotaProviderTests: XCTestCase {
         let provider = FreshestQuotaProvider(
             statusline: StubProvider(.success(snapshot(.official, percent: 62, capturedAgo: 30))),
             cachedState: StubProvider(
-                .failure(.staleQuotaSource(age: 13_400)),
+                .failure(.staleQuotaSource(
+                    snapshot: snapshot(.cachedOfficial, percent: 11, capturedAgo: 13_400),
+                    age: 13_400
+                )),
                 scopedWeekly: .success(scoped)
             )
         )
@@ -208,7 +211,10 @@ final class FreshestQuotaProviderTests: XCTestCase {
     /// must not shadow a good snapshot.
     func testStaleSourceDoesNotShadowAFreshOne() async throws {
         let provider = FreshestQuotaProvider(
-            statusline: StubProvider(.failure(.staleQuotaSource(age: 3_600))),
+            statusline: StubProvider(.failure(.staleQuotaSource(
+                snapshot: snapshot(.official, percent: 62, capturedAgo: 3_600),
+                age: 3_600
+            ))),
             cachedState: StubProvider(.success(snapshot(.cachedOfficial, percent: 97, capturedAgo: 60)))
         )
 
@@ -241,16 +247,27 @@ final class FreshestQuotaProviderTests: XCTestCase {
     }
 
     /// Both have real-but-old readings: report the *freshest* of the two ages,
-    /// since that is how long ago the app last saw a number.
+    /// since that is how long ago the app last saw a number — and carry that
+    /// same source's own snapshot along with it, not the other one's. The two
+    /// stub snapshots differ in `percentUsed` purely so the assertion can tell
+    /// which of them survived.
     func testBothStaleReportsTheFreshestAge() async {
         let provider = FreshestQuotaProvider(
-            statusline: StubProvider(.failure(.staleQuotaSource(age: 4_200))),
-            cachedState: StubProvider(.failure(.staleQuotaSource(age: 1_900)))
+            statusline: StubProvider(.failure(.staleQuotaSource(
+                snapshot: snapshot(.official, percent: 62, capturedAgo: 4_200),
+                age: 4_200
+            ))),
+            cachedState: StubProvider(.failure(.staleQuotaSource(
+                snapshot: snapshot(.cachedOfficial, percent: 97, capturedAgo: 1_900),
+                age: 1_900
+            )))
         )
 
-        await assertThrows(.staleQuotaSource(age: 1_900)) {
+        let carried = await assertThrowsStale(age: 1_900) {
             try await provider.currentSnapshot()
         }
+        XCTAssertEqual(carried?.confidence, .cachedOfficial)
+        XCTAssertEqual(carried?.fiveHour.percentUsed, 97)
     }
 
     /// A stale reading is more informative than "nothing installed", so it wins
@@ -258,12 +275,16 @@ final class FreshestQuotaProviderTests: XCTestCase {
     func testStaleBeatsAbsentWhenBothFail() async {
         let provider = FreshestQuotaProvider(
             statusline: StubProvider(.failure(.noQuotaSourceAvailable)),
-            cachedState: StubProvider(.failure(.staleQuotaSource(age: 2_500)))
+            cachedState: StubProvider(.failure(.staleQuotaSource(
+                snapshot: snapshot(.cachedOfficial, percent: 97, capturedAgo: 2_500),
+                age: 2_500
+            )))
         )
 
-        await assertThrows(.staleQuotaSource(age: 2_500)) {
+        let carried = await assertThrowsStale(age: 2_500) {
             try await provider.currentSnapshot()
         }
+        XCTAssertEqual(carried?.confidence, .cachedOfficial)
     }
 
     /// …and a parse failure names something the user can look at, where
@@ -284,13 +305,17 @@ final class FreshestQuotaProviderTests: XCTestCase {
     /// wins the error slot over unexpected, same as it wins over absent.
     func testStaleBeatsUnexpectedResponseWhenBothFail() async {
         let provider = FreshestQuotaProvider(
-            statusline: StubProvider(.failure(.staleQuotaSource(age: 1_200))),
+            statusline: StubProvider(.failure(.staleQuotaSource(
+                snapshot: snapshot(.official, percent: 62, capturedAgo: 1_200),
+                age: 1_200
+            ))),
             cachedState: StubProvider(.failure(.unexpectedQuotaResponse("nope")))
         )
 
-        await assertThrows(.staleQuotaSource(age: 1_200)) {
+        let carried = await assertThrowsStale(age: 1_200) {
             try await provider.currentSnapshot()
         }
+        XCTAssertEqual(carried?.confidence, .official)
     }
 
     /// A non-`ClaudeStatsError` failure carries no priority information this

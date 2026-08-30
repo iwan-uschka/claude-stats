@@ -23,9 +23,11 @@ import Foundation
 /// reaches the caller when *both* fail, and then the most actionable one wins:
 ///
 /// 1. A stale reading beats none, so if either source has a real-but-old
-///    capture, that surfaces as ``ClaudeStatsError/staleQuotaSource(age:)``
-///    carrying the **freshest** of the two ages. `AppModel` renders that as a
-///    warning next to the last numbers, not as a red error.
+///    capture, that surfaces as
+///    ``ClaudeStatsError/staleQuotaSource(snapshot:age:)`` carrying the
+///    **freshest** of the two ages, along with that same source's own
+///    snapshot. `AppModel` renders that as a warning next to the last numbers,
+///    not as a red error.
 /// 2. Otherwise a parse failure wins over an absence:
 ///    ``ClaudeStatsError/unexpectedQuotaResponse(_:)`` names something the user
 ///    could actually look at, where "nothing installed" does not.
@@ -78,7 +80,15 @@ public struct FreshestQuotaProvider: QuotaProviding {
         case (.failure, .success(let cached)):
             return cached
         case (.failure(let hookError), .failure(let cachedError)):
-            throw Self.combined(hookError, cachedError)
+            var error = Self.combined(hookError, cachedError)
+            // Best effort, same rationale as the `(.success, .failure)` case
+            // above: a stale reading with no scoped rows of its own can still
+            // graft `cachedState`'s, which carries no separate freshness gate.
+            if case .staleQuotaSource(var snapshot, let age) = error, snapshot.scopedWeekly.isEmpty {
+                snapshot.scopedWeekly = (try? await cachedState.currentScopedWeekly()) ?? []
+                error = .staleQuotaSource(snapshot: snapshot, age: age)
+            }
+            throw error
         }
     }
 
@@ -106,11 +116,16 @@ public struct FreshestQuotaProvider: QuotaProviding {
     private static func combined(_ first: Error, _ second: Error) -> ClaudeStatsError {
         let errors = [first, second].compactMap { $0 as? ClaudeStatsError }
 
-        let staleAges = errors.compactMap { error -> TimeInterval? in
-            guard case .staleQuotaSource(let age) = error else { return nil }
-            return age
+        // Pair, not two parallel lists: the winning age has to travel with its
+        // own snapshot, or the caller would render one source's numbers under
+        // the other source's age (and remediation text).
+        let stale = errors.compactMap { error -> (snapshot: QuotaSnapshot, age: TimeInterval)? in
+            guard case .staleQuotaSource(let snapshot, let age) = error else { return nil }
+            return (snapshot, age)
         }
-        if let freshest = staleAges.min() { return .staleQuotaSource(age: freshest) }
+        if let freshest = stale.min(by: { $0.age < $1.age }) {
+            return .staleQuotaSource(snapshot: freshest.snapshot, age: freshest.age)
+        }
 
         let messages = errors.compactMap { error -> String? in
             guard case .unexpectedQuotaResponse(let message) = error else { return nil }

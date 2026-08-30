@@ -41,5 +41,31 @@ extension XCTestCase {
             return nil
         }
     }
+
+    /// Asserts the async body throws ``ClaudeStatsError/staleQuotaSource(snapshot:age:)``
+    /// with the given age, ignoring the carried snapshot's exact value (constructing
+    /// a byte-for-byte-equal expected snapshot in every call site would be brittle).
+    ///
+    /// Returns that snapshot, so a caller that *does* care which reading came
+    /// back can check it without every other call site having to.
+    @discardableResult
+    func assertThrowsStale(
+        age expectedAge: TimeInterval,
+        file: StaticString = #filePath,
+        line: UInt = #line,
+        _ body: () async throws -> some Any
+    ) async -> QuotaSnapshot? {
+        do {
+            _ = try await body()
+            XCTFail("expected staleQuotaSource(age: \(expectedAge)), but nothing was thrown", file: file, line: line)
+            return nil
+        } catch ClaudeStatsError.staleQuotaSource(let snapshot, let age) {
+            XCTAssertEqual(age, expectedAge, file: file, line: line)
+            return snapshot
+        } catch {
+            XCTFail("expected staleQuotaSource(age: \(expectedAge)), got \(error)", file: file, line: line)
+            return nil
+        }
+    }
 }
 
