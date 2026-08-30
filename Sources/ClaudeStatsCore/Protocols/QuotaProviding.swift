@@ -18,7 +18,7 @@ public protocol QuotaProviding: Sendable {
     /// Best-effort per-model scoped limits, bypassing this source's own
     /// staleness gate.
     ///
-    /// ``currentSnapshot()`` throws ``ClaudeStatsError/staleQuotaSource(age:)``
+    /// ``currentSnapshot()`` throws ``ClaudeStatsError/staleQuotaSource(snapshot:age:)``
     /// whole — a stale account-wide window and a stale scoped row are thrown
     /// out together, which is right for the two main bars (a wrong percentage
     /// is worse than none) but wrong for ``FreshestQuotaProvider``'s graft: it
@@ -111,17 +111,23 @@ public enum ClaudeStatsError: Error, Sendable, Equatable {
     case malformedLogLine(path: String, line: Int)
     /// No live quota source produced a usable reading — Claude Code has never
     /// cached one on this Mac, or every source returned data with no usable
-    /// windows in it. See ``staleQuotaSource(age:)`` for the "has reported
-    /// before, but not recently" case.
+    /// windows in it. See ``staleQuotaSource(snapshot:age:)`` for the "has
+    /// reported before, but not recently" case.
     case noQuotaSourceAvailable
     /// A live quota source has a reading, but it's older than its staleness
     /// threshold — the source is installed and has worked before, it just
     /// hasn't reported since. `age` is how long ago it was captured.
-    case staleQuotaSource(age: TimeInterval)
+    ///
+    /// `snapshot` is the reading that was rejected, carried along rather than
+    /// discarded: a caller with nothing else on screen (a cold start, where no
+    /// earlier poll ever succeeded) can show these old numbers instead of empty
+    /// bars, and ``errorDescription`` reads its
+    /// ``QuotaSnapshot/confidence`` to pick the right remediation text.
+    case staleQuotaSource(snapshot: QuotaSnapshot, age: TimeInterval)
     /// The quota source responded, but not with something we can parse.
     case unexpectedQuotaResponse(String)
 
-    /// `true` for ``staleQuotaSource(age:)`` — callers that want to treat it
+    /// `true` for ``staleQuotaSource(snapshot:age:)`` — callers that want to treat it
     /// as a warning rather than a hard failure switch on this instead of
     /// pattern-matching the case directly.
     public var isStaleQuotaSource: Bool {
@@ -143,8 +149,18 @@ extension ClaudeStatsError: LocalizedError {
             return "Couldn't parse line \(line) of \((path as NSString).lastPathComponent)."
         case .noQuotaSourceAvailable:
             return "No live quota data yet. Claude Code hasn't cached a rate-limit reading on this Mac — run it once, and the percentages appear on the next refresh."
-        case .staleQuotaSource(let age):
-            return "Quota data is stale (hasn't reported in \(DisplayFormat.duration(age))). Open a terminal running Claude Code to refresh it."
+        case .staleQuotaSource(let snapshot, let age):
+            // The remediation differs by source: the statusline hook really is
+            // driven by a terminal rendering a status line, but Claude Code's
+            // own cache refreshes on its own schedule and having a terminal
+            // open does nothing for it.
+            let ageText = DisplayFormat.duration(age)
+            switch snapshot.confidence {
+            case .official:
+                return "Quota data is stale (hasn't reported in \(ageText)). Open a terminal running Claude Code to refresh it."
+            case .cachedOfficial:
+                return "Quota data is stale (hasn't reported in \(ageText)). Claude Code hasn't refreshed its own usage cache yet — this isn't triggered by having a terminal open, and can take a while."
+            }
         case .unexpectedQuotaResponse(let message):
             return "Quota source returned something unexpected: \(message)"
         }

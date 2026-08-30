@@ -44,14 +44,19 @@ import Foundation
 /// ``QuotaScopedLimit``. `accountUuid` is carried by the payload but unused —
 /// there is nothing on this side to compare it against.
 ///
-/// ## Staleness: 30 minutes, not the statusline's 10
+/// ## Staleness: 60 minutes, not the statusline's 10
 ///
 /// This blob refreshes on Claude Code's own schedule, not ours: it was measured
 /// 15 minutes old during an active session, and did not move across five
 /// rewrites of `~/.claude.json` spanning 13 minutes — the file's churn is not a
 /// usage refresh. A 10-minute threshold would therefore reject perfectly good
-/// readings. 30 minutes is a judgement call from that one measurement, not a
-/// documented cadence.
+/// readings. A later observation put the gap much wider still: `fetchedAtMs`
+/// sat unmoved for 3.7+ hours while three Claude Code sessions were actively
+/// running, so the real cadence appears to be hours rather than minutes, at
+/// least sometimes. 60 minutes remains a judgement call from those two
+/// measurements, not a documented cadence — chosen to cut down on
+/// false-positive staleness warnings during normal active use without
+/// switching staleness detection off entirely.
 ///
 /// ## Undocumented private state
 ///
@@ -66,8 +71,8 @@ public struct CachedUtilizationReader: QuotaProviding {
     static let utilizationKey = "utilization"
 
     /// How old a `fetchedAtMs` may be before the reading is refused — see the
-    /// type's "Staleness" note for why this is three times the statusline's.
-    public static let defaultStalenessThreshold: TimeInterval = 30 * 60
+    /// type's "Staleness" note for why this is six times the statusline's.
+    public static let defaultStalenessThreshold: TimeInterval = 60 * 60
 
     /// Probed in order; the first that opens wins.
     public let candidateURLs: [URL]
@@ -110,7 +115,7 @@ public struct CachedUtilizationReader: QuotaProviding {
         )
 
         guard !snapshot.isStale(asOf: now(), threshold: stalenessThreshold) else {
-            throw ClaudeStatsError.staleQuotaSource(age: snapshot.age(asOf: now()))
+            throw ClaudeStatsError.staleQuotaSource(snapshot: snapshot, age: snapshot.age(asOf: now()))
         }
         return snapshot
     }

@@ -76,6 +76,16 @@ final class AppModelTests: XCTestCase {
         AppModel(quotaProvider: quota, usageStore: store, promoNoticeProvider: promo)
     }
 
+    /// The reading a `.staleQuotaSource` failure carries. Deliberately unlike
+    /// ``MockQuotaProvider/sampleSnapshot()`` in every field the tests assert
+    /// on, so "which snapshot ended up on screen" is never ambiguous.
+    private static let staleReading = QuotaSnapshot(
+        fiveHour: QuotaWindow(percentUsed: 42),
+        sevenDay: .empty,
+        confidence: .cachedOfficial,
+        capturedAt: Date(timeIntervalSince1970: 1_787_935_500)
+    )
+
     private func waitUntil(
         timeout: TimeInterval = 2,
         _ condition: @escaping () async -> Bool
@@ -107,13 +117,39 @@ final class AppModelTests: XCTestCase {
         model.refresh(force: true)
         await waitUntil { model.snapshot != nil }
 
-        await provider.setResult(.failure(ClaudeStatsError.staleQuotaSource(age: 600)))
+        await provider.setResult(.failure(ClaudeStatsError.staleQuotaSource(
+            snapshot: Self.staleReading,
+            age: 600
+        )))
         model.refresh(force: true)
         await waitUntil { model.quotaWarning != nil }
 
+        // The already-present reading wins: it was fresh when it landed, where
+        // the one the error carries never was.
         XCTAssertEqual(model.snapshot, sample)
         XCTAssertNil(model.quotaError)
         XCTAssertNotNil(model.quotaWarning)
+    }
+
+    /// Cold start against an already-stale source: no earlier poll ever
+    /// succeeded, so there is no "last good reading" to preserve. Leaving
+    /// `snapshot` nil would mean empty bars for as long as the source stays
+    /// stale — hours, for Claude Code's own cache — even though the reader had
+    /// real numbers in hand. Show them, with the warning.
+    func testRefreshOnStaleSourceWithNoPriorSnapshotShowsTheStaleReading() async {
+        let provider = ScriptedQuotaProvider()
+        await provider.setResult(.failure(ClaudeStatsError.staleQuotaSource(
+            snapshot: Self.staleReading,
+            age: 600
+        )))
+        let model = makeModel(quota: provider)
+        XCTAssertNil(model.snapshot)
+
+        await model.refresh(force: true)?.value
+
+        XCTAssertEqual(model.snapshot, Self.staleReading)
+        XCTAssertNotNil(model.quotaWarning)
+        XCTAssertNil(model.quotaError)
     }
 
     func testRefreshOnHardErrorClearsSnapshotAndSetsError() async {
@@ -182,7 +218,10 @@ final class AppModelTests: XCTestCase {
         // A stale-but-present reading is not the "waiting for a fresh render"
         // state the notice describes, so the post-clear poll replaces it with a
         // warning instead of leaving it set.
-        await provider.setResult(.failure(ClaudeStatsError.staleQuotaSource(age: 600)))
+        await provider.setResult(.failure(ClaudeStatsError.staleQuotaSource(
+            snapshot: Self.staleReading,
+            age: 600
+        )))
         model.clearQuotaCache()
         await waitUntil(timeout: 5) { model.quotaWarning != nil }
 

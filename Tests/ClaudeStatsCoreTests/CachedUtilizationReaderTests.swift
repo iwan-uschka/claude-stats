@@ -392,10 +392,10 @@ final class CachedUtilizationReaderTests: XCTestCase {
     func testCurrentScopedWeeklyBypassesTheStalenessGate() async throws {
         try write(stateFile(limits: fableEntry).replacingOccurrences(
             of: "\(Int(now.timeIntervalSince1970 * 1000) - 60_000)",
-            with: "\(Int(now.timeIntervalSince1970 * 1000) - 1_801_000)"
+            with: "\(Int(now.timeIntervalSince1970 * 1000) - 3_601_000)"
         ))
 
-        await assertThrows(.staleQuotaSource(age: 1_801)) {
+        await assertThrowsStale(age: 3_601) {
             try await self.makeReader().currentSnapshot()
         }
 
@@ -405,24 +405,25 @@ final class CachedUtilizationReaderTests: XCTestCase {
 
     // MARK: - Staleness
 
-    func testReadingOlderThanThirtyMinutesThrowsStale() async throws {
-        try write(stateFile(fetchedAt: now.addingTimeInterval(-1801)))
+    func testReadingOlderThanSixtyMinutesThrowsStale() async throws {
+        try write(stateFile(fetchedAt: now.addingTimeInterval(-3601)))
 
-        await assertThrows(.staleQuotaSource(age: 1801)) {
+        await assertThrowsStale(age: 3601) {
             try await self.makeReader().currentSnapshot()
         }
     }
 
-    /// The whole point of the 30-minute threshold: a 15-minute-old reading was
+    /// The whole point of the 60-minute threshold: a 15-minute-old reading was
     /// measured mid-session and is normal, where the statusline's 10-minute
-    /// threshold would have rejected it.
+    /// threshold would have rejected it — and the blob has since been seen
+    /// unmoved for hours at a stretch.
     func testFifteenMinuteOldReadingIsAccepted() async throws {
         try write(stateFile(fetchedAt: now.addingTimeInterval(-15 * 60)))
 
         let snapshot = try await makeReader().currentSnapshot()
 
         XCTAssertEqual(snapshot.confidence, .cachedOfficial)
-        XCTAssertEqual(CachedUtilizationReader.defaultStalenessThreshold, 30 * 60)
+        XCTAssertEqual(CachedUtilizationReader.defaultStalenessThreshold, 60 * 60)
     }
 
     // MARK: - Failure modes

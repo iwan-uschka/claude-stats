@@ -51,11 +51,13 @@ Two independent tiers, deliberately decoupled:
      ISO-8601 with fractional seconds, unlike the statusline payload's epoch
      seconds). Nothing to install — see
      `Sources/ClaudeStatsCore/Quota/CachedUtilizationReader.swift`.
-     - **Stale after 30 min, not the statusline's 10.** Measured: `fetchedAtMs`
+     - **Stale after 60 min, not the statusline's 10.** Measured: `fetchedAtMs`
        sat 15 minutes old during an active session and did not move across five
        rewrites of `~/.claude.json` spanning 13 minutes — the file's churn is
-       *not* a usage refresh. A 10-minute gate would reject good readings. The
-       30 is a judgement call from one measurement, not a documented cadence.
+       *not* a usage refresh. Later measured unmoved for 3.7+ hours with three
+       Claude Code sessions actively running, so the real cadence looks like
+       hours, not minutes. A 10-minute gate would reject good readings. The 60
+       is a judgement call from those measurements, not a documented cadence.
      - **Undocumented private state.** It can be renamed or dropped by any
        Claude Code release — a `spend` object appeared inside this payload
        between 2026-08-27 and 2026-08-28. That is precisely why the statusline
