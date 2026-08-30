@@ -94,6 +94,31 @@ final class CachedUtilizationReaderTests: XCTestCase {
                        fetchedAt.timeIntervalSince1970, accuracy: 0.001)
     }
 
+    /// `capturedAtKeys` also accepts the snake_case spelling, even though every
+    /// other fixture in this file uses the camelCase one Claude Code actually
+    /// stamps.
+    func testSnakeCaseFetchedAtMsSpellingIsAlsoAccepted() async throws {
+        let fetchedAt = now.addingTimeInterval(-5 * 60)
+        try write(
+            """
+            {
+              "cachedUsageUtilization": {
+                "fetched_at_ms": \(Int(fetchedAt.timeIntervalSince1970 * 1000)),
+                "utilization": {
+                  "five_hour": { "utilization": 11, "resets_at": "2026-08-28T16:50:00.401807+00:00" },
+                  "seven_day": { "utilization": 97, "resets_at": "2026-08-28T23:00:00.401826+00:00" }
+                }
+              }
+            }
+            """
+        )
+
+        let snapshot = try await makeReader().currentSnapshot()
+
+        XCTAssertEqual(snapshot.capturedAt.timeIntervalSince1970,
+                       fetchedAt.timeIntervalSince1970, accuracy: 0.001)
+    }
+
     /// ISO-8601 with fractional seconds *and* a `+00:00` offset — the shape the
     /// statusline payload never uses, so it has its own assertion.
     func testResetTimestampsParseFromFractionalISO8601() async throws {

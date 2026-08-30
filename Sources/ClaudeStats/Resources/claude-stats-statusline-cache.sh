@@ -19,6 +19,12 @@
 # ClaudeStats is a menu bar app, not a shell command, so it can't be. This script
 # is the hook; it writes the payload to a cache file that the app reads.
 #
+# Claude Code also caches the same numbers into its own state file
+# (`cachedUsageUtilization` in `~/.claude.json`), which ClaudeStats reads
+# without any of this — see `CachedUtilizationReader`. This script exists for
+# freshness (it fires within seconds of a status line render), not
+# availability: the app works with it never installed.
+#
 # `rate_limits` only appears for Claude.ai Pro/Max subscribers, and only after the
 # session's first API response. The hook fires only while Claude Code is actively
 # rendering a status line, so the cache goes cold when you stop working — the app

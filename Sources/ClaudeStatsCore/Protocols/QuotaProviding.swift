@@ -20,9 +20,10 @@ public protocol QuotaProviding: Sendable {
     ///
     /// A manual escape hatch, not part of the normal refresh path: it exists for
     /// a reading that looks stuck or wrong, which a plain re-read of the same
-    /// cache can't fix. Callers should expect
-    /// ``ClaudeStatsError/noQuotaSourceAvailable`` from the next read until the
-    /// source has reported again.
+    /// cache can't fix. For a source that composes multiple readers (see
+    /// ``FreshestQuotaProvider``), this only guarantees *this* source's own
+    /// state is discarded — another composed source may still produce a
+    /// reading on the next call.
     func clearCache() throws
 }
 

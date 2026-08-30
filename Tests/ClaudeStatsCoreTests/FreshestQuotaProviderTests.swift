@@ -182,6 +182,35 @@ final class FreshestQuotaProviderTests: XCTestCase {
         XCTAssertEqual(message, ".claude.json is not a JSON object")
     }
 
+    /// A stale reading is still a real reading; a parse failure is not — stale
+    /// wins the error slot over unexpected, same as it wins over absent.
+    func testStaleBeatsUnexpectedResponseWhenBothFail() async {
+        let provider = FreshestQuotaProvider(
+            statusline: StubProvider(.failure(.staleQuotaSource(age: 1_200))),
+            cachedState: StubProvider(.failure(.unexpectedQuotaResponse("nope")))
+        )
+
+        await assertThrows(.staleQuotaSource(age: 1_200)) {
+            try await provider.currentSnapshot()
+        }
+    }
+
+    /// A non-`ClaudeStatsError` failure carries no priority information this
+    /// composition can read, so both sources failing that way collapses to
+    /// "nothing available" rather than surfacing either raw error.
+    func testNonClaudeStatsErrorsCollapseToNoQuotaSourceAvailable() async {
+        struct OpaqueFailure: Error {}
+        struct OpaqueProvider: QuotaProviding {
+            func currentSnapshot() async throws -> QuotaSnapshot { throw OpaqueFailure() }
+            func clearCache() throws {}
+        }
+        let provider = FreshestQuotaProvider(statusline: OpaqueProvider(), cachedState: OpaqueProvider())
+
+        await assertThrows(.noQuotaSourceAvailable) {
+            try await provider.currentSnapshot()
+        }
+    }
+
     // MARK: - Clearing
 
     /// Only the statusline cache is this app's to delete; `~/.claude.json`

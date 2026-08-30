@@ -83,7 +83,7 @@ struct PopoverView: View {
                 // bars better than "none yet" or a staleness warning would.
                 Text(model.quotaCacheClearedNotice
                     ?? model.quotaWarning
-                    ?? "source: none yet — requires Claude Code's statusLine hook (Settings → Quota source)")
+                    ?? "source: none yet — run Claude Code once and the percentages appear on the next refresh")
                     .font(PopoverMetrics.captionFont)
                     .foregroundStyle(quotaFallbackStyle)
                     .fixedSize(horizontal: false, vertical: true)
@@ -173,7 +173,7 @@ struct PopoverView: View {
             Button("Clear Quota Cache") { model.clearQuotaCache() }
                 .controlSize(.small)
                 .font(PopoverMetrics.captionFont)
-                .help("Deletes the cached statusline reading — use it when the percentage looks stuck or wrong. The next number comes from Claude Code's next statusline render.")
+                .help("Deletes the cached statusline reading — use it when the percentage looks stuck or wrong. The bars fall back to Claude Code's own cached reading until the next statusline render.")
         }
     }
 
@@ -182,7 +182,14 @@ struct PopoverView: View {
             confidence: snapshot.confidence,
             age: snapshot.age(asOf: now)
         )
-        return snapshot.isStale(asOf: now) ? tag + " · stale" : tag
+        // Each source has its own cadence: the statusline hook fires per
+        // render (~10 min), Claude Code refreshes its cached blob on a much
+        // slower schedule (~30 min) — one threshold would mislabel the other.
+        let threshold: TimeInterval = switch snapshot.confidence {
+        case .official: QuotaSnapshot.defaultStalenessThreshold
+        case .cachedOfficial: CachedUtilizationReader.defaultStalenessThreshold
+        }
+        return snapshot.isStale(asOf: now, threshold: threshold) ? tag + " · stale" : tag
     }
 
     // MARK: - Plan / burn rate

@@ -247,10 +247,11 @@ final class AppModel: ObservableObject {
     }
 
     /// Right after installing the hook — or after ``clearQuotaCache()`` — the
-    /// cache file doesn't exist yet, so an immediate poll can only fail with
-    /// `noQuotaSourceAvailable`. Retry a few times over ~15s instead of waiting
-    /// for the next popover open: catches the common case of Claude Code
-    /// already running in a terminal and firing the hook almost immediately.
+    /// statusline cache file doesn't exist yet, so an immediate poll can only
+    /// win from Claude Code's own cached reading, if any. Retry a few times
+    /// over ~15s instead of waiting for the next popover open: catches the
+    /// common case of Claude Code already running in a terminal and firing
+    /// the hook almost immediately.
     func pollAfterInstall() {
         postInstallPollTask?.cancel()
         postInstallPollTask = Task { [weak self] in
@@ -258,7 +259,12 @@ final class AppModel: ObservableObject {
                 try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
                 guard let self, !Task.isCancelled else { return }
                 await self.refresh(force: true)?.value
-                if self.quotaError == nil, self.snapshot != nil { return }
+                // Not just "a snapshot landed": `FreshestQuotaProvider` will
+                // serve Claude Code's own cached blob on the first tick, which
+                // says nothing about whether the hook this ladder is waiting
+                // on has rendered yet. Keep retrying until the statusline
+                // source wins the freshness comparison.
+                if self.quotaError == nil, self.snapshot?.confidence == .official { return }
             }
         }
     }

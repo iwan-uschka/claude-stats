@@ -1,7 +1,8 @@
 import Foundation
 
 /// Reads the on-disk cache of Claude Code's `statusLine` rate-limit payload
-/// (`.official` confidence — the strongest source we have).
+/// (`.official` confidence — the freshest source we have; see
+/// ``FreshestQuotaProvider``).
 ///
 /// ## Why a cache and not a hook
 ///
@@ -47,11 +48,13 @@ import Foundation
 /// some terminal, so this cache goes cold as soon as the user stops working.
 /// Anything older than ``stalenessThreshold`` throws
 /// ``ClaudeStatsError/staleQuotaSource(age:)`` instead of showing a
-/// confidently wrong number — this is the only quota source, so a stale or
-/// missing cache surfaces as an error rather than falling back to anything
-/// else. A missing cache (never installed, or never fired) is
-/// ``ClaudeStatsError/noQuotaSourceAvailable`` instead — a distinct case, since
-/// "not installed" and "installed but quiet" call for different messages.
+/// confidently wrong number, and a missing cache (never installed, or never
+/// fired) throws ``ClaudeStatsError/noQuotaSourceAvailable`` instead — a
+/// distinct case, since "not installed" and "installed but quiet" call for
+/// different messages. This reader still throws on either: it is
+/// ``FreshestQuotaProvider`` that swallows both whenever
+/// ``CachedUtilizationReader`` has a reading of its own, so an error only
+/// reaches the UI when neither source has one.
 public struct StatuslineCacheReader: QuotaProviding {
     /// Directory name used under Application Support.
     public static let cacheDirectoryName = "ClaudeStats"

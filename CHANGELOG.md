@@ -6,8 +6,8 @@
 - The quota bars no longer need the statusline hook installed. Claude Code
   caches the same account-wide rate-limit numbers into its own state file
   (`cachedUsageUtilization` in `~/.claude.json`), and that is now the primary
-  source — run Claude Code once and the percentages appear, tagged
-  `official (cached)`. The hook stays as an opt-in freshness booster: install
+  source — run Claude Code once and send a prompt and the percentages appear,
+  tagged `official (cached)`. The hook stays as an opt-in freshness booster: install
   it and the tag flips to `official`, reporting seconds after Claude Code sees
   the numbers instead of on its several-minute cache cadence. Whichever source
   has the newer reading wins, so one going quiet is invisible, and an error
