@@ -31,11 +31,6 @@ struct UsageBar: View {
     /// should leave this `nil` so they aren't overridden with an empty label.
     var accessibilityLabel: String? = nil
 
-    /// Opacity of the solid ground under the stripes, as a share of
-    /// ``fillOpacity``. Enough to read as filled at a glance; light enough that
-    /// the stripes stay visible against it.
-    private static let hatchBaseFactor: Double = 0.4
-
     private var clampedFraction: Double {
         DisplayFormat.clamped01(fraction)
     }
@@ -65,13 +60,12 @@ struct UsageBar: View {
         case .solid:
             shape.fill(Color.primary.opacity(fillOpacity))
         case .hatched:
-            ZStack {
-                shape.fill(Color.primary.opacity(fillOpacity * Self.hatchBaseFactor))
-                DiagonalHatch(color: Color.primary.opacity(fillOpacity))
-                    // Clipped to the same rounded rect the solid fill uses, so
-                    // the two styles are pixel-identical in outline.
-                    .clipShape(shape)
-            }
+            // No separate ground fill: the gaps between stripes show the
+            // track underneath, same color as the bar's unfilled portion.
+            DiagonalHatch(color: Color.primary.opacity(fillOpacity))
+                // Clipped to the same rounded rect the solid fill uses, so
+                // the two styles are pixel-identical in outline.
+                .clipShape(shape)
         }
     }
 
@@ -90,8 +84,8 @@ struct UsageBar: View {
 private struct DiagonalHatch: View {
     var color: Color
     /// Perpendicular-ish gap between stripes, in points.
-    var spacing: CGFloat = 3
-    var lineWidth: CGFloat = 1.5
+    var spacing: CGFloat = 4
+    var lineWidth: CGFloat = 1.0
 
     var body: some View {
         Canvas(opaque: false) { context, size in

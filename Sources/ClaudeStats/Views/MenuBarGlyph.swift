@@ -36,14 +36,11 @@ enum MenuBarGlyph {
     static let barCornerRadius: CGFloat = 1
     /// Alpha of the unused portion of a bar.
     static let trackAlpha: CGFloat = 0.3
-    /// Alpha of the ground under a hatched bar's stripes — the small-scale
-    /// counterpart of `UsageBar.hatchBaseFactor`.
-    static let hatchBaseAlpha: CGFloat = 0.5
     /// Stripe pitch and thickness for a hatched bar. Coarser relative to the
     /// bar than the popover's, because at 3 pt wide only two or three stripes
     /// fit at all — any finer and they blur into a flat mid-grey.
     static let hatchSpacing: CGFloat = 2.6
-    static let hatchLineWidth: CGFloat = 1.2
+    static let hatchLineWidth: CGFloat = 0.8
 
     /// Bars always drawn: 5-hour, 7-day, and scoped weekly — unconditionally,
     /// same as each other. There is no narrower glyph to fall back to.
@@ -205,8 +202,10 @@ enum MenuBarGlyph {
         }
     }
 
-    /// The hatched fill's small-scale twin of `UsageBar.FillStyle.hatched`: a
-    /// half-alpha ground with opaque 45° stripes over it.
+    /// The hatched fill's small-scale twin of `UsageBar.FillStyle.hatched`:
+    /// opaque 45° stripes over whatever's already drawn behind the bar — no
+    /// separate ground fill, so the gaps between stripes read as the same
+    /// track color as the bar's unfilled portion.
     ///
     /// Drawn in the same gray-0 template ink as everything else, so the menu bar
     /// still tints and inverts it for free. Legibility at 3 pt is the open
@@ -215,9 +214,6 @@ enum MenuBarGlyph {
     private static func fillHatched(_ rect: CGRect, in context: CGContext) {
         context.saveGState()
         context.clip(to: rect)
-
-        context.setFillColor(gray: 0, alpha: hatchBaseAlpha)
-        context.fill(rect)
 
         context.setStrokeColor(gray: 0, alpha: 1)
         context.setLineWidth(hatchLineWidth)
