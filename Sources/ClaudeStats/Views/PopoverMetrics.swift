@@ -30,4 +30,10 @@ enum PopoverMetrics {
     static let valueFont = Font.system(size: 11).monospacedDigit()
     static let sectionTitleFont = Font.system(size: 11, weight: .semibold)
     static let captionFont = Font.system(size: 10)
+
+    /// Claude's brand terracotta, sampled from Anthropic's own promo graphics
+    /// (`#CA7C5E`) — used for the promo notice link instead of `.accentColor`,
+    /// which follows the user's system accent (usually blue) and reads as an
+    /// unrelated OS affordance rather than Claude's own promo.
+    static let brandLinkColor = Color(red: 0xCA / 255, green: 0x7C / 255, blue: 0x5E / 255)
 }

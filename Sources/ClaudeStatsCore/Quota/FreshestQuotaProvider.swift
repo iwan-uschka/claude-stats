@@ -54,7 +54,16 @@ public struct FreshestQuotaProvider: QuotaProviding {
             // Ties go to the statusline capture: equal `capturedAt` means the
             // same underlying reading reached us both ways, and the hook's is
             // the one that was observed directly.
-            return hook.capturedAt >= cached.capturedAt ? hook : cached
+            var winner = hook.capturedAt >= cached.capturedAt ? hook : cached
+            // Scoped limits exist only in `cachedState`'s payload — the
+            // statusline hook's schema has no `limits[]` at all, not merely an
+            // empty one. So this is the one field that isn't "pick a snapshot
+            // and use it whole": grafting it on top of whichever snapshot wins
+            // the freshness compare is what lets the two features compose,
+            // rather than the scoped bars going dark on any account where the
+            // hook is installed and (as usual) fresher.
+            winner.scopedWeekly = cached.scopedWeekly
+            return winner
         case (.success(let hook), .failure):
             return hook
         case (.failure, .success(let cached)):

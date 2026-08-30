@@ -72,12 +72,13 @@ final class FreshestQuotaProviderTests: XCTestCase {
         XCTAssertEqual(result.fiveHour.percentUsed, 97)
     }
 
-    /// Only the cached-state source reports scoped limits, and this provider
-    /// hands whole snapshots through — so a winning statusline capture yields
-    /// no scoped rows, and a winning cached reading keeps the ones it carried.
-    /// Neither is merged across sources: the two are the same reading at
-    /// different ages, not two halves of one.
-    func testScopedWeeklyLimitsFollowWhicheverSnapshotWins() async throws {
+    /// Only the cached-state source's payload has `limits[]` at all — the
+    /// statusline hook's schema carries no such field, not merely an empty
+    /// one. So scoped rows always come from `cachedState` regardless of which
+    /// snapshot wins the freshness compare for everything else: an account
+    /// with the hook installed (the common case, and almost always fresher)
+    /// must not lose the scoped bars just because the hook's own reading won.
+    func testScopedWeeklyLimitsAlwaysComeFromCachedState() async throws {
         let scoped = [QuotaScopedLimit(label: "Fable", percentUsed: 0)]
 
         let statuslineWins = FreshestQuotaProvider(
@@ -87,7 +88,8 @@ final class FreshestQuotaProviderTests: XCTestCase {
             )
         )
         let fromStatusline = try await statuslineWins.currentSnapshot()
-        XCTAssertEqual(fromStatusline.scopedWeekly, [])
+        XCTAssertEqual(fromStatusline.confidence, .official)
+        XCTAssertEqual(fromStatusline.scopedWeekly, scoped)
 
         let cachedWins = FreshestQuotaProvider(
             statusline: StubProvider(.success(snapshot(.official, percent: 62, capturedAgo: 900))),
@@ -96,7 +98,18 @@ final class FreshestQuotaProviderTests: XCTestCase {
             )
         )
         let fromCachedState = try await cachedWins.currentSnapshot()
+        XCTAssertEqual(fromCachedState.confidence, .cachedOfficial)
         XCTAssertEqual(fromCachedState.scopedWeekly, scoped)
+
+        // And when `cachedState` itself has none to report, none appear —
+        // this isn't a second independent source of scoped data, just the
+        // one source's field surviving the freshness pick.
+        let noScopedAtAll = FreshestQuotaProvider(
+            statusline: StubProvider(.success(snapshot(.official, percent: 62, capturedAgo: 30))),
+            cachedState: StubProvider(.success(snapshot(.cachedOfficial, percent: 11, capturedAgo: 900)))
+        )
+        let result = try await noScopedAtAll.currentSnapshot()
+        XCTAssertEqual(result.scopedWeekly, [])
     }
 
     /// Same underlying reading reaching us both ways: prefer the one that was

@@ -140,7 +140,7 @@ struct PopoverView: View {
         if let label = notice.body.linkLabel, let url = notice.body.linkURL {
             var link = AttributedString(label)
             link.link = url
-            link.foregroundColor = .accentColor
+            link.foregroundColor = PopoverMetrics.brandLinkColor
             link.underlineStyle = .single
             attributed.append(link)
         }
@@ -159,6 +159,7 @@ struct PopoverView: View {
         return Text(attributed)
             .font(PopoverMetrics.captionFont)
             .fixedSize(horizontal: false, vertical: true)
+            .padding(.vertical, 4)
             // Split label/value instead of one flattened `.accessibilityLabel`
             // so `.isLink` isn't just cosmetic: VoiceOver still needs an
             // explicit action, since collapsing to one element loses the
