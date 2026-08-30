@@ -1,16 +1,25 @@
 import Foundation
 
-/// Lenient coercion helpers for the statusline cache payload.
+/// Lenient coercion helpers for the rate-limit payloads Claude Code emits.
 ///
-/// The payload is semi-documented at best, so nothing here uses `Codable`: the
-/// statusline hook reports `used_percentage` with `resets_at` as **Unix epoch
-/// seconds**. Rather than pin one shape and break on the first upstream rename,
-/// we accept any of several plausible key spellings.
+/// Two shapes flow through here, neither of them documented:
+///
+/// - the **statusline hook** payload — `used_percentage` with `resets_at` as
+///   **Unix epoch seconds**, captured by our own helper script;
+/// - Claude Code's own **`cachedUsageUtilization`** blob in `~/.claude.json` —
+///   `utilization` as a bare number, `resets_at` as an ISO-8601 string with
+///   fractional seconds and an offset, `fetchedAtMs` as epoch milliseconds.
+///
+/// Rather than pin one shape per source and break on the first upstream
+/// rename, nothing here uses `Codable`: every reader accepts any of the key
+/// spellings below, and ``date(_:)`` accepts every timestamp encoding seen so
+/// far regardless of which payload it came from.
 enum QuotaJSON {
     /// Percentage-consumed key spellings observed or plausible in the payload.
     static let percentKeys = [
         "used_percentage",  // statusLine hook payload
         "usedPercentage",
+        "utilization",  // `cachedUsageUtilization` in ~/.claude.json
         "percent_used",
         "percentUsed",
         "used",
@@ -19,10 +28,11 @@ enum QuotaJSON {
     /// Reset-timestamp key spellings.
     static let resetKeys = ["resets_at", "resetsAt", "reset_at", "resetAt"]
 
-    /// Capture-timestamp key spellings (currently only used by the statusline
-    /// cache payload, but centralised alongside `resetKeys` for the next
-    /// source that needs one).
-    static let capturedAtKeys = ["captured_at", "capturedAt"]
+    /// Capture-timestamp key spellings, across both payloads: `captured_at`
+    /// is what the statusline helper script writes, `fetchedAtMs` is what
+    /// Claude Code stamps on `cachedUsageUtilization` (epoch **milliseconds** —
+    /// ``date(_:)``'s magnitude heuristic already handles that).
+    static let capturedAtKeys = ["captured_at", "capturedAt", "fetchedAtMs", "fetched_at_ms"]
 
     static func object(_ value: Any?) -> [String: Any]? {
         value as? [String: Any]

@@ -2,10 +2,14 @@ import Foundation
 
 /// Source of live account-wide quota percentages (tier 2 of the data layer).
 ///
-/// The only implementation is a `statusLine`-hook reader (writes/reads a disk
-/// cache; `.official` confidence) — see ``StatuslineCacheReader``.
+/// Two real implementations, both reporting Anthropic's own numbers:
+/// ``CachedUtilizationReader`` (Claude Code's own cached blob in
+/// `~/.claude.json`; `.cachedOfficial`, needs no setup) and
+/// ``StatuslineCacheReader`` (our `statusLine` hook's disk cache; `.official`,
+/// fresher but opt-in). ``FreshestQuotaProvider`` composes them and is what the
+/// app actually wires up.
 ///
-/// `async` because the real implementation does file I/O.
+/// `async` because the real implementations do file I/O.
 public protocol QuotaProviding: Sendable {
     /// The most recent reading available. Implementations may return a cached
     /// snapshot — callers check ``QuotaSnapshot/isStale(asOf:threshold:)``.
@@ -16,9 +20,10 @@ public protocol QuotaProviding: Sendable {
     ///
     /// A manual escape hatch, not part of the normal refresh path: it exists for
     /// a reading that looks stuck or wrong, which a plain re-read of the same
-    /// cache can't fix. Callers should expect
-    /// ``ClaudeStatsError/noQuotaSourceAvailable`` from the next read until the
-    /// source has reported again.
+    /// cache can't fix. For a source that composes multiple readers (see
+    /// ``FreshestQuotaProvider``), this only guarantees *this* source's own
+    /// state is discarded — another composed source may still produce a
+    /// reading on the next call.
     func clearCache() throws
 }
 
@@ -82,9 +87,10 @@ public enum ClaudeStatsError: Error, Sendable, Equatable {
     case configDirectoryNotFound
     /// A JSONL line could not be decoded.
     case malformedLogLine(path: String, line: Int)
-    /// No live quota source produced a usable reading — nothing installed, or
-    /// a reading with no usable data at all. See ``staleQuotaSource(age:)``
-    /// for the "installed, but hasn't reported recently" case.
+    /// No live quota source produced a usable reading — Claude Code has never
+    /// cached one on this Mac, or every source returned data with no usable
+    /// windows in it. See ``staleQuotaSource(age:)`` for the "has reported
+    /// before, but not recently" case.
     case noQuotaSourceAvailable
     /// A live quota source has a reading, but it's older than its staleness
     /// threshold — the source is installed and has worked before, it just
@@ -114,7 +120,7 @@ extension ClaudeStatsError: LocalizedError {
         case .malformedLogLine(let path, let line):
             return "Couldn't parse line \(line) of \((path as NSString).lastPathComponent)."
         case .noQuotaSourceAvailable:
-            return "No live quota data. Install the statusline hook in Settings → Quota source, or wait for it to report."
+            return "No live quota data yet. Claude Code hasn't cached a rate-limit reading on this Mac — run it once, and the percentages appear on the next refresh."
         case .staleQuotaSource(let age):
             return "Quota data is stale (hasn't reported in \(DisplayFormat.duration(age))). Open a terminal running Claude Code to refresh it."
         case .unexpectedQuotaResponse(let message):

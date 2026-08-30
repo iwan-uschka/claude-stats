@@ -79,11 +79,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.usingSampleData = usingSampleData
         self.usageStore = usageStore
 
-        // The only wired-up quota source: the statusline hook's disk cache.
-        // No fallback — until it's installed and has fired at least once,
-        // `AppModel.refresh()` surfaces `noQuotaSourceAvailable` as an error
-        // instead of showing an estimated number.
-        self.quotaProvider = StatuslineCacheReader()
+        // Both account-wide sources, newest reading wins: Claude Code's own
+        // cached `cachedUsageUtilization` blob (no setup required) and the
+        // statusline hook's disk cache (opt-in, but seconds rather than
+        // minutes old). Still no estimate fallback — when neither has a
+        // reading, `AppModel.refresh()` surfaces the error rather than a guess.
+        self.quotaProvider = FreshestQuotaProvider()
         self.promoNoticeProvider = RateLimitPromoNoticeReader()
 
         super.init()
