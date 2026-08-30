@@ -6,7 +6,8 @@ import SwiftUI
 /// Owns the `NSStatusItem` and its popover.
 ///
 /// The button shows the ``MenuBarGlyph`` template image (Claude mark + two thin
-/// window bars) and is redrawn whenever ``AppModel`` publishes a new snapshot.
+/// window bars, plus a third when the snapshot carries a scoped weekly limit)
+/// and is redrawn whenever ``AppModel`` publishes a new snapshot.
 @MainActor
 final class StatusItemController: NSObject, NSPopoverDelegate {
     /// Diameter of the dev-build indicator dot — see ``addDevBuildIndicator``.
@@ -18,6 +19,9 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
     /// Ticks only while the popover is on screen — see ``PopoverClock``.
     private let clock = PopoverClock()
     private var cancellables = Set<AnyCancellable>()
+    /// Kept so the dot can be re-anchored when the glyph changes width — it
+    /// grows by one bar the first time a scoped weekly limit appears.
+    private var devBuildDot: NSView?
 
     init(model: AppModel) {
         self.model = model
@@ -65,6 +69,10 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
 
     private func updateGlyph(for snapshot: QuotaSnapshot?) {
         statusItem.button?.image = MenuBarGlyph.image(for: snapshot)
+        // The glyph is one bar wider once a scoped weekly limit is reported, so
+        // the dot's anchor — derived from the drawn image's width, not the
+        // button's — has to follow it.
+        repositionDevBuildIndicator(glyphWidth: MenuBarGlyph.width(for: snapshot))
     }
 
     /// Overlays a small colored dot on the status item's top-left corner.
@@ -73,26 +81,34 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
     /// contains and renders it monochrome, so a colored dev-build marker has
     /// to live outside the image, as a real subview on the button.
     private func addDevBuildIndicator(to button: NSStatusBarButton) {
-        // The button's bounds are the menu bar's own thickness, not the drawn
-        // glyph's size — the (smaller) image is centered inside it. Anchor the
-        // dot to the image's actual corner, not the button's, so it lands on
-        // the glyph rather than in the surrounding padding.
-        let bounds = button.bounds
-        let imageOrigin = CGPoint(
-            x: (bounds.width - MenuBarGlyph.width) / 2,
-            y: (bounds.height - MenuBarGlyph.height) / 2
-        )
-        let dot = DevBuildDotView(frame: CGRect(
-            x: imageOrigin.x,
-            y: imageOrigin.y + MenuBarGlyph.height - Self.devDotDiameter,
-            width: Self.devDotDiameter,
-            height: Self.devDotDiameter
-        ))
+        let dot = DevBuildDotView(frame: .zero)
         dot.wantsLayer = true
         dot.layer?.cornerRadius = Self.devDotDiameter / 2
         dot.updateBackgroundColor()
         dot.autoresizingMask = [.maxXMargin, .minYMargin]
         button.addSubview(dot)
+        devBuildDot = dot
+        repositionDevBuildIndicator(glyphWidth: MenuBarGlyph.width(for: model.snapshot))
+    }
+
+    /// Places the dot on the glyph's top-left corner.
+    ///
+    /// The button's bounds are the menu bar's own thickness, not the drawn
+    /// glyph's size — the (smaller) image is centered inside it. Anchor the dot
+    /// to the image's actual corner, not the button's, so it lands on the glyph
+    /// rather than in the surrounding padding.
+    private func repositionDevBuildIndicator(glyphWidth: CGFloat) {
+        guard let dot = devBuildDot, let bounds = statusItem.button?.bounds else { return }
+        let imageOrigin = CGPoint(
+            x: (bounds.width - glyphWidth) / 2,
+            y: (bounds.height - MenuBarGlyph.height) / 2
+        )
+        dot.frame = CGRect(
+            x: imageOrigin.x,
+            y: imageOrigin.y + MenuBarGlyph.height - Self.devDotDiameter,
+            width: Self.devDotDiameter,
+            height: Self.devDotDiameter
+        )
     }
 
     @objc private func togglePopover(_ sender: Any?) {

@@ -32,13 +32,15 @@ final class FreshestQuotaProviderTests: XCTestCase {
     private func snapshot(
         _ confidence: QuotaConfidence,
         percent: Double,
-        capturedAgo: TimeInterval
+        capturedAgo: TimeInterval,
+        scopedWeekly: [QuotaScopedLimit] = []
     ) -> QuotaSnapshot {
         QuotaSnapshot(
             fiveHour: QuotaWindow(percentUsed: percent),
             sevenDay: QuotaWindow(percentUsed: percent),
             confidence: confidence,
-            capturedAt: now.addingTimeInterval(-capturedAgo)
+            capturedAt: now.addingTimeInterval(-capturedAgo),
+            scopedWeekly: scopedWeekly
         )
     }
 
@@ -68,6 +70,33 @@ final class FreshestQuotaProviderTests: XCTestCase {
 
         XCTAssertEqual(result.confidence, .cachedOfficial)
         XCTAssertEqual(result.fiveHour.percentUsed, 97)
+    }
+
+    /// Only the cached-state source reports scoped limits, and this provider
+    /// hands whole snapshots through — so a winning statusline capture yields
+    /// no scoped rows, and a winning cached reading keeps the ones it carried.
+    /// Neither is merged across sources: the two are the same reading at
+    /// different ages, not two halves of one.
+    func testScopedWeeklyLimitsFollowWhicheverSnapshotWins() async throws {
+        let scoped = [QuotaScopedLimit(label: "Fable", percentUsed: 0)]
+
+        let statuslineWins = FreshestQuotaProvider(
+            statusline: StubProvider(.success(snapshot(.official, percent: 62, capturedAgo: 30))),
+            cachedState: StubProvider(
+                .success(snapshot(.cachedOfficial, percent: 11, capturedAgo: 900, scopedWeekly: scoped))
+            )
+        )
+        let fromStatusline = try await statuslineWins.currentSnapshot()
+        XCTAssertEqual(fromStatusline.scopedWeekly, [])
+
+        let cachedWins = FreshestQuotaProvider(
+            statusline: StubProvider(.success(snapshot(.official, percent: 62, capturedAgo: 900))),
+            cachedState: StubProvider(
+                .success(snapshot(.cachedOfficial, percent: 11, capturedAgo: 30, scopedWeekly: scoped))
+            )
+        )
+        let fromCachedState = try await cachedWins.currentSnapshot()
+        XCTAssertEqual(fromCachedState.scopedWeekly, scoped)
     }
 
     /// Same underlying reading reaching us both ways: prefer the one that was

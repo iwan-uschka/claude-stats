@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Added
+- Per-model weekly limits. Claude Code's cached usage payload carries scoped
+  weekly sub-limits alongside the two account-wide windows
+  (`utilization.limits[]`), and each one now gets its own popover row —
+  `Fable (weekly)`, labelled straight from the payload, so a model that turns
+  up tomorrow needs no update. The menu bar glyph grows a third bar for the
+  highest of them. Entirely as reported: 0% shows as 0%, no countdown appears
+  when the payload gives no reset time, and neither the row nor its tooltip
+  claims what the percentage is a share of — that is undocumented, and
+  guessing at a denominator would be inventing a number.
+
 ## [0.9.6] - 2026-08-30
 
 ### Changed

@@ -49,9 +49,9 @@ final class CachedUtilizationReaderTests: XCTestCase {
 
     /// The payload as it actually appears on a real machine, trimmed only of
     /// the unrelated top-level keys (`projects`, `userID`, …). Keys this reader
-    /// deliberately ignores — `limits`, `spend`, `accountUuid`, the null scoped
-    /// windows — are kept, so a future reader for them can't quietly change
-    /// what this one sees.
+    /// deliberately ignores — `spend`, `accountUuid`, the null scoped windows,
+    /// and the `session` / `weekly_all` entries of `limits[]` — are kept, so a
+    /// future reader for them can't quietly change what this one sees.
     private func stateFile(fetchedAt: Date) -> String {
         """
         {
@@ -153,6 +153,166 @@ final class CachedUtilizationReaderTests: XCTestCase {
 
         XCTAssertEqual(snapshot.sevenDay.percentUsed, 42)
         XCTAssertEqual(snapshot.fiveHour, .empty)
+    }
+
+    // MARK: - Scoped weekly limits
+
+    /// A state file whose `limits[]` is exactly `entries`, fetched a minute ago.
+    private func stateFile(limits entries: String) -> String {
+        """
+        {
+          "cachedUsageUtilization": {
+            "fetchedAtMs": \(Int(now.timeIntervalSince1970 * 1000) - 60_000),
+            "utilization": {
+              "five_hour": { "utilization": 11, "resets_at": "2026-08-28T16:50:00.401807+00:00" },
+              "seven_day": { "utilization": 97, "resets_at": "2026-08-28T23:00:00.401826+00:00" },
+              "limits": [\(entries)]
+            }
+          }
+        }
+        """
+    }
+
+    /// The entry as observed verbatim on a real machine: 0%, inactive, no
+    /// reset timestamp.
+    private let fableEntry = """
+        { "kind": "weekly_scoped", "group": "weekly", "percent": 0, "severity": "normal",
+          "resets_at": null, "is_active": false,
+          "scope": { "model": { "id": null, "display_name": "Fable" }, "surface": null } }
+        """
+
+    func testWeeklyScopedEntryBecomesOneScopedLimit() async throws {
+        try write(stateFile(limits: fableEntry))
+
+        let snapshot = try await makeReader().currentSnapshot()
+
+        XCTAssertEqual(snapshot.scopedWeekly.count, 1)
+        let limit = try XCTUnwrap(snapshot.scopedWeekly.first)
+        XCTAssertEqual(limit.label, "Fable")
+        XCTAssertEqual(limit.id, "Fable")
+        // 0% is reported as 0%, never hidden.
+        XCTAssertEqual(limit.percentUsed, 0)
+        XCTAssertEqual(limit.window, QuotaWindow(percentUsed: 0, resetsAt: nil))
+        XCTAssertFalse(limit.isActive)
+        XCTAssertEqual(limit.severity, "normal")
+    }
+
+    /// `null` is the common case for an inactive scope — nil, not an error, and
+    /// the row simply shows no countdown.
+    func testNullResetsAtLeavesTheScopedLimitWithoutAReset() async throws {
+        try write(stateFile(limits: fableEntry))
+
+        let snapshot = try await makeReader().currentSnapshot()
+
+        XCTAssertNil(snapshot.scopedWeekly.first?.resetsAt)
+    }
+
+    func testPopulatedResetsAtIsParsed() async throws {
+        try write(stateFile(limits: """
+            { "kind": "weekly_scoped", "percent": 4, "is_active": true, "severity": "warning",
+              "resets_at": "2026-08-28T23:00:00.401826+00:00",
+              "scope": { "model": { "display_name": "Opus" } } }
+            """))
+
+        let snapshot = try await makeReader().currentSnapshot()
+
+        let limit = try XCTUnwrap(snapshot.scopedWeekly.first)
+        XCTAssertEqual(try XCTUnwrap(limit.resetsAt).timeIntervalSince1970,
+                       sevenDayResetEpoch, accuracy: 0.001)
+        XCTAssertTrue(limit.isActive)
+        XCTAssertEqual(limit.severity, "warning")
+    }
+
+    /// `session` and `weekly_all` restate `five_hour` / `seven_day`; parsing
+    /// them would duplicate the two main bars. The real payload fixture carries
+    /// both and nothing else.
+    func testSessionAndWeeklyAllEntriesAreIgnored() async throws {
+        try write(stateFile(fetchedAt: now.addingTimeInterval(-60)))
+
+        let snapshot = try await makeReader().currentSnapshot()
+
+        XCTAssertEqual(snapshot.fiveHour.percentUsed, 11)
+        XCTAssertEqual(snapshot.sevenDay.percentUsed, 97)
+        XCTAssertEqual(snapshot.scopedWeekly, [])
+    }
+
+    func testEntryThatNamesNoScopeIsSkipped() async throws {
+        try write(stateFile(limits: """
+            { "kind": "weekly_scoped", "percent": 7 },
+            { "kind": "weekly_scoped", "percent": 8,
+              "scope": { "model": { "id": null, "display_name": "" }, "surface": null } }
+            """))
+
+        let snapshot = try await makeReader().currentSnapshot()
+
+        XCTAssertEqual(snapshot.scopedWeekly, [])
+    }
+
+    func testSurfaceIsTheFallbackLabelWhenDisplayNameIsMissing() async throws {
+        try write(stateFile(limits: """
+            { "kind": "weekly_scoped", "percent": 3,
+              "scope": { "model": { "id": null, "display_name": "" }, "surface": "Claude Code" } }
+            """))
+
+        let snapshot = try await makeReader().currentSnapshot()
+
+        XCTAssertEqual(snapshot.scopedWeekly.map(\.label), ["Claude Code"])
+    }
+
+    /// Same principle as ``QuotaJSON/window(_:)``: an entry with no percentage
+    /// carries no information and is not 0%.
+    func testEntryWithoutPercentIsSkipped() async throws {
+        try write(stateFile(limits: """
+            { "kind": "weekly_scoped", "severity": "normal", "resets_at": null,
+              "scope": { "model": { "display_name": "Fable" } } }
+            """))
+
+        let snapshot = try await makeReader().currentSnapshot()
+
+        XCTAssertEqual(snapshot.scopedWeekly, [])
+    }
+
+    func testScopedLimitsAreSortedByPercentDescending() async throws {
+        try write(stateFile(limits: """
+            \(fableEntry),
+            { "kind": "weekly_scoped", "percent": 42, "is_active": true,
+              "scope": { "model": { "display_name": "Sonnet" } } },
+            { "kind": "weekly_scoped", "percent": 12,
+              "scope": { "model": { "display_name": "Opus" } } }
+            """))
+
+        let snapshot = try await makeReader().currentSnapshot()
+
+        XCTAssertEqual(snapshot.scopedWeekly.map(\.label), ["Sonnet", "Opus", "Fable"])
+        XCTAssertEqual(snapshot.scopedWeekly.map(\.percentUsed), [42, 12, 0])
+    }
+
+    /// Equal percentages — the common all-zero case — fall back to the label so
+    /// the order can't shuffle between polls.
+    func testEqualPercentagesAreOrderedByLabel() async throws {
+        try write(stateFile(limits: """
+            { "kind": "weekly_scoped", "percent": 0, "scope": { "model": { "display_name": "Sonnet" } } },
+            { "kind": "weekly_scoped", "percent": 0, "scope": { "model": { "display_name": "Fable" } } }
+            """))
+
+        let snapshot = try await makeReader().currentSnapshot()
+
+        XCTAssertEqual(snapshot.scopedWeekly.map(\.label), ["Fable", "Sonnet"])
+    }
+
+    func testMissingLimitsArrayYieldsNoScopedLimits() async throws {
+        try write("""
+        {
+          "cachedUsageUtilization": {
+            "fetchedAtMs": \(Int(now.timeIntervalSince1970 * 1000) - 60_000),
+            "utilization": { "five_hour": { "utilization": 11 } }
+          }
+        }
+        """)
+
+        let snapshot = try await makeReader().currentSnapshot()
+
+        XCTAssertEqual(snapshot.scopedWeekly, [])
     }
 
     // MARK: - Staleness

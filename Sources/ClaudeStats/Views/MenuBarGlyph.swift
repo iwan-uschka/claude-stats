@@ -3,7 +3,8 @@ import ClaudeStatsCore
 import SwiftUI
 
 /// Draws the status item's glyph: the Claude mark, then two thin vertical bars
-/// for the 5-hour and 7-day windows.
+/// for the 5-hour and 7-day windows — plus a third for the highest scoped
+/// weekly limit, whenever the payload reports one.
 ///
 /// Rendered into a *template* `NSImage` rather than hosted as a SwiftUI view.
 /// Template images are the only thing that gets the menu bar's full treatment
@@ -28,19 +29,54 @@ enum MenuBarGlyph {
     /// Alpha of the unused portion of a bar.
     static let trackAlpha: CGFloat = 0.3
 
-    static var width: CGFloat {
-        markSize + markToBarsGap + barWidth * 2 + barSpacing
+    /// Bars always drawn: the 5-hour and 7-day windows.
+    static let baseBarCount = 2
+
+    /// Total width for a given number of bars — 2 normally, 3 once the payload
+    /// reports a scoped weekly limit, so the glyph grows by exactly one bar
+    /// rather than reserving space for one that may never appear.
+    static func width(barCount: Int) -> CGFloat {
+        let bars = CGFloat(max(barCount, 1))
+        return markSize + markToBarsGap + barWidth * bars + barSpacing * (bars - 1)
     }
 
+    /// How many bars a snapshot draws. Only ever one scoped bar, however many
+    /// scoped limits the payload carries — the popover is where the full list
+    /// lives.
+    static func barCount(for snapshot: QuotaSnapshot?) -> Int {
+        baseBarCount + ((snapshot?.scopedWeekly.isEmpty ?? true) ? 0 : 1)
+    }
+
+    /// Width of the glyph drawn for `snapshot`.
+    static func width(for snapshot: QuotaSnapshot?) -> CGFloat {
+        width(barCount: barCount(for: snapshot))
+    }
+
+    /// Width with no scoped bar — the two-bar default.
+    static var width: CGFloat { width(barCount: baseBarCount) }
+
     /// Template image for the given window fills (each 0...1, clamped).
-    static func image(fiveHourFraction: Double, sevenDayFraction: Double) -> NSImage {
-        let fractions = [
+    ///
+    /// `scopedWeeklyFraction` draws the optional third bar; `scopedWeeklyLabel`
+    /// only names it for VoiceOver. Neither says what the scoped percentage is a
+    /// share of — see ``QuotaScopedLimit``.
+    static func image(
+        fiveHourFraction: Double,
+        sevenDayFraction: Double,
+        scopedWeeklyFraction: Double? = nil,
+        scopedWeeklyLabel: String? = nil
+    ) -> NSImage {
+        var fractions = [
             DisplayFormat.clamped01(fiveHourFraction),
             DisplayFormat.clamped01(sevenDayFraction),
         ]
+        if let scopedWeeklyFraction {
+            fractions.append(DisplayFormat.clamped01(scopedWeeklyFraction))
+        }
 
+        let imageWidth = width(barCount: fractions.count)
         let image = NSImage(
-            size: NSSize(width: width, height: height),
+            size: NSSize(width: imageWidth, height: height),
             flipped: true // SVG/UI y-down, so the mark path needs no flip.
         ) { _ in
             guard let context = NSGraphicsContext.current?.cgContext else { return false }
@@ -49,15 +85,27 @@ enum MenuBarGlyph {
         }
         image.isTemplate = true
         let devSuffix = BuildEnvironment.isDevelopmentBuild ? BuildEnvironment.devBuildSuffix : ""
-        image.accessibilityDescription = "Claude Stats\(devSuffix): \(Int(fractions[0] * 100))% five-hour, \(Int(fractions[1] * 100))% seven-day usage"
+        var description = "Claude Stats\(devSuffix): \(Int(fractions[0] * 100))% five-hour, \(Int(fractions[1] * 100))% seven-day usage"
+        if fractions.count > baseBarCount {
+            let scope = scopedWeeklyLabel.map { "\($0) " } ?? ""
+            description += ", \(Int(fractions[2] * 100))% \(scope)weekly"
+        }
+        image.accessibilityDescription = description
         return image
     }
 
     /// Snapshot-driven convenience; an absent snapshot draws empty bars.
+    ///
+    /// The scoped bar takes the highest-percentage entry —
+    /// ``QuotaSnapshot/scopedWeekly`` is already sorted descending, so `first`
+    /// is that one, and it stays the same entry across polls.
     static func image(for snapshot: QuotaSnapshot?) -> NSImage {
-        image(
+        let scoped = snapshot?.scopedWeekly.first
+        return image(
             fiveHourFraction: snapshot?.fiveHour.fractionUsed ?? 0,
-            sevenDayFraction: snapshot?.sevenDay.fractionUsed ?? 0
+            sevenDayFraction: snapshot?.sevenDay.fractionUsed ?? 0,
+            scopedWeeklyFraction: scoped?.window.fractionUsed,
+            scopedWeeklyLabel: scoped?.label
         )
     }
 
@@ -130,11 +178,14 @@ enum MenuBarGlyph {
 /// Preview harness: shows the glyph over both menu bar backgrounds at a few
 /// fill levels. `swift build` can't show this, but Xcode's canvas can.
 #Preview("Menu bar glyph") {
-    let samples: [(String, Double, Double)] = [
-        ("empty", 0, 0),
-        ("mock", 0.62, 0.31),
-        ("high", 0.94, 0.71),
-        ("full", 1, 1),
+    let samples: [(String, Double, Double, Double?)] = [
+        ("empty", 0, 0, nil),
+        ("mock", 0.62, 0.31, nil),
+        ("high", 0.94, 0.71, nil),
+        ("full", 1, 1, nil),
+        // With a scoped weekly bar: the glyph is one bar wider.
+        ("scoped", 0.62, 0.31, 0),
+        ("scoped hi", 0.94, 0.71, 0.55),
     ]
 
     return VStack(spacing: 0) {
@@ -144,7 +195,9 @@ enum MenuBarGlyph {
                     VStack(spacing: 4) {
                         Image(nsImage: MenuBarGlyph.image(
                             fiveHourFraction: sample.1,
-                            sevenDayFraction: sample.2
+                            sevenDayFraction: sample.2,
+                            scopedWeeklyFraction: sample.3,
+                            scopedWeeklyLabel: sample.3 == nil ? nil : "Fable"
                         ))
                         .renderingMode(.template)
                         Text(sample.0)

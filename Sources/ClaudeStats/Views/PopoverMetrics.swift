@@ -6,7 +6,13 @@ enum PopoverMetrics {
     static let popoverWidth: CGFloat = 340
     static let contentPadding: CGFloat = 14
     /// Width of the leading label column shared by every row type.
-    static let labelColumnWidth: CGFloat = 84
+    ///
+    /// 92, not the 84 the two fixed window labels needed: the scoped weekly rows
+    /// are labelled from the payload, and `"Sonnet (weekly)"` measures 84.7 pt at
+    /// ``bodyFont`` — it would have wrapped at 84. 92 clears every one-word model
+    /// name with margin; anything longer truncates (``WindowBarView`` pins its
+    /// label to one line) rather than growing the row to two lines.
+    static let labelColumnWidth: CGFloat = 92
     /// Width of the trailing numeric column (token counts).
     static let valueColumnWidth: CGFloat = 74
     /// Width of the token column in the "By model" section — wider than

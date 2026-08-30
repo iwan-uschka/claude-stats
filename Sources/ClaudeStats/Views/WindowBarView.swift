@@ -13,6 +13,11 @@ struct WindowBarView: View {
         HStack(spacing: PopoverMetrics.rowSpacing) {
             Text(title)
                 .font(PopoverMetrics.bodyFont)
+                // Scoped rows take their label from the payload, so an
+                // unexpectedly long model name has to truncate — wrapping would
+                // make one row twice as tall as its neighbours.
+                .lineLimit(1)
+                .truncationMode(.tail)
                 .frame(width: PopoverMetrics.labelColumnWidth, alignment: .leading)
 
             UsageBar(fraction: window.fractionUsed)

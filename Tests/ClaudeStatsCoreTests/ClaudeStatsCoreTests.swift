@@ -37,6 +37,68 @@ final class ClaudeStatsCoreTests: XCTestCase {
         XCTAssertEqual(PlanTier.nearestKnownTier(forFiveHourTokens: 23_751), .custom(tokens: 23_751))
     }
 
+    // MARK: - QuotaSnapshot coding
+
+    private func roundTripped(_ snapshot: QuotaSnapshot) throws -> QuotaSnapshot {
+        let encoded = try JSONEncoder().encode(snapshot)
+        return try JSONDecoder().decode(QuotaSnapshot.self, from: encoded)
+    }
+
+    func testQuotaSnapshotRoundTripsWithoutScopedLimits() throws {
+        let snapshot = QuotaSnapshot(
+            fiveHour: QuotaWindow(percentUsed: 11, resetsAt: Date(timeIntervalSince1970: 1_787_935_800)),
+            sevenDay: QuotaWindow(percentUsed: 97),
+            confidence: .cachedOfficial,
+            capturedAt: Date(timeIntervalSince1970: 1_787_935_500)
+        )
+
+        XCTAssertEqual(snapshot.scopedWeekly, [])
+        XCTAssertEqual(try roundTripped(snapshot), snapshot)
+    }
+
+    func testQuotaSnapshotRoundTripsWithScopedLimits() throws {
+        let snapshot = QuotaSnapshot(
+            fiveHour: QuotaWindow(percentUsed: 11),
+            sevenDay: QuotaWindow(percentUsed: 97),
+            confidence: .cachedOfficial,
+            capturedAt: Date(timeIntervalSince1970: 1_787_935_500),
+            scopedWeekly: [
+                QuotaScopedLimit(
+                    label: "Sonnet",
+                    percentUsed: 42,
+                    resetsAt: Date(timeIntervalSince1970: 1_787_958_000),
+                    isActive: true,
+                    severity: "warning"
+                ),
+                QuotaScopedLimit(label: "Fable", percentUsed: 0),
+            ]
+        )
+
+        let decoded = try roundTripped(snapshot)
+
+        XCTAssertEqual(decoded, snapshot)
+        XCTAssertEqual(decoded.scopedWeekly.map(\.label), ["Sonnet", "Fable"])
+        XCTAssertNil(decoded.scopedWeekly[1].resetsAt)
+        XCTAssertNil(decoded.scopedWeekly[1].severity)
+    }
+
+    /// A snapshot encoded before ``QuotaSnapshot/scopedWeekly`` existed has no
+    /// such key — it must decode to the empty default, not fail.
+    func testQuotaSnapshotDecodesJSONWithoutScopedWeeklyKey() throws {
+        let json = """
+        { "fiveHour": { "percentUsed": 62 },
+          "sevenDay": { "percentUsed": 31 },
+          "confidence": "official",
+          "capturedAt": 776543210 }
+        """
+
+        let decoded = try JSONDecoder().decode(QuotaSnapshot.self, from: Data(json.utf8))
+
+        XCTAssertEqual(decoded.fiveHour.percentUsed, 62)
+        XCTAssertEqual(decoded.confidence, .official)
+        XCTAssertEqual(decoded.scopedWeekly, [])
+    }
+
     func testMocksProvideDataForEveryWindow() async throws {
         let store = MockUsageStore()
         for window in TimeWindow.allCases {

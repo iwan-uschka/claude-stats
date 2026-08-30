@@ -60,11 +60,21 @@ Two independent tiers, deliberately decoupled:
        Claude Code release — a `spend` object appeared inside this payload
        between 2026-08-27 and 2026-08-28. That is precisely why the statusline
        path below is kept rather than deleted.
-     - The payload also carries a flat `limits[]` (scoped per-model entries,
-       `severity`, `is_active`), `spend` / `extra_usage`, and `accountUuid`.
-       None are read yet: `limits[]` is internally consistent with the typed
-       fields (`session` == `five_hour`, `weekly_all` == `seven_day`), which is
-       why the typed fields stay the source for the two main bars.
+     - The payload also carries a flat `limits[]`, `spend` / `extra_usage`, and
+       `accountUuid`. Its `session` and `weekly_all` entries are deliberately
+       *not* read — they restate the typed fields (`session` == `five_hour`,
+       `weekly_all` == `seven_day`), which stay the source for the two main
+       bars. Its `weekly_scoped` entries **are** read, one per scope, labelled
+       from `scope.model.display_name` (falling back to `scope.surface`) and
+       carried on the snapshot as `scopedWeekly` — generically, so a model that
+       appears tomorrow needs no code change.
+       - **What that `percent` is a share of is unverified.** Every entry
+         observed so far read 0, with `resets_at: null` and
+         `is_active: false`; whether a populated one measures a model-specific
+         sub-cap or the account's weekly total is unknown. So the row and its
+         tooltip report Claude Code's own number and name no denominator, and
+         0% is shown as 0% rather than hidden. `severity` and `is_active` are
+         stored for fidelity but not yet styled.
    - **statusline hook (`official`, opt-in, sharper freshness).** Register as
      (or piggyback on) Claude Code's `statusLine` hook — receives
      `rate_limits.{five_hour,seven_day}.{used_percentage,resets_at}` via stdin,
@@ -156,7 +166,11 @@ Two independent tiers, deliberately decoupled:
   generic SF Symbol.
 - 2 thin vertical bars, monochrome fixed fill (no color-shift-to-red), no
   text labels — 5-hour window % and 7-day window %. Minimal total width,
-  matching Stats' CPU/GPU/RAM glyph but thinner.
+  matching Stats' CPU/GPU/RAM glyph but thinner. A **third bar** appears when
+  the payload reports a scoped weekly limit, showing the highest-percentage
+  scope only (the popover lists them all); the glyph's width is a function of
+  the bar count, so it grows by exactly one bar and never reserves space for a
+  bar that isn't there.
 
 Click opens a popover:
 
@@ -168,6 +182,16 @@ Click opens a popover:
                                     bar, read from `~/.claude.json`; the bare
                                     URL is clickable. Only when one is cached
                                     and fresh.
+Fable (weekly)     ░░░░░░░░  0%
+                                  ← one row per `weekly_scoped` entry in the
+                                    payload's `limits[]`, labelled from
+                                    `scope.model.display_name`. Only when the
+                                    payload reports any. 0% shows as 0%; the
+                                    countdown column is empty when the entry
+                                    has no `resets_at`. The tooltip says it is
+                                    Claude Code's own scoped weekly limit and
+                                    deliberately claims no denominator for the
+                                    percentage.
 source: official (cached) · 4m ago              ← confidence tag + freshness;
                                     `official` (no suffix) once the statusline
                                     hook is installed and has just fired

@@ -66,6 +66,9 @@ struct PopoverView: View {
             if let snapshot = model.snapshot {
                 quotaWindowRow(.fiveHour, window: snapshot.fiveHour)
                 quotaWindowRow(.sevenDay, window: snapshot.sevenDay)
+                ForEach(snapshot.scopedWeekly) { limit in
+                    scopedWeeklyRow(limit)
+                }
                 Text(sourceTag(for: snapshot))
                     .font(PopoverMetrics.captionFont)
                     .foregroundStyle(.secondary)
@@ -105,6 +108,23 @@ struct PopoverView: View {
                 promoNoticeLine(notice)
             }
         }
+    }
+
+    /// One per-model weekly sub-limit, as Claude Code reports it.
+    ///
+    /// The tooltip deliberately says nothing about what the percentage is a
+    /// share of: the payload gives a bare `percent` with no denominator, and
+    /// whether it measures a model-specific sub-cap or the account's weekly
+    /// total is unverified — see ``QuotaScopedLimit``. Claiming either would be
+    /// inventing a fact the source doesn't carry. No countdown appears when the
+    /// entry has no `resets_at`, which is the common case.
+    private func scopedWeeklyRow(_ limit: QuotaScopedLimit) -> some View {
+        WindowBarView(
+            title: "\(limit.label) (weekly)",
+            window: limit.window,
+            now: now
+        )
+        .help("Claude Code's own scoped weekly limit for \(limit.label), reported exactly as it comes from Claude Code. What the percentage is measured against is not documented.")
     }
 
     /// Claude Code's own promo line for a bar, with any URL in it clickable.

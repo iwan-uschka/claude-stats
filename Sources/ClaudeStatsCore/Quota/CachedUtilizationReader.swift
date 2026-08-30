@@ -27,11 +27,22 @@ import Foundation
 /// }
 /// ```
 ///
-/// The two typed windows are the source for the two bars. `limits[]` carries
-/// the same numbers again in a flat, scoped form (`session` == `five_hour`,
-/// `weekly_all` == `seven_day`) and is left for the scoped-bar work; nothing
-/// here reads it. `accountUuid` is carried by the payload but unused — there is
-/// nothing on this side to compare it against.
+/// The two typed windows are the source for the two main bars. `limits[]`
+/// restates those same numbers in a flat form (`session` == `five_hour`,
+/// `weekly_all` == `seven_day`) — both kinds are deliberately skipped here, so
+/// they can't duplicate or shadow the typed fields. Only its `weekly_scoped`
+/// entries are read, each becoming a ``QuotaScopedLimit`` labelled from
+/// `scope.model.display_name`:
+///
+/// ```json
+/// { "kind": "weekly_scoped", "group": "weekly", "percent": 0, "severity": "normal",
+///   "resets_at": null, "is_active": false,
+///   "scope": { "model": { "id": null, "display_name": "Fable" }, "surface": null } }
+/// ```
+///
+/// What that `percent` is a share of is **not** documented — see
+/// ``QuotaScopedLimit``. `accountUuid` is carried by the payload but unused —
+/// there is nothing on this side to compare it against.
 ///
 /// ## Staleness: 30 minutes, not the statusline's 10
 ///
@@ -118,7 +129,8 @@ public struct CachedUtilizationReader: QuotaProviding {
             fiveHour: windows.fiveHour,
             sevenDay: windows.sevenDay,
             confidence: .cachedOfficial,
-            capturedAt: capturedAt
+            capturedAt: capturedAt,
+            scopedWeekly: QuotaJSON.scopedLimits(in: utilization)
         )
 
         guard !snapshot.isStale(asOf: now(), threshold: stalenessThreshold) else {
