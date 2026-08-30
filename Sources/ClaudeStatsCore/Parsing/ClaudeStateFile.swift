@@ -59,11 +59,22 @@ enum ClaudeStateFile {
         /// The file still matches the caller's previous fingerprint.
         case unchanged
         case loaded(root: [String: Any], fingerprint: ClaudeStateFileFingerprint)
-        /// No candidate could be opened, the opened path wasn't a regular file
-        /// (fstat failed, or it was a directory/FIFO/device), or the first one
-        /// that opened held something that isn't a JSON object. All are "no
-        /// data", never an error — see ``RateLimitPromoNoticeReader``.
+        /// Nothing to read: no candidate could be opened, the opened path
+        /// wasn't a regular file (fstat failed, or it was a
+        /// directory/FIFO/device), or the read itself failed.
         case unavailable
+        /// A candidate opened and was read, but its bytes are not a JSON
+        /// object — the file is *present and broken*, as distinct from absent.
+        ///
+        /// Split out from ``unavailable`` because the two callers want opposite
+        /// things from it: ``RateLimitPromoNoticeReader`` treats both as "no
+        /// promo" (it has no failure path at all), while a quota reader has to
+        /// tell "Claude Code has never cached a reading" apart from "the file
+        /// it caches into is corrupt".
+        ///
+        /// Carries no diagnostic on purpose: anything describing what was in
+        /// there risks leaking the file's contents.
+        case malformed
     }
 
     /// Probes `candidates` in order; the first path that *opens* wins, even if
@@ -108,9 +119,7 @@ enum ClaudeStateFile {
                 return .unavailable
             }
             guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
-                // Deliberately no diagnostic: anything describing what was in
-                // there risks leaking the file's contents.
-                return .unavailable
+                return .malformed
             }
             return .loaded(root: root, fingerprint: fingerprint)
         }

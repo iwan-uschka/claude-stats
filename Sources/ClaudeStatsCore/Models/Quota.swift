@@ -65,11 +65,24 @@ public enum QuotaWindowKind: String, Sendable, Hashable, Codable, CaseIterable {
     }
 }
 
-/// How trustworthy a ``QuotaSnapshot`` is. Only one source is wired up
-/// (Claude Code's `statusLine` hook), so this currently has a single case.
+/// How trustworthy a ``QuotaSnapshot`` is.
+///
+/// Both cases carry Anthropic's own numbers — neither is an estimate. They
+/// differ only in how directly the reading reached us, which is a freshness
+/// distinction, not an accuracy one.
 public enum QuotaConfidence: String, Sendable, Codable {
-    /// Fresh capture from Claude Code's `statusLine` hook.
+    /// Fresh capture from Claude Code's `statusLine` hook: the payload as it
+    /// was handed to a status line render, seconds old.
     case official = "official"
+
+    /// Claude Code's own cached copy of the same numbers, read out of its
+    /// private state file (`cachedUsageUtilization` in `~/.claude.json`).
+    ///
+    /// Coarser than ``official`` — Claude Code refreshes that blob on its own
+    /// schedule (observed 15 minutes old mid-session), so a reading can be
+    /// several minutes behind reality even while the file itself is rewritten
+    /// constantly for unrelated keys.
+    case cachedOfficial = "official (cached)"
 
     /// Label shown in the popover's freshness tag.
     public var displayLabel: String { rawValue }

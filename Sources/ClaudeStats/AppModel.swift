@@ -195,12 +195,17 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// Deletes the quota source's cache and re-polls until a fresh reading lands.
+    /// Deletes the statusline cache and re-polls until a fresh reading lands.
     ///
     /// The escape hatch for a number that looks stuck or wrong — several
     /// concurrent Claude Code sessions share one cache file, so any of them can
     /// overwrite it with its own older reading. Plain "Refresh" can't help there:
     /// it re-reads the very file that holds the bad value.
+    ///
+    /// Only the statusline cache goes: `~/.claude.json` is Claude Code's own
+    /// live state file (see `CachedUtilizationReader.clearCache()`), so the
+    /// repoll below usually lands on that source's reading rather than on
+    /// nothing.
     ///
     /// The repoll goes through ``pollAfterInstall()`` rather than a single
     /// poll: a just-deleted cache is the same "file doesn't exist yet" state as
@@ -209,9 +214,9 @@ final class AppModel: ObservableObject {
     /// notice up for a full `quotaPollInterval` (up to 5 minutes) before
     /// anything tries again.
     ///
-    /// ``snapshot`` is dropped right away rather than at the end of the poll: the
-    /// file is already gone, so keeping the old number on screen would show a
-    /// reading that no longer has any source behind it.
+    /// ``snapshot`` is dropped right away rather than at the end of the poll:
+    /// the whole point of the button is that the number on screen is suspect,
+    /// so it goes immediately rather than lingering until a replacement lands.
     ///
     /// If the delete itself fails, none of the above happens: the existing
     /// snapshot/notice state is left untouched and the failure is surfaced via
@@ -232,7 +237,7 @@ final class AppModel: ObservableObject {
         snapshot = nil
         quotaError = nil
         quotaWarning = nil
-        quotaCacheClearedNotice = "Cache cleared — the next number comes from Claude Code's own next statusline render."
+        quotaCacheClearedNotice = "Statusline cache cleared — the bars fall back to Claude Code's own cached reading until the next statusline render."
 
         reloadLocalStats()
         reloadBreakdown()
@@ -382,7 +387,7 @@ extension AppModel {
     static func previewCacheCleared() -> AppModel {
         let model = preview(snapshot: nil)
         model.quotaCacheClearedNotice =
-            "Cache cleared — the next number comes from Claude Code's own next statusline render."
+            "Statusline cache cleared — the bars fall back to Claude Code's own cached reading until the next statusline render."
         return model
     }
 

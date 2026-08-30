@@ -23,7 +23,7 @@ Pre-built releases (macOS app bundle, zipped) are available on the
 - Popover with per-window usage and reset countdowns, auto-detected plan tier (Pro / Max5 / Max20 / custom), and current burn rate
 - Per-source breakdown (CLI / VS Code / SDK-agents) across 5h/24h/7d windows, and per-model token/cost totals
 - Local session-log parsing (`~/.claude/projects/*/*.jsonl`) — token counts, cost, burn rate always available, no network or credentials needed
-- Live 5-hour/7-day quota percentage from Claude Code's `statusLine` hook — see [Quota source](#quota-source)
+- Live 5-hour/7-day quota percentage straight from Claude Code's own cached reading — no setup, no hook to install; the `statusLine` hook is optional and just makes it fresher — see [Quota source](#quota-source)
 - Claude Code's own rate-limit promo notices, shown under the bar they apply to, with any link in them clickable
 - FSEvents-driven refresh — updates on write, not on a poll timer
 
@@ -31,24 +31,29 @@ Full architecture and data-source design: see [AGENTS.md](AGENTS.md).
 
 ## Quota source
 
-The popover's 5-hour/7-day percentage bars come from a single source, tagged
-`official` in the freshness line: Claude Code's `statusLine` hook, cached to
-disk (stale after ~10 min). There is no fallback — until the hook is
-installed and has fired at least once, the popover shows an error instead of
-a quota number. Once it has fired at least once but has since gone quiet
-(stale cache), the popover keeps the last reading on screen with an orange
-staleness warning instead. Token counts, cost, and burn rate (from local log
-parsing) work regardless.
+**No setup required.** The popover's 5-hour/7-day percentage bars read Claude
+Code's own cached rate-limit numbers out of `~/.claude.json`, which it writes
+for itself — tagged `official (cached)` in the freshness line. Run Claude Code
+once and the bars fill in. Claude Code refreshes that cache on its own
+schedule, so a reading can be several minutes old; anything older than 30
+minutes is treated as stale.
 
-**Setup.** Claude Code's `statusLine` feature can emit live rate-limit data,
-but only while a terminal is actively rendering a status line, and only if
-something is registered to receive it. This app is a menu bar app, not a
-shell hook, so a small script bridges the two. Open **Settings → Quota
-source** and click **Set Up Automatically**: the app shows the exact
-before/after change to `~/.claude/settings.json`, backs the file up, and only
-edits the `statusLine` key (an existing statusline is wrapped, not replaced).
-**Remove** reverts it. Prefer doing it yourself? **Reveal Script in Finder**
-and follow the header comment.
+**Optional: sharper freshness.** Claude Code's `statusLine` feature emits the
+same rate-limit data the moment it renders a status line, which is seconds old
+rather than minutes — but only if something is registered to receive it, and
+this app is a menu bar app, not a shell hook, so a small script bridges the
+two. Open **Settings → Quota source** and click **Set Up Automatically**: the
+app shows the exact before/after change to `~/.claude/settings.json`, backs the
+file up, and only edits the `statusLine` key (an existing statusline is
+wrapped, not replaced). **Remove** reverts it. Prefer doing it yourself?
+**Reveal Script in Finder** and follow the header comment. With the hook
+installed and freshly fired, the tag reads `official`.
+
+Whichever source has the newer reading wins, so one of them being quiet is
+invisible. There is no estimate fallback: with neither reporting, the popover
+shows an error rather than a guessed number, and a real-but-old reading stays
+on screen with an orange staleness warning. Token counts, cost, and burn rate
+(from local log parsing) work regardless.
 
 This tier is account-wide — it reflects usage from other machines/containers
 on the same Anthropic account automatically.

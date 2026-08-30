@@ -169,7 +169,7 @@ struct SettingsView: View {
     private var quotaSourceSection: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Quota source").font(.headline)
-            Text("The 5-hour/7-day percentages only ever come from this hook — there's no other source.")
+            Text("The 5-hour/7-day percentages come from Claude Code's own cached reading, with no setup. The statusline hook below is optional — it reports the same numbers, seconds old instead of minutes.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -182,7 +182,10 @@ struct SettingsView: View {
 
             hookStatusView
 
-            if model.snapshot == nil, hookState == nil || hookState == .notInstalled {
+            // Not gated on `model.snapshot`: the cached source usually fills
+            // that in, and the manual wiring route has to stay reachable for
+            // someone who wants the sharper tier anyway.
+            if hookState == nil || hookState == .notInstalled {
                 Button("Reveal Script in Finder") { revealBundledScript() }
                     .controlSize(.small)
                 Text("Prefer to wire it up yourself? The script's header comment has the exact steps.")
@@ -204,7 +207,7 @@ struct SettingsView: View {
 
         case nil, .notInstalled:
             Text(
-                "For live 5-hour/7-day percentages straight from Claude Code (the \"official\" tier), install the statusline hook. This edits ~/.claude/settings.json — you'll see exactly what changes before anything is written."
+                "Optional: install the statusline hook to upgrade the tag from \"official (cached)\" to \"official\" — the same percentages, captured as Claude Code renders them instead of from its own cache. This edits ~/.claude/settings.json — you'll see exactly what changes before anything is written."
             )
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -215,7 +218,7 @@ struct SettingsView: View {
         case .installed(let wrapping):
             HStack(spacing: 6) {
                 Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-                Text("Official tier installed")
+                Text("Statusline hook installed")
                     .font(.caption)
             }
             if let wrapping {

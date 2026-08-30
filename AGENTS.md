@@ -34,26 +34,53 @@ Two independent tiers, deliberately decoupled:
    already present on each line — confirmed values on this machine: `cli`,
    `claude-vscode`, `sdk-cli` (Agent SDK / subagents / workflows / headless
    `-p` runs). Only sees sessions whose JSONL lives on this Mac's disk.
-2. **Live account-wide quota % (secondary, `official` confidence, no
-   fallback).** Register as (or piggyback on) Claude Code's `statusLine`
-   hook — receives `rate_limits.{five_hour,seven_day}.{used_percentage,
-   resets_at}` via stdin, but only fires while Claude Code is actively
-   rendering a status line in a terminal. Cache to disk, treat as stale after
-   ~10 min. This is the only quota source: no live source installed surfaces
-   as an error in the popover rather than falling back to an estimate; an
-   installed-but-quiet source (stale cache) keeps the last reading on screen
-   with an orange staleness warning — see
-   `Sources/ClaudeStatsCore/Quota/StatuslineCacheReader.swift`.
+2. **Live account-wide quota % (secondary, no estimate fallback).** Two
+   sources, both carrying Anthropic's own numbers, composed by
+   `Sources/ClaudeStatsCore/Quota/FreshestQuotaProvider.swift`: it queries both
+   and serves whichever snapshot has the newer `capturedAt`. One source being
+   down is invisible; an error only surfaces when **both** fail.
    **This tier is account-wide, not machine-wide** — it already reflects AFK
    docker-loop usage automatically, *because* those containers reauthenticate
    as the same Anthropic account (confirmed: no separate API keys). No extra
    plumbing needed for that case.
-   - A prior version of this app additionally polled the undocumented
-     `oauth/usage` endpoint (`experimental` confidence) and, failing that,
-     estimated usage from local token counts against the detected plan's
-     budget (`local_estimate` confidence). Both were removed: the app is
-     meant to show the account's real rate-limit window, not a guess, so a
-     source that can't do that shouldn't silently stand in for one that can.
+   - **`cachedUsageUtilization` (primary, `official (cached)`, zero setup).**
+     Claude Code caches the same rate-limit payload into its own state file,
+     `~/.claude.json`, as
+     `cachedUsageUtilization.utilization.{five_hour,seven_day}.{utilization,
+     resets_at}` with a `fetchedAtMs` stamp (epoch ms; `resets_at` here is
+     ISO-8601 with fractional seconds, unlike the statusline payload's epoch
+     seconds). Nothing to install — see
+     `Sources/ClaudeStatsCore/Quota/CachedUtilizationReader.swift`.
+     - **Stale after 30 min, not the statusline's 10.** Measured: `fetchedAtMs`
+       sat 15 minutes old during an active session and did not move across five
+       rewrites of `~/.claude.json` spanning 13 minutes — the file's churn is
+       *not* a usage refresh. A 10-minute gate would reject good readings. The
+       30 is a judgement call from one measurement, not a documented cadence.
+     - **Undocumented private state.** It can be renamed or dropped by any
+       Claude Code release — a `spend` object appeared inside this payload
+       between 2026-08-27 and 2026-08-28. That is precisely why the statusline
+       path below is kept rather than deleted.
+     - The payload also carries a flat `limits[]` (scoped per-model entries,
+       `severity`, `is_active`), `spend` / `extra_usage`, and `accountUuid`.
+       None are read yet: `limits[]` is internally consistent with the typed
+       fields (`session` == `five_hour`, `weekly_all` == `seven_day`), which is
+       why the typed fields stay the source for the two main bars.
+   - **statusline hook (`official`, opt-in, sharper freshness).** Register as
+     (or piggyback on) Claude Code's `statusLine` hook — receives
+     `rate_limits.{five_hour,seven_day}.{used_percentage,resets_at}` via stdin,
+     but only fires while Claude Code is actively rendering a status line in a
+     terminal. Cache to disk, treat as stale after ~10 min — see
+     `Sources/ClaudeStatsCore/Quota/StatuslineCacheReader.swift`. This used to
+     be the only source, which made its `settings.json` install step a gate on
+     the whole tier; it is now a freshness booster (seconds old instead of
+     minutes), and the Settings pane says so.
+   - Neither source falling back to an estimate is deliberate. A prior version
+     of this app additionally polled the undocumented `oauth/usage` endpoint
+     (`experimental` confidence) and, failing that, estimated usage from local
+     token counts against the detected plan's budget (`local_estimate`
+     confidence). Both were removed: the app is meant to show the account's
+     real rate-limit window, not a guess, so a source that can't do that
+     shouldn't silently stand in for one that can.
    - **Promo notices (decoration, never an error).** Alongside the config tree,
      Claude Code keeps a state file it writes for itself, `~/.claude.json`.
      Among its
@@ -141,7 +168,9 @@ Click opens a popover:
                                     bar, read from `~/.claude.json`; the bare
                                     URL is clickable. Only when one is cached
                                     and fresh.
-source: official · 40s ago                      ← confidence tag + freshness
+source: official (cached) · 4m ago              ← confidence tag + freshness;
+                                    `official` (no suffix) once the statusline
+                                    hook is installed and has just fired
                                   [ Clear Quota Cache ]   ← deletes the
                                     statusline cache and re-polls
 
@@ -168,12 +197,14 @@ Est. cost today: $4.82
 Refresh   Settings   Quit
 ```
 
-Freshness tag shows `official` (fresh statusline capture) — the only tier.
-No fallback: nothing installed shows as an error; an installed-but-quiet
-source (stale cache) keeps the last reading with an orange staleness warning.
-After "Clear Quota Cache" the bars go empty and a gray notice (not an error)
-explains that the next number comes from Claude Code's own next statusline
-render.
+Freshness tag names the source that won: `official (cached)` (Claude Code's own
+cached reading, the zero-setup default) or `official` (a fresh statusline
+capture, once that hook is installed). No estimate fallback: with neither
+source reporting, the popover shows an error instead of a number; a
+real-but-old reading keeps the last numbers with an orange staleness warning.
+"Clear Quota Cache" deletes the statusline cache only — `~/.claude.json` is
+Claude Code's, not ours — so the bars fall back to the cached-state numbers
+rather than going empty.
 
 ## Tech / release
 

@@ -69,9 +69,11 @@ public struct RateLimitPromoNoticeReader: PromoNoticeProviding {
             // fingerprint, so this stays a one-shot transition, not a re-parse
             // loop on every later poll.
             return .read(notices: [], fingerprint: previous)
-        case .unavailable:
+        case .unavailable, .malformed:
             // Covers both "no candidate opened" and "one opened but wasn't
             // usable" (directory, or contents that aren't a JSON object).
+            // This reader has no failure path, so the two are the same
+            // outcome here — see ``PromoNoticeProviding``.
             // `ClaudeStateFile` doesn't hand back a fingerprint for either, so
             // the next call looks again rather than treating "no data" as a
             // known state.
