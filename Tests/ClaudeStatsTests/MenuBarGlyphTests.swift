@@ -52,11 +52,11 @@ final class MenuBarGlyphTests: XCTestCase {
     }
 
     func testImageSizeDoesNotDependOnTheSnapshotBeingNil() {
-        XCTAssertEqual(
-            MenuBarGlyph.image(for: nil).size.width,
-            MenuBarGlyph.image(for: snapshot(scopedWeekly: [])).size.width,
-            accuracy: 0.001
-        )
+        let nilImage = MenuBarGlyph.image(for: nil)
+        let plainImage = MenuBarGlyph.image(for: snapshot(scopedWeekly: []))
+
+        XCTAssertEqual(nilImage.size.width, plainImage.size.width, accuracy: 0.001)
+        XCTAssertEqual(nilImage.size.height, MenuBarGlyph.height, accuracy: 0.001)
     }
 
     /// The bar takes the highest-percentage scope, which is

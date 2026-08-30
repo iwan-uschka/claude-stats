@@ -195,7 +195,7 @@ enum QuotaJSON {
                 : $0.percentUsed > $1.percentUsed
         }
         var seenLabels = Set<String>()
-        return sorted.filter { seenLabels.insert($0.label).inserted }
+        return sorted.filter { seenLabels.insert($0.label.lowercased()).inserted }
     }
 
     /// Extracts both windows from a container that holds `five_hour` /

@@ -37,7 +37,7 @@ struct WindowBarView: View {
                 .font(PopoverMetrics.valueFont)
                 .frame(width: 34, alignment: .trailing)
 
-            Text(window.resetsAt == nil && !showsPendingResetPlaceholder
+            Text(window.timeUntilReset(from: now) == nil && !showsPendingResetPlaceholder
                 ? ""
                 : DisplayFormat.resetCountdown(window.timeUntilReset(from: now)))
                 .font(PopoverMetrics.captionFont)

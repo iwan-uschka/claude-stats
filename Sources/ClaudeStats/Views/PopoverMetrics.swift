@@ -31,9 +31,18 @@ enum PopoverMetrics {
     static let sectionTitleFont = Font.system(size: 11, weight: .semibold)
     static let captionFont = Font.system(size: 10)
 
-    /// Claude's brand terracotta, sampled from Anthropic's own promo graphics
-    /// (`#CA7C5E`) — used for the promo notice link instead of `.accentColor`,
-    /// which follows the user's system accent (usually blue) and reads as an
-    /// unrelated OS affordance rather than Claude's own promo.
-    static let brandLinkColor = Color(red: 0xCA / 255, green: 0x7C / 255, blue: 0x5E / 255)
+    /// Claude's brand terracotta, used for the promo notice link instead of
+    /// `.accentColor` (which follows the user's system accent, usually blue,
+    /// and reads as an unrelated OS affordance rather than Claude's own
+    /// promo). Two literals switched on appearance, not one fixed color:
+    /// `#CA7C5E` measured ≈3.17:1 against a light popover background, below
+    /// the 4.5:1 WCAG 2.2 AA minimum for this caption-size text. `#A85E3E`
+    /// clears 4.5:1 on white (≈4.84:1); `#E88A5C` clears it against the dark
+    /// popover background (≈6.2:1).
+    static let brandLinkColor = Color(NSColor(name: nil) { appearance in
+        let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        return isDark
+            ? NSColor(red: 0xE8 / 255, green: 0x8A / 255, blue: 0x5C / 255, alpha: 1)
+            : NSColor(red: 0xA8 / 255, green: 0x5E / 255, blue: 0x3E / 255, alpha: 1)
+    })
 }

@@ -19,8 +19,8 @@ Pre-built releases (macOS app bundle, zipped) are available on the
 
 ## Features
 
-- Menu bar glyph showing 5-hour and 7-day quota usage as two thin bars, tinted for light/dark mode automatically — plus a third bar when Claude Code reports a per-model weekly limit
-- Popover with per-window usage and reset countdowns, a row per per-model weekly limit Claude Code reports, auto-detected plan tier (Pro / Max5 / Max20 / custom), and current burn rate
+- Menu bar glyph showing 5-hour and 7-day quota usage plus a per-model weekly limit as three thin bars, tinted for light/dark mode automatically — the third bar is empty when Claude Code reports no scoped limit
+- Popover with per-window usage and reset countdowns, one row per per-model weekly limit Claude Code reports, auto-detected plan tier (Pro / Max5 / Max20 / custom), and current burn rate
 - Per-source breakdown (CLI / VS Code / SDK-agents) across 5h/24h/7d windows, and per-model token/cost totals
 - Local session-log parsing (`~/.claude/projects/*/*.jsonl`) — token counts, cost, burn rate always available, no network or credentials needed
 - Live 5-hour/7-day quota percentage straight from Claude Code's own cached reading — no setup, no hook to install; the `statusLine` hook is optional and just makes it fresher — see [Quota source](#quota-source)

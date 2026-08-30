@@ -18,6 +18,9 @@
 - The promo notice's link now uses Claude's own terracotta instead of the
   system accent colour, which followed the OS accent and read as an unrelated
   system affordance rather than Claude's own promo.
+- Promo notices sit in a little more vertical space, and the popover's shared
+  label column widened from 84 pt to 92 pt to fit per-model weekly row labels
+  without wrapping.
 
 ## [0.9.6] - 2026-08-30
 

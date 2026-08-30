@@ -118,7 +118,7 @@ enum MenuBarGlyph {
             )
 
             // Track: the full bar at low alpha, so an empty window still reads
-            // as "two bars" rather than as a missing element.
+            // as one of three bars rather than as a missing element.
             context.addPath(
                 CGPath(
                     roundedRect: barRect,

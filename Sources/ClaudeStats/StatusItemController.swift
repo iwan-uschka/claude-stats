@@ -19,7 +19,6 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
     /// Ticks only while the popover is on screen — see ``PopoverClock``.
     private let clock = PopoverClock()
     private var cancellables = Set<AnyCancellable>()
-    private var devBuildDot: NSView?
 
     init(model: AppModel) {
         self.model = model
@@ -75,35 +74,22 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
     /// contains and renders it monochrome, so a colored dev-build marker has
     /// to live outside the image, as a real subview on the button.
     private func addDevBuildIndicator(to button: NSStatusBarButton) {
-        let dot = DevBuildDotView(frame: .zero)
+        let bounds = button.bounds
+        let imageOrigin = CGPoint(
+            x: (bounds.width - MenuBarGlyph.width) / 2,
+            y: (bounds.height - MenuBarGlyph.height) / 2
+        )
+        let dot = DevBuildDotView(frame: CGRect(
+            x: imageOrigin.x,
+            y: imageOrigin.y + MenuBarGlyph.height - Self.devDotDiameter,
+            width: Self.devDotDiameter,
+            height: Self.devDotDiameter
+        ))
         dot.wantsLayer = true
         dot.layer?.cornerRadius = Self.devDotDiameter / 2
         dot.updateBackgroundColor()
         dot.autoresizingMask = [.maxXMargin, .minYMargin]
         button.addSubview(dot)
-        devBuildDot = dot
-        repositionDevBuildIndicator()
-    }
-
-    /// Places the dot on the glyph's top-left corner.
-    ///
-    /// The button's bounds are the menu bar's own thickness, not the drawn
-    /// glyph's size — the (smaller) image is centered inside it. Anchor the dot
-    /// to the image's actual corner, not the button's, so it lands on the glyph
-    /// rather than in the surrounding padding. The glyph's width is fixed
-    /// (``MenuBarGlyph/width``), so this only needs to run once, at setup.
-    private func repositionDevBuildIndicator() {
-        guard let dot = devBuildDot, let bounds = statusItem.button?.bounds else { return }
-        let imageOrigin = CGPoint(
-            x: (bounds.width - MenuBarGlyph.width) / 2,
-            y: (bounds.height - MenuBarGlyph.height) / 2
-        )
-        dot.frame = CGRect(
-            x: imageOrigin.x,
-            y: imageOrigin.y + MenuBarGlyph.height - Self.devDotDiameter,
-            width: Self.devDotDiameter,
-            height: Self.devDotDiameter
-        )
     }
 
     @objc private func togglePopover(_ sender: Any?) {

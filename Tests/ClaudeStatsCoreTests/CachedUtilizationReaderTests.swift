@@ -300,6 +300,23 @@ final class CachedUtilizationReaderTests: XCTestCase {
         XCTAssertEqual(snapshot.scopedWeekly.map(\.label), ["Fable", "Sonnet"])
     }
 
+    /// Two entries that resolve to the same label — one via
+    /// `scope.model.display_name`, one via the `scope.surface` fallback —
+    /// collapse to a single row, keeping whichever sorted first (the higher
+    /// percentage). Exercises the `seenLabels` dedup filter in
+    /// ``QuotaJSON/scopedLimits(in:)``.
+    func testDuplicateLabelsCollapseToTheHigherPercentEntry() async throws {
+        try write(stateFile(limits: """
+            { "kind": "weekly_scoped", "percent": 30, "scope": { "model": { "display_name": "Opus" } } },
+            { "kind": "weekly_scoped", "percent": 5, "scope": { "surface": "Opus" } }
+            """))
+
+        let snapshot = try await makeReader().currentSnapshot()
+
+        XCTAssertEqual(snapshot.scopedWeekly.count, 1)
+        XCTAssertEqual(snapshot.scopedWeekly.first?.percentUsed, 30)
+    }
+
     /// `utilization` is the percentage's other spelling, one level up in the
     /// same payload — ``QuotaJSON/scopedPercentKeys`` accepts both.
     func testUtilizationSpellingIsAcceptedForScopedPercent() async throws {
@@ -331,6 +348,19 @@ final class CachedUtilizationReaderTests: XCTestCase {
     func testCamelCaseIsActiveIsAccepted() async throws {
         try write(stateFile(limits: """
             { "kind": "weekly_scoped", "percent": 6, "isActive": true,
+              "scope": { "model": { "display_name": "Opus" } } }
+            """))
+
+        let snapshot = try await makeReader().currentSnapshot()
+
+        XCTAssertEqual(snapshot.scopedWeekly.first?.isActive, true)
+    }
+
+    /// `is_active` also accepts a string spelling (`"yes"/"1"`, case-insensitive,
+    /// trimmed) — ``QuotaJSON/bool(_:)``'s string-coercion branch.
+    func testStringIsActiveSpellingsAreAccepted() async throws {
+        try write(stateFile(limits: """
+            { "kind": "weekly_scoped", "percent": 6, "is_active": "yes",
               "scope": { "model": { "display_name": "Opus" } } }
             """))
 
