@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.9.6] - 2026-08-30
+
 ### Changed
 - The quota bars no longer need the statusline hook installed. Claude Code
   caches the same account-wide rate-limit numbers into its own state file
