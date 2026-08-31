@@ -97,6 +97,31 @@ public struct MockQuotaProvider: QuotaProviding {
         snapshot.usageCredits = credits
         return snapshot
     }
+
+    /// Every quota row the popover can draw, in one snapshot: both fixed
+    /// windows, the scoped weekly entry, and usage credits part-spent.
+    ///
+    /// Exists for the README asset renderer, which wants one image showing the
+    /// full layout rather than the common-case subset ``sampleSnapshot(now:)``
+    /// covers. Credits and the scoped weekly row are both deliberately
+    /// non-zero here for the same reason: each is 0% on purpose in the
+    /// snapshot it's drawn from (a fresh cap, an inactive scoped limit,
+    /// respectively), but a 0% bar renders as an empty track, which shows
+    /// nothing of what that bar exists to demonstrate.
+    public static func sampleShowcaseSnapshot(now: Date = Date()) -> QuotaSnapshot {
+        var snapshot = sampleSnapshotWithUsageCredits(
+            now: now,
+            credits: UsageCredits(
+                used: MoneyAmount(amountMinor: 2_087, currency: "EUR", exponent: 2),
+                limit: MoneyAmount(amountMinor: 3_300, currency: "EUR", exponent: 2),
+                percentUsed: 63,
+                severity: "normal",
+                limitReached: false
+            )
+        )
+        snapshot.scopedWeekly = [QuotaScopedLimit(label: "Fable", percentUsed: 42)]
+        return snapshot
+    }
 }
 
 /// In-memory ``PromoNoticeProviding`` for previews.

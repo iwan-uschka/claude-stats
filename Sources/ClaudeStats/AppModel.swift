@@ -407,6 +407,24 @@ extension AppModel {
         preview(snapshot: MockQuotaProvider.sampleSnapshotWithUsageCredits(credits: credits))
     }
 
+    /// Everything the popover can draw at once: both fixed windows, the promo
+    /// notice, the scoped weekly row and a part-spent usage-credits bar.
+    ///
+    /// The single source of truth for the README asset renderer
+    /// (`Tests/ClaudeStatsTests/ReadmeAssetRenderTests.swift`), so the shipped
+    /// screenshot and the Xcode canvas can never drift apart — the preview
+    /// below renders the same call the renderer does.
+    ///
+    /// - Parameter now: pinned by the renderer so every time-derived string
+    ///   ("resets in …", "… ago") is byte-stable across runs; defaults to
+    ///   `Date()` for the canvas, which wants a live-looking clock.
+    static func previewShowcase(now: Date = Date()) -> AppModel {
+        preview(
+            snapshot: MockQuotaProvider.sampleShowcaseSnapshot(now: now),
+            promoNotices: [MockPromoNoticeProvider.sampleNotice()]
+        )
+    }
+
     /// Live source, but stale — quota still shown, plus a warning line.
     static func previewStaleWarning() -> AppModel {
         preview(warning: "Statusline cache is 14 minutes old.")
