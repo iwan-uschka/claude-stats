@@ -54,7 +54,6 @@ final class ReadmeAssetRenderTests: XCTestCase {
 
         for theme in Theme.all {
             let ink = try XCTUnwrap(tinted(glyph, with: theme.ink), "\(theme.name) glyph")
-            try write(ink, to: outDir, named: "menu-bar-glyph-\(theme.name).png")
 
             let composite = try renderComposite(theme: theme, glyph: ink, now: now)
             try write(composite, to: outDir, named: "screenshot-popover-\(theme.name).png")

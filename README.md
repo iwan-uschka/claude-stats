@@ -13,16 +13,6 @@ any), filled bottom-up. Click it for the popover:
   <img alt="Menu bar glyph and the popover below it, showing 5-hour/7-day quota, a scoped weekly limit, usage credits, plan tier, burn rate, and the per-entrypoint and per-model breakdown" src="assets/screenshot-popover-light.png" width="420">
 </picture>
 
-The glyph on its own, at the size it actually appears:
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/menu-bar-glyph-dark.png">
-  <img alt="The Claude mark followed by four thin vertical bars" src="assets/menu-bar-glyph-light.png" width="35">
-</picture>
-
-<sub>Both are rendered from the app's own views with mock data —
-`bash scripts/render-readme-assets.sh`.</sub>
-
 ## Download
 
 Pre-built releases (macOS app bundle, zipped) are available on the

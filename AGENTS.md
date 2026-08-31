@@ -363,14 +363,11 @@ rather than going empty.
 
 ### README images
 
-Four PNGs, all **rendered from the app's own views** rather than screenshotted
-— a light and a dark variant of each, because GitHub serves READMEs in both
-themes and a single image is wrong in one of them:
-
-- `assets/screenshot-popover-{light,dark}.png` — menu bar strip, the status
-  item glyph sitting in it, and the popover hanging below with its tail
-  pointing back up at the glyph.
-- `assets/menu-bar-glyph-{light,dark}.png` — the glyph alone, transparent.
+Two PNGs, `assets/screenshot-popover-{light,dark}.png` — menu bar strip, the
+status item glyph sitting in it, and the popover hanging below with its tail
+pointing back up at the glyph — **rendered from the app's own views** rather
+than screenshotted, a light and a dark variant because GitHub serves READMEs
+in both themes and a single image is wrong in one of them.
 
 Regenerate with:
 
