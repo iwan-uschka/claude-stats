@@ -341,32 +341,85 @@ rather than going empty.
   of our code runs, so there is no Dock-tile flash on launch. The runtime call
   stays authoritative for bundle-less `swift run` builds.
 
-### README screenshot
+### README images
 
-`assets/screenshot-popover.png` is composited from four same-canvas-size
-layers in `assets/source/screenshot-popover/`, not hand-screenshotted as one
-image:
+Four PNGs, all **rendered from the app's own views** rather than screenshotted
+— a light and a dark variant of each, because GitHub serves READMEs in both
+themes and a single image is wrong in one of them:
 
-- `menu-bar.png` — the blue menu-bar strip, opaque top rows, transparent
-  below.
-- `icon.png` — the status-item glyph, captured as a rectangular patch
-  (own background + glyph) roughly positioned over the menu bar.
-- `icon-mask.png` — an alpha mask (opaque = glyph silhouette, transparent
-  elsewhere) that replaces `icon.png`'s own alpha at composite time, so
-  `icon.png`'s rectangular capture bounds never show as a seam — only the
-  glyph shape actually gets drawn onto `menu-bar.png`.
-- `popup.png` — the popover body (rows, captions, buttons), transparent
-  above where the menu bar shows through.
+- `assets/screenshot-popover-{light,dark}.png` — menu bar strip, the status
+  item glyph sitting in it, and the popover hanging below with its tail
+  pointing back up at the glyph.
+- `assets/menu-bar-glyph-{light,dark}.png` — the glyph alone, transparent.
 
-`bash scripts/build-screenshot.sh` composites them (`menu-bar` → masked
-`icon` → `popup`, in that order) and writes `assets/screenshot-popover.png`.
-Canvas size is taken from `popup.png`; `menu-bar.png` and `icon.png` are
-extended or cropped to match (anchored top-left) — so a taller or shorter
-popup capture is a drop-in replacement, no manual resizing needed.
+Regenerate with:
 
-**Not** a drop-in: a new *icon*. A raw icon screenshot (its own background,
-no alpha mask, arbitrary size, not positioned on the shared canvas) has to be
-trimmed, scaled to match the glyph's existing on-canvas height, positioned,
-and turned into an `icon.png` + `icon-mask.png` pair *before* the script can
-use it — that conversion needs eyes on the pixels (crop bounds, scale
-factor, paste offset), not just a script run.
+    bash scripts/render-readme-assets.sh
+
+Run it by hand after a popover layout change. Deliberately not wired into
+`make_app.sh` or `make_release.sh` — `make_release.sh` refuses a dirty tree, so
+regenerating committed PNGs mid-release would break the release.
+
+The renderer is `Tests/ClaudeStatsTests/ReadmeAssetRenderTests.swift`, skipped
+unless `CLAUDE_STATS_RENDER_ASSETS` names an output directory, so a plain
+`swift test` neither writes files nor pays for the render.
+
+**Why it lives in the test target.** `ClaudeStats` is an `executableTarget`, so
+no second executable can depend on it. The test target already can, and
+`@testable import ClaudeStats` reaches `PopoverView`, `MenuBarGlyph` and the
+`#if DEBUG` `AppModel.previewShowcase(now:)` fixture without a `public` sweep
+over the whole UI. Test targets are never bundled into the `.app`, so none of
+it ships.
+
+Four things it has to get right, each of which will silently produce a wrong
+image if dropped:
+
+- **Mock data.** One fixture, `AppModel.previewShowcase(now:)`, also driven by
+  a `#Preview` in `PopoverView.swift` — so the canvas and the committed PNG
+  cannot drift. It composes the promo notice, the scoped weekly row and a
+  part-spent `MockQuotaProvider.sampleShowcaseSnapshot(now:)`; the glyph is
+  drawn from that *same* snapshot via `MenuBarGlyph.image(for:)`, so its bars
+  can never disagree with the popover's rows.
+- **A pinned clock.** The PNGs are committed, so `renderDate` is a fixed
+  `Date` fed to both the snapshot and `PopoverClock(now:)` (never resumed, so
+  it never ticks). Without it every run rewrites "resets in 2h 14m" and dirties
+  the tree. Rendering twice must leave `git status` clean.
+- **`NSHostingView`, not `ImageRenderer`.** The "This Mac" switcher is a
+  `.pickerStyle(.segmented)` `Picker`, i.e. an `NSSegmentedControl` behind an
+  `NSViewRepresentable`. `ImageRenderer` rasterizes SwiftUI's own drawing only
+  and paints that control as its yellow "unsupported view" placeholder. So the
+  card is hosted in a borderless `NSWindow` and captured with
+  `cacheDisplay(in:to:)` into an `NSBitmapImageRep` whose `pixelsWide/High` are
+  4× its `size` — that ratio is where the 4× scale comes from.
+- **The AppKit appearance**, set on both the hosting view and its window.
+  `PopoverMetrics.brandLinkColor` is a dynamic `NSColor(name:)` resolved against
+  the *AppKit* appearance, not SwiftUI's `colorScheme`: without it the promo
+  link paints one theme's terracotta onto the other theme's card. Any other
+  `NSColor`-backed value in the tree has the same dependency.
+
+Three things the renderer draws itself, all confined to that file:
+
+- **The popover chrome** — rounded body, the tail on the top edge, the hairline
+  border. `NSPopover` owns all of it at runtime; `PopoverView` is only the
+  content. It is one closed `Shape` (`PopoverCardShape`) so the border strokes
+  the tail's sides rather than cutting across its base. It must not move into
+  app code: the real popover needs AppKit's own chrome, with the tail aligned
+  to the actual status item.
+- **The drop shadow**, as a Core Graphics pass in the composite —
+  `cacheDisplay(in:to:)` captures the view's drawing and does not reliably
+  composite the layer-level shadow a SwiftUI `.shadow` installs. Drawn after
+  the strip, so the popover casts onto the menu bar the way the real one does.
+- **The menu bar strip** — a three-stop *horizontal* gradient
+  (`#7E78A7 → #4885BA → #286AA7`), the desktop tint measured off the real menu
+  bar. Horizontal because that is the wallpaper showing through and a wallpaper
+  sweeps across the screen; over 24 pt of height a vertical fade would not read.
+  The light variant blends every stop 40% toward white, which is what macOS's
+  light wash over the menu bar looks like. Glyph and tail are both centred on
+  the canvas, so they line up with each other by construction.
+
+The glyph PNGs are the status item's template image (black ink + alpha)
+recolored with a `.sourceIn` fill, which repaints only where the glyph already
+put ink and so preserves the anti-aliased mark edges and the bars' faint unused
+tracks. The dev-build dot never appears — it is a separate `NSView` overlay
+`StatusItemController` adds to the status button, never part of
+`MenuBarGlyph`'s image.

@@ -498,4 +498,11 @@ struct PopoverView: View {
 #Preview("Popover — 24h breakdown") {
     PopoverView(model: .preview(window: .twentyFourHour), clock: PopoverClock())
 }
+
+/// The state the README screenshot is rendered from — see
+/// ``AppModel/previewShowcase(now:)``. Kept here so a layout change can be
+/// judged in the canvas before regenerating the committed PNG.
+#Preview("Popover — README showcase") {
+    PopoverView(model: .previewShowcase(), clock: PopoverClock())
+}
 #endif

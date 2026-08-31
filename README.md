@@ -4,7 +4,24 @@ Menu bar app for macOS showing live Claude token usage. Sibling to
 [exelban/stats](https://github.com/exelban/stats). Built with Swift +
 SwiftUI, no external dependencies.
 
-![Popover showing 5-hour/7-day quota, plan tier, burn rate, per-entrypoint and per-model breakdown](assets/screenshot-popover.png)
+In the menu bar it is one glyph — the Claude mark plus a thin bar per limit
+(5-hour, 7-day, highest scoped weekly, and usage credits when the account has
+any), filled bottom-up. Click it for the popover:
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/screenshot-popover-dark.png">
+  <img alt="Menu bar glyph and the popover below it, showing 5-hour/7-day quota, a scoped weekly limit, usage credits, plan tier, burn rate, and the per-entrypoint and per-model breakdown" src="assets/screenshot-popover-light.png" width="420">
+</picture>
+
+The glyph on its own, at the size it actually appears:
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/menu-bar-glyph-dark.png">
+  <img alt="The Claude mark followed by four thin vertical bars" src="assets/menu-bar-glyph-light.png" width="70">
+</picture>
+
+<sub>Both are rendered from the app's own views with mock data —
+`bash scripts/render-readme-assets.sh`.</sub>
 
 ## Download
 

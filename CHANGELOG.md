@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+### Changed
+- The README's images are now rendered from the app's own views instead of
+  hand-captured, in a light and a dark variant each:
+  `assets/screenshot-popover-{light,dark}.png` (menu bar strip, the glyph in
+  it, and the popover below with its tail pointing back up at it) and
+  `assets/menu-bar-glyph-{light,dark}.png` (the glyph alone, transparent).
+  `bash scripts/render-readme-assets.sh` draws all four from
+  `AppModel.previewShowcase(now:)` — one mock fixture shared with a `#Preview`,
+  on a pinned clock, so the output is byte-stable and a re-render on an
+  unchanged UI leaves the tree clean. Replaces `scripts/build-screenshot.sh`
+  and the four hand-screenshotted layers under
+  `assets/source/screenshot-popover/`, whose icon layer AGENTS.md described as
+  needing "eyes on the pixels" every time; also drops ImageMagick as a tooling
+  dependency.
+
 ### Added
 - Organisation usage credits. Claude Code's cached usage payload grew a `spend`
   object (and a sibling `extra_usage` one) carrying the extra-usage spend as
