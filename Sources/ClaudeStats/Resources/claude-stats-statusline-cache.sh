@@ -2,7 +2,8 @@
 #
 # claude-stats-statusline-cache.sh
 #
-# Feeds ClaudeStats' `StatuslineCacheReader` (tier-2 "official" quota source).
+# Feeds ClaudeStats' `StatuslineCacheReader` — the app's **primary** quota
+# source (tier-2 "official").
 #
 # WHY THIS EXISTS
 # ---------------
@@ -19,17 +20,28 @@
 # ClaudeStats is a menu bar app, not a shell command, so it can't be. This script
 # is the hook; it writes the payload to a cache file that the app reads.
 #
-# Claude Code also caches the same numbers into its own state file
-# (`cachedUsageUtilization` in `~/.claude.json`), which ClaudeStats reads
-# without any of this — see `CachedUtilizationReader`. This script exists for
-# freshness (it fires within seconds of a status line render), not
-# availability: the app works with it never installed.
+# It is not only the freshest source, it is the *resilient* one. Everything
+# beyond those four numbers — the per-model `weekly_scoped` rows and the org's
+# extra-usage `spend` (the app's third and fourth bars) — exists only inside
+# Claude Code's own private state file, `~/.claude.json`, under the
+# undocumented `cachedUsageUtilization` key. Reading that key directly is a
+# standing bet on another program's internals (a `spend` object appeared inside
+# it between 2026-08-27 and 2026-08-28), and it refreshes on Claude Code's own
+# schedule — measured unmoved for 3.7+ hours during active sessions. So this
+# script snapshots those two objects *itself*, on every status line render,
+# into the same cache file as the rate limits. The result is one file, written
+# by us, at one known age, carrying everything the app draws.
+#
+# The app still reads `cachedUsageUtilization` directly as a backup
+# (`CachedUtilizationReader`) for machines where this hook was never installed,
+# has never fired, or has gone stale — but with the hook in place its readings
+# win outright rather than being merged by capture time. See
+# `FreshestQuotaProvider`.
 #
 # `rate_limits` only appears for Claude.ai Pro/Max subscribers, and only after the
 # session's first API response. The hook fires only while Claude Code is actively
 # rendering a status line, so the cache goes cold when you stop working — the app
-# treats it as stale after 10 minutes and shows a warning instead of a number.
-# There is no fallback source: this script is the app's only quota source.
+# treats it as stale after 10 minutes and falls back to the backup source.
 #
 # INSTALL
 # -------
@@ -71,14 +83,57 @@
 #
 # CACHE FORMAT
 # ------------
-# With `jq` installed, only the rate-limit fields are persisted:
+# With `jq` installed, three top-level keys are written:
 #
 #   {"captured_at":1738425600,
 #    "rate_limits":{"five_hour":{"used_percentage":23.5,"resets_at":1738425600},
-#                   "seven_day":{"used_percentage":41.2,"resets_at":1738857600}}}
+#                   "seven_day":{"used_percentage":41.2,"resets_at":1738857600}},
+#    "utilization":{"limits":[{"kind":"weekly_scoped","percent":0,…}],
+#                   "spend":{…},"extra_usage":{…}}}
 #
-# Without `jq`, the raw payload is written verbatim and the app uses the file's
-# modification time as the capture time. Both shapes are accepted by the reader.
+# `captured_at` and `rate_limits` come from stdin — the statusline payload. The
+# `utilization` object does not: it is copied out of Claude Code's own
+# `cachedUsageUtilization.utilization` (see WHY THIS EXISTS), keeping only the
+# parts the app draws that stdin cannot supply — the `weekly_scoped` entries of
+# `limits[]`, plus `spend` and `extra_usage` whole. It is nested and named to
+# match the shape those keys already have in `~/.claude.json`, so the app's
+# existing parsers read it unchanged from either file.
+#
+# That copy is strictly best-effort and additive. A missing, unreadable or
+# malformed state file, or one with no `cachedUsageUtilization` yet, simply
+# omits the `utilization` key — `captured_at` and `rate_limits` are written
+# exactly as before, and the app falls back to reading the state file itself
+# for the two bars this key would have fed. An older cache file written before
+# this key existed is read the same way.
+#
+# The state file is located the way the app locates it: $CLAUDE_CONFIG_DIR
+# (trimmed, tilde-expanded) `/.claude.json` when that variable is set to
+# something non-blank, else $HOME/.claude.json; first one that opens wins.
+#
+# STATE-FILE READ COST
+# ---------------------
+# `~/.claude.json` is Claude Code's own scratch state (measured ~145 KB, and
+# it rewrites the file constantly for reasons that have nothing to do with
+# us — the app's own reader, `ClaudeStateFile`, hit exactly this and added a
+# fingerprint gate to skip re-parsing an unchanged file). This script fires on
+# every status line render, which is far more often than that reader's
+# throttled poll, so it carries the same gate here: a sidecar file
+# (`statusline-utilization-cache.json`, next to the main cache) remembers the
+# state file's mtime+size+inode alongside the last-extracted `utilization`
+# payload, and `extract_utilization` skips the `jq` parse of the (much
+# larger) state file entirely when the fingerprint still matches — including
+# when the last extraction found nothing to carry, so a Free-tier account
+# with no `weekly_scoped`/`spend` data doesn't pay the full parse on every
+# render either. Coarser than `ClaudeStateFile`'s nanosecond-mtime version
+# (whole-second `stat` resolution, no descriptor-reuse trick): a same-second
+# overwrite can be missed, costing one render's staleness on the fourth bar,
+# not a correctness bug — the reader already tolerates an absent
+# `utilization` key.
+#
+# Without `jq`, the raw payload is written verbatim, the app uses the file's
+# modification time as the capture time, and no `utilization` key is produced —
+# hand-parsing JSON with `grep` is not worth the wrong answers it would give.
+# Both shapes are accepted by the reader.
 #
 # Override the cache directory with $CLAUDE_STATS_CACHE_DIR — useful for
 # manually exercising this script against a scratch directory. (No automated
@@ -89,9 +144,105 @@ set -uo pipefail
 
 cache_dir="${CLAUDE_STATS_CACHE_DIR:-${HOME:-/tmp}/Library/Application Support/ClaudeStats}"
 cache_file="$cache_dir/statusline-cache.json"
+# Sidecar for the state-file fingerprint gate — see STATE-FILE READ COST above.
+utilization_cache_file="$cache_dir/statusline-utilization-cache.json"
 
 # Claude Code hands the payload over on stdin.
 input=$(cat)
+
+# --- Claude Code's own state file ------------------------------------------
+# Mirrors `ClaudeConfigDirectory.stateFileCandidates()`: `$CLAUDE_CONFIG_DIR`
+# wins only when set to a non-blank value (trimmed and tilde-expanded, as the
+# app does), and `.claude.json` is a *sibling* of the config directory rather
+# than a member of it, so `$HOME` is always probed too. First readable
+# candidate wins; none is not an error.
+find_state_file() {
+  local dir candidate
+  dir="${CLAUDE_CONFIG_DIR-}"
+  dir="${dir#"${dir%%[![:space:]]*}"}"
+  dir="${dir%"${dir##*[![:space:]]}"}"
+  [ -n "$dir" ] && dir="${dir/#\~/${HOME:-~}}"
+
+  local candidates=()
+  [ -n "$dir" ] && candidates+=("$dir/.claude.json")
+  candidates+=("${HOME:-}/.claude.json")
+
+  for candidate in "${candidates[@]}"; do
+    if [ -r "$candidate" ]; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Identifies the state file's on-disk contents cheaply enough to gate a full
+# parse on it — whole-second mtime, size and inode, via one `stat` call. See
+# STATE-FILE READ COST above for why this exists and how it compares to the
+# app's own (nanosecond-precision) version of the same gate.
+state_fingerprint() {
+  stat -f '%m.%z.%i' "$1" 2>/dev/null
+}
+
+# Copies out the parts of `cachedUsageUtilization.utilization` that the
+# statusline payload can't supply, or prints nothing at all. Anything unexpected
+# — no state file, unparseable JSON, no such key, an entry of the wrong type —
+# lands on "print nothing", because a missing `utilization` key in the cache is
+# a documented, handled state and a wrong one is not.
+#
+# `strings` on `.kind` is what makes the `weekly_scoped` filter total: a
+# non-string `kind` yields no value, so `select` drops the entry instead of
+# `ascii_downcase` aborting the whole extraction over one malformed row.
+#
+# Fingerprint-gated: a hit reuses the sidecar's stored payload (or its stored
+# "nothing to carry" verdict) without touching the state file at all; only a
+# miss pays for opening and parsing it.
+extract_utilization() {
+  local state_file fp cached_entry cached_payload
+  state_file=$(find_state_file) || return 1
+  fp=$(state_fingerprint "$state_file") || return 1
+
+  if [ -r "$utilization_cache_file" ]; then
+    cached_entry=$(jq -c --arg fp "$fp" 'select(.source_fingerprint == $fp)' \
+      "$utilization_cache_file" 2>/dev/null)
+    if [ -n "$cached_entry" ]; then
+      cached_payload=$(printf '%s' "$cached_entry" | jq -c '.utilization // empty' 2>/dev/null)
+      if [ -n "$cached_payload" ]; then
+        printf '%s' "$cached_payload"
+        return 0
+      fi
+      return 1
+    fi
+  fi
+
+  local payload
+  payload=$(jq -c '
+    .cachedUsageUtilization.utilization
+    | if type == "object" then
+        { limits: [ .limits[]? | select((.kind? | strings | ascii_downcase) == "weekly_scoped") ] }
+        + (if (.spend | type) == "object" then { spend: .spend } else {} end)
+        + (if (.extra_usage | type) == "object" then { extra_usage: .extra_usage } else {} end)
+      else empty end
+    | if (.limits | length) > 0 or has("spend") or has("extra_usage") then . else empty end
+  ' "$state_file" 2>/dev/null)
+
+  # Persist the verdict regardless of outcome — an unchanged state file with
+  # nothing to carry should skip the parse next render too, same as a hit
+  # with data. Best-effort: a failure here just costs the next render a
+  # redundant parse, not correctness.
+  local tmp
+  tmp=$(mktemp "${utilization_cache_file}.XXXXXX" 2>/dev/null) && {
+    if [ -n "$payload" ]; then
+      jq -cn --arg fp "$fp" --argjson u "$payload" '{source_fingerprint:$fp, utilization:$u}' >"$tmp" 2>/dev/null
+    else
+      jq -cn --arg fp "$fp" '{source_fingerprint:$fp, utilization:null}' >"$tmp" 2>/dev/null
+    fi
+    mv -f "$tmp" "$utilization_cache_file" 2>/dev/null || rm -f "$tmp"
+  }
+
+  [ -n "$payload" ] || return 1
+  printf '%s' "$payload"
+}
 
 # --- write the cache -------------------------------------------------------
 # Never let a cache-write failure break the user's status line: everything here
@@ -100,12 +251,28 @@ write_cache() {
   mkdir -p "$cache_dir" || return 1
   local tmp
   tmp=$(mktemp "${cache_file}.XXXXXX") || return 1
-  trap 'rm -f "$tmp"' EXIT
+  # No EXIT trap here: `tmp` is `local` to this function, but a trap installed
+  # inside it runs at the *script's* exit, by which point the function has
+  # long returned and `tmp` is unset — `set -u` then reports it as unbound.
+  # Every path below already removes or renames `$tmp` itself, so no trap is
+  # needed.
 
   if command -v jq >/dev/null 2>&1; then
+    # Additive and separately fallible: `utilization` defaults to JSON null and
+    # is dropped from the object below when it stays that way, so a state file
+    # that can't be read costs the third and fourth bars nothing here — it just
+    # leaves them to the app's backup reader — and never the rate limits.
+    local utilization
+    utilization=$(extract_utilization) || utilization=""
+    [ -n "$utilization" ] || utilization="null"
+
     if ! printf '%s' "$input" | jq -c \
         --argjson now "$(date +%s)" \
-        'if .rate_limits then {captured_at: $now, rate_limits: .rate_limits} else empty end' \
+        --argjson utilization "$utilization" \
+        'if .rate_limits
+         then {captured_at: $now, rate_limits: .rate_limits}
+              + (if $utilization == null then {} else {utilization: $utilization} end)
+         else empty end' \
         >"$tmp" 2>/dev/null; then
       rm -f "$tmp"
       return 1

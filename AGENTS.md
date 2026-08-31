@@ -36,14 +36,18 @@ Two independent tiers, deliberately decoupled:
    `-p` runs). Only sees sessions whose JSONL lives on this Mac's disk.
 2. **Live account-wide quota % (secondary, no estimate fallback).** Two
    sources, both carrying Anthropic's own numbers, composed by
-   `Sources/ClaudeStatsCore/Quota/FreshestQuotaProvider.swift`: it queries both
-   and serves whichever snapshot has the newer `capturedAt`. One source being
+   `Sources/ClaudeStatsCore/Quota/FreshestQuotaProvider.swift`: the statusline
+   hook is the **primary** and wins outright when it succeeds; the
+   `cachedUsageUtilization` reader is the **backup**, consulted only when the
+   hook has failed, is missing, or has gone stale. (It used to be a freshness
+   compare — newer `capturedAt` wins — which was right while the hook could
+   only report two of the four bars; it now reports all four.) One source being
    down is invisible; an error only surfaces when **both** fail.
    **This tier is account-wide, not machine-wide** — it already reflects AFK
    docker-loop usage automatically, *because* those containers reauthenticate
    as the same Anthropic account (confirmed: no separate API keys). No extra
    plumbing needed for that case.
-   - **`cachedUsageUtilization` (primary, `official (cached)`, zero setup).**
+   - **`cachedUsageUtilization` (backup, `official (cached)`, zero setup).**
      Claude Code caches the same rate-limit payload into its own state file,
      `~/.claude.json`, as
      `cachedUsageUtilization.utilization.{five_hour,seven_day}.{utilization,
@@ -111,20 +115,36 @@ Two independent tiers, deliberately decoupled:
          the countdown column stays empty. `extra_usage.spend_limit_reached` is
          carried on the model and named in the tooltip; `severity` is stored for
          fidelity but not yet styled.
-       - Like `scopedWeekly`, this is `cachedUsageUtilization`-only — the
-         statusline payload has no `spend` object — so `FreshestQuotaProvider`
-         grafts it onto whichever snapshot wins the freshness compare, via
+       - Like `scopedWeekly`, this originates only in `cachedUsageUtilization`
+         — the statusline *payload* has no `spend` object. It reaches the hook's
+         cache anyway, because the helper script copies both across itself (see
+         below), and `FreshestQuotaProvider` backfills from this source only
+         when the hook's reading arrived without them, via
          `QuotaProviding.currentUsageCredits()`, which bypasses that source's
          staleness gate for the same reason `currentScopedWeekly()` does.
-   - **statusline hook (`official`, opt-in, sharper freshness).** Register as
+   - **statusline hook (`official`, opt-in, and the primary).** Register as
      (or piggyback on) Claude Code's `statusLine` hook — receives
      `rate_limits.{five_hour,seven_day}.{used_percentage,resets_at}` via stdin,
      but only fires while Claude Code is actively rendering a status line in a
      terminal. Cache to disk, treat as stale after ~10 min — see
-     `Sources/ClaudeStatsCore/Quota/StatuslineCacheReader.swift`. This used to
-     be the only source, which made its `settings.json` install step a gate on
-     the whole tier; it is now a freshness booster (seconds old instead of
-     minutes), and the Settings pane says so.
+     `Sources/ClaudeStatsCore/Quota/StatuslineCacheReader.swift`.
+     - **The cache carries all four bars, not two.** When `jq` is available the
+       helper script also reads Claude Code's own `~/.claude.json` (located the
+       way `ClaudeConfigDirectory.stateFileCandidates()` does) and merges the
+       `weekly_scoped` entries of `limits[]` plus `spend` and `extra_usage`
+       into the same cache file, under a third top-level `utilization` key
+       shaped exactly as those objects appear in `cachedUsageUtilization` — so
+       `QuotaJSON.scopedLimits(in:)` / `usageCredits(in:)` read them unchanged.
+       That is what makes a hook-only reading complete, and why the hook can be
+       primary rather than a freshness booster. Strictly best-effort and
+       additive: no `jq`, no state file, or a malformed one simply omits the
+       key, exactly like a cache file written before the key existed, and the
+       app backfills those two fields from the backup source.
+     - The hook used to be the only source, which made its `settings.json`
+       install step a gate on the whole tier. It is not one now — the backup
+       covers a machine with no hook installed — so nothing in the UI treats
+       installing it as required; the Settings pane's "freshness booster"
+       framing has not been revisited since the priority flip.
    - Neither source falling back to an estimate is deliberate. A prior version
      of this app additionally polled the undocumented `oauth/usage` endpoint
      (`experimental` confidence) and, failing that, estimated usage from local

@@ -84,9 +84,9 @@ final class FreshestQuotaProviderTests: XCTestCase {
         percentUsed: 0
     )
 
-    // MARK: - Freshest wins
+    // MARK: - The hook is primary
 
-    func testNewerStatuslineCaptureWins() async throws {
+    func testSucceedingStatuslineHookWins() async throws {
         let provider = FreshestQuotaProvider(
             statusline: StubProvider(.success(snapshot(.official, percent: 62, capturedAgo: 30))),
             cachedState: StubProvider(.success(snapshot(.cachedOfficial, percent: 11, capturedAgo: 900)))
@@ -98,9 +98,12 @@ final class FreshestQuotaProviderTests: XCTestCase {
         XCTAssertEqual(result.fiveHour.percentUsed, 62)
     }
 
-    func testNewerCachedStateReadingWins() async throws {
-        // The hook is installed but has been quiet since the user closed their
-        // terminal, while Claude Code kept updating its own cache elsewhere.
+    /// The priority flip in one test: this used to be a freshness compare, so
+    /// an older-but-succeeding hook reading lost to a newer `cachedState` one.
+    /// It no longer does — a hook reading that made it past its own 10-minute
+    /// staleness gate is trusted whatever `capturedAt` the backup claims, since
+    /// that timestamp moves on Claude Code's schedule rather than ours.
+    func testNewerCachedStateReadingNoLongerBeatsTheHook() async throws {
         let provider = FreshestQuotaProvider(
             statusline: StubProvider(.success(snapshot(.official, percent: 62, capturedAgo: 540))),
             cachedState: StubProvider(.success(snapshot(.cachedOfficial, percent: 97, capturedAgo: 120)))
@@ -108,122 +111,113 @@ final class FreshestQuotaProviderTests: XCTestCase {
 
         let result = try await provider.currentSnapshot()
 
-        XCTAssertEqual(result.confidence, .cachedOfficial)
-        XCTAssertEqual(result.fiveHour.percentUsed, 97)
+        XCTAssertEqual(result.confidence, .official)
+        XCTAssertEqual(result.fiveHour.percentUsed, 62)
     }
 
-    /// Only the cached-state source's payload has `limits[]` at all — the
-    /// statusline hook's schema carries no such field, not merely an empty
-    /// one. So scoped rows always come from `cachedState` regardless of which
-    /// snapshot wins the freshness compare for everything else: an account
-    /// with the hook installed (the common case, and almost always fresher)
-    /// must not lose the scoped bars just because the hook's own reading won.
-    func testScopedWeeklyLimitsAlwaysComeFromCachedState() async throws {
-        let scoped = [QuotaScopedLimit(label: "Fable", percentUsed: 0)]
-
-        let statuslineWins = FreshestQuotaProvider(
-            statusline: StubProvider(.success(snapshot(.official, percent: 62, capturedAgo: 30))),
-            cachedState: StubProvider(
-                .success(snapshot(.cachedOfficial, percent: 11, capturedAgo: 900, scopedWeekly: scoped))
-            )
+    /// A hook reading that carries its own `utilization` copy is complete:
+    /// `cachedState` is not consulted for the scoped rows or the credits, and
+    /// specifically must not overwrite them with its own older ones.
+    func testCompleteHookReadingIsNotBackfilled() async throws {
+        let hookScoped = [QuotaScopedLimit(label: "Fable", percentUsed: 4)]
+        let cachedScoped = [QuotaScopedLimit(label: "Opus", percentUsed: 99)]
+        let staleCredits = UsageCredits(
+            used: MoneyAmount(amountMinor: 9_900, currency: "EUR", exponent: 2),
+            limit: MoneyAmount(amountMinor: 9_900, currency: "EUR", exponent: 2),
+            percentUsed: 100
         )
-        let fromStatusline = try await statuslineWins.currentSnapshot()
-        XCTAssertEqual(fromStatusline.confidence, .official)
-        XCTAssertEqual(fromStatusline.scopedWeekly, scoped)
-
-        let cachedWins = FreshestQuotaProvider(
-            statusline: StubProvider(.success(snapshot(.official, percent: 62, capturedAgo: 900))),
-            cachedState: StubProvider(
-                .success(snapshot(.cachedOfficial, percent: 11, capturedAgo: 30, scopedWeekly: scoped))
-            )
-        )
-        let fromCachedState = try await cachedWins.currentSnapshot()
-        XCTAssertEqual(fromCachedState.confidence, .cachedOfficial)
-        XCTAssertEqual(fromCachedState.scopedWeekly, scoped)
-
-        // And when `cachedState` itself has none to report, none appear —
-        // this isn't a second independent source of scoped data, just the
-        // one source's field surviving the freshness pick.
-        let noScopedAtAll = FreshestQuotaProvider(
-            statusline: StubProvider(.success(snapshot(.official, percent: 62, capturedAgo: 30))),
-            cachedState: StubProvider(.success(snapshot(.cachedOfficial, percent: 11, capturedAgo: 900)))
-        )
-        let result = try await noScopedAtAll.currentSnapshot()
-        XCTAssertEqual(result.scopedWeekly, [])
-    }
-
-    /// The real-world case the graft above didn't cover: the hook is fresh
-    /// and succeeding, but `cachedState`'s *snapshot* has crossed its own
-    /// staleness threshold (``CachedUtilizationReader``'s 60 minutes) and so
-    /// fails outright — `(.success, .failure)`. Its scoped rows must not
-    /// disappear just because its account-wide windows are too old to win.
-    func testScopedWeeklyLimitsSurviveACachedStateSnapshotThatFailsOnStaleness() async throws {
-        let scoped = [QuotaScopedLimit(label: "Fable", percentUsed: 0)]
 
         let provider = FreshestQuotaProvider(
-            statusline: StubProvider(.success(snapshot(.official, percent: 62, capturedAgo: 30))),
+            statusline: StubProvider(.success(snapshot(
+                .official, percent: 62, capturedAgo: 30,
+                scopedWeekly: hookScoped, usageCredits: credits
+            ))),
             cachedState: StubProvider(
-                .failure(.staleQuotaSource(
-                    snapshot: snapshot(.cachedOfficial, percent: 11, capturedAgo: 13_400),
-                    age: 13_400
+                .success(snapshot(
+                    .cachedOfficial, percent: 11, capturedAgo: 900,
+                    scopedWeekly: cachedScoped, usageCredits: staleCredits
                 )),
-                scopedWeekly: .success(scoped)
+                scopedWeekly: .success(cachedScoped),
+                usageCredits: .success(UsageCreditsReading(credits: staleCredits))
             )
         )
 
         let result = try await provider.currentSnapshot()
 
         XCTAssertEqual(result.confidence, .official)
-        XCTAssertEqual(result.scopedWeekly, scoped)
-    }
-
-    /// The best-effort fetch is genuinely best-effort: if `cachedState` can't
-    /// produce scoped rows at all (e.g. no `limits[]` in the payload), the
-    /// hook's snapshot still wins with none, not an error.
-    func testMissingScopedWeeklyDoesNotFailTheGraftAttempt() async throws {
-        let provider = FreshestQuotaProvider(
-            statusline: StubProvider(.success(snapshot(.official, percent: 62, capturedAgo: 30))),
-            cachedState: StubProvider(
-                .failure(.noQuotaSourceAvailable),
-                scopedWeekly: .failure(.noQuotaSourceAvailable)
-            )
-        )
-
-        let result = try await provider.currentSnapshot()
-
-        XCTAssertEqual(result.confidence, .official)
-        XCTAssertEqual(result.scopedWeekly, [])
-    }
-
-    /// `spend` lives only in `cachedState`'s payload, exactly like `limits[]`,
-    /// so the credits row has to survive the statusline hook winning the
-    /// freshness compare.
-    func testUsageCreditsAlwaysComeFromCachedState() async throws {
-        let statuslineWins = FreshestQuotaProvider(
-            statusline: StubProvider(.success(snapshot(.official, percent: 62, capturedAgo: 30))),
-            cachedState: StubProvider(
-                .success(snapshot(.cachedOfficial, percent: 11, capturedAgo: 900, usageCredits: credits))
-            )
-        )
-
-        let result = try await statuslineWins.currentSnapshot()
-
-        XCTAssertEqual(result.confidence, .official)
+        XCTAssertEqual(result.scopedWeekly, hookScoped)
         XCTAssertEqual(result.usageCredits, credits)
+    }
 
-        // And nothing is invented when `cachedState` reports none.
-        let noCredits = FreshestQuotaProvider(
+    /// A hook reading carrying only a `disabled_reason` has still answered the
+    /// credits question — "there are none, and here is why" — so it is left
+    /// alone rather than re-asked and overwritten with the backup's.
+    func testHookDisabledReasonIsNotOverwrittenByTheBackfill() async throws {
+        var hook = snapshot(.official, percent: 62, capturedAgo: 30)
+        hook.usageCreditsDisabledReason = "billing_not_configured"
+
+        let provider = FreshestQuotaProvider(
+            statusline: StubProvider(.success(hook)),
+            cachedState: StubProvider(
+                .success(snapshot(.cachedOfficial, percent: 11, capturedAgo: 900, usageCredits: credits)),
+                usageCredits: .success(UsageCreditsReading(credits: credits))
+            )
+        )
+
+        let result = try await provider.currentSnapshot()
+
+        XCTAssertNil(result.usageCredits)
+        XCTAssertEqual(result.usageCreditsDisabledReason, "billing_not_configured")
+    }
+
+    // MARK: - Backfilling a partial hook reading
+
+    /// A cache file written before the helper script learned to copy
+    /// `utilization` across (or written with no `jq`, or while `~/.claude.json`
+    /// was unreadable) yields a hook reading with no scoped rows and no
+    /// credits. Both are backfilled from `cachedState` rather than left dark.
+    func testPartialHookReadingIsBackfilledFromCachedState() async throws {
+        let scoped = [QuotaScopedLimit(label: "Fable", percentUsed: 0)]
+
+        let provider = FreshestQuotaProvider(
+            statusline: StubProvider(.success(snapshot(.official, percent: 62, capturedAgo: 30))),
+            cachedState: StubProvider(
+                .success(snapshot(
+                    .cachedOfficial, percent: 11, capturedAgo: 900,
+                    scopedWeekly: scoped, usageCredits: credits
+                ))
+            )
+        )
+
+        let result = try await provider.currentSnapshot()
+
+        XCTAssertEqual(result.confidence, .official)
+        XCTAssertEqual(result.fiveHour.percentUsed, 62)
+        XCTAssertEqual(result.scopedWeekly, scoped)
+        XCTAssertEqual(result.usageCredits, credits)
+    }
+
+    /// Nothing is invented: a backup with nothing of its own to add leaves the
+    /// third and fourth bars empty.
+    func testBackfillAddsNothingWhenTheBackupHasNothing() async throws {
+        let provider = FreshestQuotaProvider(
             statusline: StubProvider(.success(snapshot(.official, percent: 62, capturedAgo: 30))),
             cachedState: StubProvider(.success(snapshot(.cachedOfficial, percent: 11, capturedAgo: 900)))
         )
-        let withoutCredits = try await noCredits.currentSnapshot()
-        XCTAssertNil(withoutCredits.usageCredits)
+
+        let result = try await provider.currentSnapshot()
+
+        XCTAssertEqual(result.scopedWeekly, [])
+        XCTAssertNil(result.usageCredits)
     }
 
-    /// The credits half of the staleness bypass: a month-to-date spend total
-    /// doesn't stop being right because the account-wide windows next to it are
-    /// an hour old.
-    func testUsageCreditsSurviveACachedStateSnapshotThatFailsOnStaleness() async throws {
+    /// The backfill goes through the staleness-bypassing accessors, so a
+    /// `cachedState` whose *snapshot* fails on ``CachedUtilizationReader``'s
+    /// 60-minute gate still contributes: its scoped rows and its month-to-date
+    /// spend carry no freshness claim the stale windows could invalidate.
+    func testBackfillSurvivesACachedStateSnapshotThatFailsOnStaleness() async throws {
+        let scoped = [QuotaScopedLimit(label: "Fable", percentUsed: 0)]
+
         let provider = FreshestQuotaProvider(
             statusline: StubProvider(.success(snapshot(.official, percent: 62, capturedAgo: 30))),
             cachedState: StubProvider(
@@ -231,6 +225,7 @@ final class FreshestQuotaProviderTests: XCTestCase {
                     snapshot: snapshot(.cachedOfficial, percent: 11, capturedAgo: 13_400),
                     age: 13_400
                 )),
+                scopedWeekly: .success(scoped),
                 usageCredits: .success(UsageCreditsReading(credits: credits))
             )
         )
@@ -238,16 +233,18 @@ final class FreshestQuotaProviderTests: XCTestCase {
         let result = try await provider.currentSnapshot()
 
         XCTAssertEqual(result.confidence, .official)
+        XCTAssertEqual(result.scopedWeekly, scoped)
         XCTAssertEqual(result.usageCredits, credits)
     }
 
-    /// Best-effort, like the scoped graft: a `cachedState` that can't report
-    /// credits at all leaves the row out rather than failing the poll.
-    func testMissingUsageCreditsDoesNotFailTheGraftAttempt() async throws {
+    /// Genuinely best-effort: a backup that can't answer either question leaves
+    /// both rows out rather than failing the poll.
+    func testFailedBackfillDoesNotFailThePoll() async throws {
         let provider = FreshestQuotaProvider(
             statusline: StubProvider(.success(snapshot(.official, percent: 62, capturedAgo: 30))),
             cachedState: StubProvider(
                 .failure(.noQuotaSourceAvailable),
+                scopedWeekly: .failure(.noQuotaSourceAvailable),
                 usageCredits: .failure(.noQuotaSourceAvailable)
             )
         )
@@ -255,33 +252,31 @@ final class FreshestQuotaProviderTests: XCTestCase {
         let result = try await provider.currentSnapshot()
 
         XCTAssertEqual(result.confidence, .official)
+        XCTAssertEqual(result.scopedWeekly, [])
         XCTAssertNil(result.usageCredits)
-    }
-
-    /// Same underlying reading reaching us both ways: prefer the one that was
-    /// observed directly.
-    func testIdenticalCaptureTimesPreferTheStatuslineCapture() async throws {
-        let provider = FreshestQuotaProvider(
-            statusline: StubProvider(.success(snapshot(.official, percent: 62, capturedAgo: 60))),
-            cachedState: StubProvider(.success(snapshot(.cachedOfficial, percent: 62, capturedAgo: 60)))
-        )
-
-        let result = try await provider.currentSnapshot()
-        XCTAssertEqual(result.confidence, .official)
     }
 
     // MARK: - One source down
 
+    /// The hook not being installed is the case the backup exists for, and it
+    /// stands in whole: this source parses the scoped rows and `spend`
+    /// natively, so all four bars come from it with nothing grafted on.
     func testMissingStatuslineHookIsInvisible() async throws {
+        let scoped = [QuotaScopedLimit(label: "Fable", percentUsed: 0)]
         let provider = FreshestQuotaProvider(
             statusline: StubProvider(.failure(.noQuotaSourceAvailable)),
-            cachedState: StubProvider(.success(snapshot(.cachedOfficial, percent: 97, capturedAgo: 600)))
+            cachedState: StubProvider(.success(snapshot(
+                .cachedOfficial, percent: 97, capturedAgo: 600,
+                scopedWeekly: scoped, usageCredits: credits
+            )))
         )
 
         let result = try await provider.currentSnapshot()
 
         XCTAssertEqual(result.confidence, .cachedOfficial)
         XCTAssertEqual(result.fiveHour.percentUsed, 97)
+        XCTAssertEqual(result.scopedWeekly, scoped)
+        XCTAssertEqual(result.usageCredits, credits)
     }
 
     func testMissingCachedStateIsInvisible() async throws {

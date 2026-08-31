@@ -1,7 +1,7 @@
 import Foundation
 
-/// Reads the on-disk cache of Claude Code's `statusLine` rate-limit payload
-/// (`.official` confidence — the freshest source we have; see
+/// Reads the on-disk cache written by our `statusLine` hook — the app's
+/// **primary** quota source (`.official` confidence; see
 /// ``FreshestQuotaProvider``).
 ///
 /// ## Why a cache and not a hook
@@ -33,9 +33,30 @@ import Foundation
 ///   "rate_limits": {
 ///     "five_hour": { "used_percentage": 23.5, "resets_at": 1738425600 },
 ///     "seven_day": { "used_percentage": 41.2, "resets_at": 1738857600 }
+///   },
+///   "utilization": {
+///     "limits": [ { "kind": "weekly_scoped", … } ],
+///     "spend": { … }, "extra_usage": { … }
 ///   }
 /// }
 /// ```
+///
+/// Only `rate_limits` comes from the statusline payload; that schema has never
+/// carried a `limits[]` or a `spend`. The `utilization` object is the script
+/// copying those two out of Claude Code's own `~/.claude.json` at the moment it
+/// fires, nested and named exactly as they appear there — which is why the
+/// parsing below is ``CachedUtilizationReader``'s parsing, reused verbatim
+/// rather than reimplemented. Carrying them here is what makes a hook-only
+/// reading complete: all four bars at one known age, out of one file this app
+/// wrote, instead of three from here and one from a private key that refreshes
+/// on somebody else's schedule.
+///
+/// `utilization` is **optional in every direction**. A cache written before this
+/// key existed, one written with no `jq` installed, and one written while
+/// `~/.claude.json` was unreadable are all indistinguishable and all fine: the
+/// scoped rows come back empty and the credits `nil`, which is exactly what
+/// this reader reported before the key existed, and ``FreshestQuotaProvider``
+/// backfills both from ``CachedUtilizationReader``.
 ///
 /// The raw, unfiltered statusline payload is *also* accepted verbatim (it
 /// already nests the windows under `rate_limits`), in which case the file's
@@ -52,14 +73,18 @@ import Foundation
 /// fired) throws ``ClaudeStatsError/noQuotaSourceAvailable`` instead — a
 /// distinct case, since "not installed" and "installed but quiet" call for
 /// different messages. This reader still throws on either: it is
-/// ``FreshestQuotaProvider`` that swallows both whenever
-/// ``CachedUtilizationReader`` has a reading of its own, so an error only
-/// reaches the UI when neither source has one.
+/// ``FreshestQuotaProvider`` that swallows both by falling back to
+/// ``CachedUtilizationReader``, so an error only reaches the UI when neither
+/// source has a reading.
 public struct StatuslineCacheReader: QuotaProviding {
     /// Directory name used under Application Support.
     public static let cacheDirectoryName = "ClaudeStats"
     /// File name of the cache within that directory.
     public static let cacheFileName = "statusline-cache.json"
+    /// Top-level key holding the copy of `cachedUsageUtilization.utilization`.
+    /// Same spelling as ``CachedUtilizationReader/utilizationKey`` on purpose:
+    /// the object under it is the same object, so the same parsers read it.
+    static let utilizationKey = "utilization"
 
     /// `~/Library/Application Support/ClaudeStats/statusline-cache.json`.
     ///
@@ -95,16 +120,7 @@ public struct StatuslineCacheReader: QuotaProviding {
     }
 
     public func currentSnapshot() async throws -> QuotaSnapshot {
-        guard let (data, mtime) = readCacheFileWithModificationDate() else {
-            // No hook installed, or it has never fired.
-            throw ClaudeStatsError.noQuotaSourceAvailable
-        }
-
-        guard let root = QuotaJSON.object(try? JSONSerialization.jsonObject(with: data)) else {
-            throw ClaudeStatsError.unexpectedQuotaResponse(
-                "statusline cache at \(cacheURL.lastPathComponent) is not a JSON object"
-            )
-        }
+        let (root, mtime) = try loadRoot()
 
         // A payload captured before the account's first API response has no
         // `rate_limits` at all (and Pro/Max only). That's "no data", not
@@ -121,17 +137,50 @@ public struct StatuslineCacheReader: QuotaProviding {
             throw ClaudeStatsError.noQuotaSourceAvailable
         }
 
+        // Absent on every cache the helper script wrote before it learned to
+        // copy this across, and on every one written without `jq` — hence
+        // empty/`nil` rather than a throw. See the type's "Cache file" note.
+        let utilization = QuotaJSON.object(root[Self.utilizationKey])
+        let credits = utilization.map(QuotaJSON.usageCredits(in:)) ?? .unavailable
+
         let snapshot = QuotaSnapshot(
             fiveHour: windows.fiveHour,
             sevenDay: windows.sevenDay,
             confidence: .official,
-            capturedAt: capturedAt
+            capturedAt: capturedAt,
+            scopedWeekly: utilization.map(QuotaJSON.scopedLimits(in:)) ?? [],
+            usageCredits: credits.credits,
+            usageCreditsDisabledReason: credits.disabledReason
         )
 
         guard !snapshot.isStale(asOf: now(), threshold: stalenessThreshold) else {
             throw ClaudeStatsError.staleQuotaSource(snapshot: snapshot, age: snapshot.age(asOf: now()))
         }
         return snapshot
+    }
+
+    /// Same payload as ``currentSnapshot()``, but never gated on staleness —
+    /// the mirror of ``CachedUtilizationReader/currentScopedWeekly()``, and see
+    /// ``QuotaProviding/currentScopedWeekly()`` for the rationale.
+    ///
+    /// The symmetry is not decorative. Now that this source is the primary one,
+    /// it is also the source the *other* one's graft can pull from: when
+    /// ``CachedUtilizationReader`` is serving the account-wide windows and this
+    /// cache is merely too old to win, its scoped rows are still the freshest
+    /// copy of `weekly_scoped` on disk — and unlike the windows they carry no
+    /// freshness claim of their own (see ``QuotaScopedLimit``).
+    public func currentScopedWeekly() async throws -> [QuotaScopedLimit] {
+        guard let utilization = try loadUtilization() else { return [] }
+        return QuotaJSON.scopedLimits(in: utilization)
+    }
+
+    /// Same payload as ``currentSnapshot()``, never gated on staleness — the
+    /// money half of ``currentScopedWeekly()``, for the same reason. A
+    /// month-to-date spend total does not stop being right because the rate
+    /// limits captured beside it have aged out.
+    public func currentUsageCredits() async throws -> UsageCreditsReading {
+        guard let utilization = try loadUtilization() else { return .unavailable }
+        return QuotaJSON.usageCredits(in: utilization)
     }
 
     /// Deletes the cache file, so the next hook write starts from nothing.
@@ -149,6 +198,34 @@ public struct StatuslineCacheReader: QuotaProviding {
         } catch let error as CocoaError where error.code == .fileNoSuchFile {
             // already gone — nothing to do
         }
+    }
+
+    /// Parses the cache file into its root object, common to
+    /// ``currentSnapshot()`` and ``loadUtilization()``.
+    ///
+    /// Only the two file-level faults throw here — nothing on disk at all, and
+    /// something on disk that isn't JSON — because those are the two the
+    /// staleness-bypassing readers care about just as much as
+    /// ``currentSnapshot()`` does. Everything the root does or doesn't contain
+    /// is each caller's own business.
+    private func loadRoot() throws -> (root: [String: Any], mtime: Date?) {
+        guard let (data, mtime) = readCacheFileWithModificationDate() else {
+            // No hook installed, or it has never fired.
+            throw ClaudeStatsError.noQuotaSourceAvailable
+        }
+        guard let root = QuotaJSON.object(try? JSONSerialization.jsonObject(with: data)) else {
+            throw ClaudeStatsError.unexpectedQuotaResponse(
+                "statusline cache at \(cacheURL.lastPathComponent) is not a JSON object"
+            )
+        }
+        return (root, mtime)
+    }
+
+    /// The `utilization` object, or `nil` when this cache carries none — which
+    /// is a normal state, not a fault, so it is `nil` rather than a throw. The
+    /// file itself being absent or unparseable still throws, via ``loadRoot()``.
+    private func loadUtilization() throws -> [String: Any]? {
+        QuotaJSON.object(try loadRoot().root[Self.utilizationKey])
     }
 
     /// Reads the cache file's bytes and modification time from a single open

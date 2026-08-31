@@ -3,11 +3,12 @@ import Foundation
 /// Source of live account-wide quota percentages (tier 2 of the data layer).
 ///
 /// Two real implementations, both reporting Anthropic's own numbers:
-/// ``CachedUtilizationReader`` (Claude Code's own cached blob in
-/// `~/.claude.json`; `.cachedOfficial`, needs no setup) and
 /// ``StatuslineCacheReader`` (our `statusLine` hook's disk cache; `.official`,
-/// fresher but opt-in). ``FreshestQuotaProvider`` composes them and is what the
-/// app actually wires up.
+/// opt-in, and the primary) and ``CachedUtilizationReader`` (Claude Code's own
+/// cached blob in `~/.claude.json`; `.cachedOfficial`, needs no setup, and the
+/// backup for machines where the hook isn't installed or has gone quiet).
+/// ``FreshestQuotaProvider`` composes them and is what the app actually wires
+/// up.
 ///
 /// `async` because the real implementations do file I/O.
 public protocol QuotaProviding: Sendable {
@@ -21,25 +22,28 @@ public protocol QuotaProviding: Sendable {
     /// ``currentSnapshot()`` throws ``ClaudeStatsError/staleQuotaSource(snapshot:age:)``
     /// whole — a stale account-wide window and a stale scoped row are thrown
     /// out together, which is right for the two main bars (a wrong percentage
-    /// is worse than none) but wrong for ``FreshestQuotaProvider``'s graft: it
-    /// wants ``CachedUtilizationReader``'s scoped rows even when that source's
-    /// windows are too old to serve as the winning snapshot, so long as the
-    /// *other* source (the statusline hook) is covering the account-wide
-    /// numbers. Default implementation just reads them off ``currentSnapshot()``,
-    /// which is correct for a source with no separate staleness gate to bypass
-    /// (``StatuslineCacheReader`` never populates ``QuotaSnapshot/scopedWeekly``
-    /// at all, so this is `[]` there either way).
+    /// is worse than none) but wrong for ``FreshestQuotaProvider``'s backfill:
+    /// it wants a source's scoped rows even when that source's windows are too
+    /// old to serve as the snapshot, so long as the *other* source is covering
+    /// the account-wide numbers. A scoped row carries no freshness claim of its
+    /// own to invalidate — see ``QuotaScopedLimit``.
+    ///
+    /// Both real implementations override this, because both can now report
+    /// `weekly_scoped`: ``CachedUtilizationReader`` reads it out of
+    /// `cachedUsageUtilization`, and ``StatuslineCacheReader`` reads the copy
+    /// the helper script snapshots into its cache file. The default
+    /// implementation just reads them off ``currentSnapshot()``, which stays
+    /// correct for a source with no separate staleness gate to bypass.
     func currentScopedWeekly() async throws -> [QuotaScopedLimit]
 
     /// Best-effort usage credits, bypassing this source's own staleness gate —
     /// the money counterpart of ``currentScopedWeekly()``, existing for exactly
-    /// the same reason.
+    /// the same reason: a month-to-date spend total an hour behind is still the
+    /// right number to show, whatever the windows captured beside it are doing.
     ///
-    /// Only ``CachedUtilizationReader``'s payload has a `spend` object at all,
-    /// so ``FreshestQuotaProvider`` has to graft this source's reading onto
-    /// whichever snapshot wins the freshness compare — otherwise the credits row
-    /// would vanish on any account where the (creditless) statusline hook is
-    /// installed and, as usual, fresher. The default implementation reads it off
+    /// Also overridden by both real implementations, and for the same reason —
+    /// `spend` reaches ``StatuslineCacheReader`` through the same copy that
+    /// brings it `weekly_scoped`. The default implementation reads it off
     /// ``currentSnapshot()``, which is right for a source with no separate gate
     /// to bypass.
     func currentUsageCredits() async throws -> UsageCreditsReading
