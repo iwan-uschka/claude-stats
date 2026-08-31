@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.9.7] - 2026-08-31
+
 ### Added
 - Organisation usage credits. Claude Code's cached usage payload grew a `spend`
   object (and a sibling `extra_usage` one) carrying the extra-usage spend as
