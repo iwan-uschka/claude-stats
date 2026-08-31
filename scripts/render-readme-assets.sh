@@ -5,7 +5,6 @@
 #
 # Writes, for each of the light and dark system appearances:
 #   assets/screenshot-popover-<theme>.png   menu bar strip + glyph + popover
-#   assets/menu-bar-glyph-<theme>.png       the glyph alone, transparent
 #
 # The renderer lives in the test target — Tests/ClaudeStatsTests/
 # ReadmeAssetRenderTests.swift — because `ClaudeStats` is an executableTarget
@@ -34,5 +33,4 @@ CLAUDE_STATS_RENDER_ASSETS="$OUT_DIR" \
 echo "✓ Wrote:"
 for theme in light dark; do
   echo "    $OUT_DIR/screenshot-popover-$theme.png"
-  echo "    $OUT_DIR/menu-bar-glyph-$theme.png"
 done
