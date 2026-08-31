@@ -24,7 +24,7 @@ import SwiftUI
 /// Fill level is encoded purely in alpha (opaque = used, faint = remaining), so
 /// the glyph stays monochrome — no colour shift as a window fills up.
 enum MenuBarGlyph {
-    /// Height of the drawn glyph; a little under the 22pt menu bar so the icon
+    /// Height of the drawn glyph; a little under the 24pt menu bar so the icon
     /// doesn't touch the edges.
     static let height: CGFloat = 18
     static let markSize: CGFloat = 11.9 // 15% smaller than the original 14.

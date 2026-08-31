@@ -17,7 +17,7 @@ The glyph on its own, at the size it actually appears:
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/menu-bar-glyph-dark.png">
-  <img alt="The Claude mark followed by four thin vertical bars" src="assets/menu-bar-glyph-light.png" width="70">
+  <img alt="The Claude mark followed by four thin vertical bars" src="assets/menu-bar-glyph-light.png" width="35">
 </picture>
 
 <sub>Both are rendered from the app's own views with mock data —

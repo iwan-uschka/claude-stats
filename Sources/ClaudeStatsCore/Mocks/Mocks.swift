@@ -103,12 +103,13 @@ public struct MockQuotaProvider: QuotaProviding {
     ///
     /// Exists for the README asset renderer, which wants one image showing the
     /// full layout rather than the common-case subset ``sampleSnapshot(now:)``
-    /// covers. Credits are deliberately non-zero here — ``sampleUsageCredits()``
-    /// is 0% on purpose (that is what a fresh cap really reports) and stays
-    /// that way, but a 0% hatched bar renders as an empty track, which shows
-    /// nothing of the hatching the fourth bar exists to demonstrate.
+    /// covers. Credits and the scoped weekly row are both deliberately
+    /// non-zero here for the same reason: each is 0% on purpose in the
+    /// snapshot it's drawn from (a fresh cap, an inactive scoped limit,
+    /// respectively), but a 0% bar renders as an empty track, which shows
+    /// nothing of what that bar exists to demonstrate.
     public static func sampleShowcaseSnapshot(now: Date = Date()) -> QuotaSnapshot {
-        sampleSnapshotWithUsageCredits(
+        var snapshot = sampleSnapshotWithUsageCredits(
             now: now,
             credits: UsageCredits(
                 used: MoneyAmount(amountMinor: 2_087, currency: "EUR", exponent: 2),
@@ -118,6 +119,8 @@ public struct MockQuotaProvider: QuotaProviding {
                 limitReached: false
             )
         )
+        snapshot.scopedWeekly = [QuotaScopedLimit(label: "Fable", percentUsed: 42)]
+        return snapshot
     }
 }
 

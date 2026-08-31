@@ -20,9 +20,11 @@
 # Output is deterministic (the renderer pins its clock), so a second run on an
 # unchanged UI leaves the tree clean.
 set -euo pipefail
-cd "$(dirname "$0")/.."
 
-OUT_DIR="${1:-$PWD/assets}"
+OUT_DIR="${1:-assets}"
+[[ "$OUT_DIR" = /* ]] || OUT_DIR="$PWD/$OUT_DIR"
+
+cd "$(dirname "$0")/.."
 mkdir -p "$OUT_DIR"
 
 echo "→ Rendering into $OUT_DIR"
