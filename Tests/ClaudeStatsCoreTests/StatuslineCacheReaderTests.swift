@@ -55,18 +55,54 @@ final class StatuslineCacheReaderTests: XCTestCase {
         )
     }
 
-    /// The shape the helper script writes when `jq` is available.
+    /// The shape the helper script writes when `jq` is available and it found
+    /// nothing to copy out of `~/.claude.json` — also the shape every cache
+    /// written before the script learned to copy has.
     private func filteredCache(capturedAt: Date) -> String {
-        """
+        filteredCache(capturedAt: capturedAt, utilization: nil)
+    }
+
+    /// The same, plus the `utilization` object the script copies out of
+    /// `cachedUsageUtilization.utilization`.
+    private func filteredCache(capturedAt: Date, utilization: String?) -> String {
+        let epoch = Int(capturedAt.timeIntervalSince1970)
+        let extra = utilization.map { ",\n  \"utilization\": \($0)" } ?? ""
+        return """
         {
-          "captured_at": \(Int(capturedAt.timeIntervalSince1970)),
+          "captured_at": \(epoch),
           "rate_limits": {
-            "five_hour": { "used_percentage": 23.5, "resets_at": \(Int(capturedAt.timeIntervalSince1970) + 3600) },
-            "seven_day": { "used_percentage": 41.2, "resets_at": \(Int(capturedAt.timeIntervalSince1970) + 86_400) }
-          }
+            "five_hour": { "used_percentage": 23.5, "resets_at": \(epoch + 3600) },
+            "seven_day": { "used_percentage": 41.2, "resets_at": \(epoch + 86_400) }
+          }\(extra)
         }
         """
     }
+
+    /// `weekly_scoped` + `spend` + `extra_usage` as the script copies them:
+    /// verbatim sub-objects of `cachedUsageUtilization.utilization`, so
+    /// ``QuotaJSON/scopedLimits(in:)`` and ``QuotaJSON/usageCredits(in:)`` read
+    /// them here exactly as they do out of `~/.claude.json` — see the mirror
+    /// fixtures in `CachedUtilizationReaderTests`.
+    private let copiedUtilization = """
+        {
+          "limits": [
+            { "kind": "weekly_scoped", "group": "weekly", "percent": 0, "severity": "normal",
+              "resets_at": null, "is_active": false,
+              "scope": { "model": { "id": null, "display_name": "Fable" }, "surface": null } },
+            { "kind": "weekly_scoped", "percent": 42, "is_active": true,
+              "scope": { "model": { "display_name": "Sonnet" } } }
+          ],
+          "spend": {
+            "used":  { "amount_minor": 0, "currency": "EUR", "exponent": 2 },
+            "limit": { "amount_minor": 3300, "currency": "EUR", "exponent": 2 },
+            "percent": 0, "severity": "normal", "enabled": true, "disabled_reason": null
+          },
+          "extra_usage": {
+            "is_enabled": true, "monthly_limit": 3300, "used_credits": 0,
+            "user_disabled": false, "spend_limit_reached": false, "disabled_reason": null
+          }
+        }
+        """
 
     // MARK: - Happy path
 
@@ -82,9 +118,12 @@ final class StatuslineCacheReaderTests: XCTestCase {
         XCTAssertEqual(snapshot.capturedAt.timeIntervalSince1970,
                        capturedAt.timeIntervalSince1970, accuracy: 1)
         XCTAssertFalse(snapshot.isStale(asOf: now))
-        // The statusline payload has no `limits[]`, so this source never
-        // reports a scoped weekly limit — the third bar is cached-state only.
+        // No `utilization` key in this fixture — the shape of every cache the
+        // script wrote before it learned to copy one, and of every cache
+        // written without `jq`. Empty and `nil`, never a throw.
         XCTAssertEqual(snapshot.scopedWeekly, [])
+        XCTAssertNil(snapshot.usageCredits)
+        XCTAssertNil(snapshot.usageCreditsDisabledReason)
         // resets_at is epoch seconds in the statusline payload.
         XCTAssertEqual(snapshot.fiveHour.resetsAt?.timeIntervalSince1970,
                        capturedAt.timeIntervalSince1970 + 3600)
@@ -131,6 +170,144 @@ final class StatuslineCacheReaderTests: XCTestCase {
 
         XCTAssertEqual(snapshot.fiveHour.percentUsed, 10)
         XCTAssertEqual(snapshot.sevenDay, .empty)
+    }
+
+    // MARK: - The copied `utilization` object
+
+    /// The whole point of the copy: a hook-only reading now carries all four
+    /// bars, at the one `captured_at` the script stamped.
+    func testCopiedUtilizationPopulatesScopedLimitsAndCredits() async throws {
+        try write(filteredCache(capturedAt: now.addingTimeInterval(-30), utilization: copiedUtilization))
+
+        let snapshot = try await makeReader().currentSnapshot()
+
+        XCTAssertEqual(snapshot.confidence, .official)
+        // The account-wide windows still come from `rate_limits`, not from the
+        // copy — the copy deliberately carries no `five_hour` / `seven_day`.
+        XCTAssertEqual(snapshot.fiveHour.percentUsed, 23.5, accuracy: 0.001)
+        // Sorted by percent descending, same as out of `~/.claude.json`.
+        XCTAssertEqual(snapshot.scopedWeekly.map(\.label), ["Sonnet", "Fable"])
+        XCTAssertEqual(snapshot.scopedWeekly.map(\.percentUsed), [42, 0])
+
+        let credits = try XCTUnwrap(snapshot.usageCredits)
+        XCTAssertEqual(credits.limit, MoneyAmount(amountMinor: 3_300, currency: "EUR", exponent: 2))
+        XCTAssertEqual(credits.percentUsed, 0)
+        XCTAssertNil(snapshot.usageCreditsDisabledReason)
+    }
+
+    /// `extra_usage` is copied across too, not just `spend` — without it the
+    /// veto could never fire here, and this reader would show credits the
+    /// backup source correctly hides.
+    func testCopiedExtraUsageStillVetoesAPopulatedSpend() async throws {
+        try write(filteredCache(capturedAt: now.addingTimeInterval(-30), utilization: """
+            {
+              "limits": [],
+              "spend": {
+                "used":  { "amount_minor": 500, "currency": "EUR", "exponent": 2 },
+                "limit": { "amount_minor": 3300, "currency": "EUR", "exponent": 2 },
+                "percent": 15, "enabled": true
+              },
+              "extra_usage": {
+                "is_enabled": false, "user_disabled": false,
+                "disabled_reason": "billing_not_configured"
+              }
+            }
+            """))
+
+        let snapshot = try await makeReader().currentSnapshot()
+
+        XCTAssertNil(snapshot.usageCredits)
+        XCTAssertEqual(snapshot.usageCreditsDisabledReason, "billing_not_configured")
+    }
+
+    /// A copy that found `weekly_scoped` rows but no `spend` — an org with
+    /// credits switched off. Half a copy is fine; the halves are independent.
+    func testCopiedUtilizationWithoutSpendStillYieldsScopedLimits() async throws {
+        try write(filteredCache(capturedAt: now.addingTimeInterval(-30), utilization: """
+            { "limits": [ { "kind": "weekly_scoped", "percent": 7,
+                            "scope": { "model": { "display_name": "Opus" } } } ] }
+            """))
+
+        let snapshot = try await makeReader().currentSnapshot()
+
+        XCTAssertEqual(snapshot.scopedWeekly.map(\.label), ["Opus"])
+        XCTAssertNil(snapshot.usageCredits)
+    }
+
+    /// A `utilization` of the wrong type is treated as absent, not as a parse
+    /// failure: the rate limits beside it are still good, and this key is
+    /// optional in every direction.
+    func testNonObjectUtilizationIsTreatedAsAbsent() async throws {
+        try write(filteredCache(capturedAt: now.addingTimeInterval(-30), utilization: "\"nope\""))
+
+        let snapshot = try await makeReader().currentSnapshot()
+
+        XCTAssertEqual(snapshot.fiveHour.percentUsed, 23.5, accuracy: 0.001)
+        XCTAssertEqual(snapshot.scopedWeekly, [])
+        XCTAssertNil(snapshot.usageCredits)
+    }
+
+    // MARK: - Staleness bypass
+
+    /// The mirror of `CachedUtilizationReaderTests`' bypass tests, and the
+    /// reason this source needs them now that it is the primary: when the
+    /// *backup* is serving the account-wide windows and this cache has merely
+    /// gone quiet, its scoped rows are still the freshest copy on disk.
+    func testCurrentScopedWeeklyBypassesTheStalenessGate() async throws {
+        try write(filteredCache(capturedAt: now.addingTimeInterval(-601), utilization: copiedUtilization))
+
+        await assertThrowsStale(age: 601) {
+            try await self.makeReader().currentSnapshot()
+        }
+
+        let scopedWeekly = try await makeReader().currentScopedWeekly()
+        XCTAssertEqual(scopedWeekly.map(\.label), ["Sonnet", "Fable"])
+    }
+
+    func testCurrentUsageCreditsBypassesTheStalenessGate() async throws {
+        try write(filteredCache(capturedAt: now.addingTimeInterval(-601), utilization: copiedUtilization))
+
+        await assertThrowsStale(age: 601) {
+            try await self.makeReader().currentSnapshot()
+        }
+
+        let reading = try await makeReader().currentUsageCredits()
+        XCTAssertEqual(reading.credits?.limit.amountMinor, 3_300)
+    }
+
+    /// No `utilization` to bypass to is a normal state, not a fault — an old
+    /// cache file must not turn `FreshestQuotaProvider`'s best-effort backfill
+    /// into an error it has to swallow.
+    func testBypassAccessorsReturnNothingWhenThereIsNoUtilization() async throws {
+        try write(filteredCache(capturedAt: now.addingTimeInterval(-30)))
+
+        let reader = makeReader()
+        let scopedWeekly = try await reader.currentScopedWeekly()
+        let reading = try await reader.currentUsageCredits()
+
+        XCTAssertEqual(scopedWeekly, [])
+        XCTAssertEqual(reading, .unavailable)
+    }
+
+    /// The file-level faults still throw, though — "the cache isn't there" and
+    /// "the cache isn't JSON" are the same two errors for these accessors as
+    /// for ``StatuslineCacheReader/currentSnapshot()``.
+    func testBypassAccessorsStillThrowOnFileLevelFaults() async throws {
+        XCTAssertFalse(FileManager.default.fileExists(atPath: cacheURL.path))
+        await assertThrows(.noQuotaSourceAvailable) {
+            try await self.makeReader().currentScopedWeekly()
+        }
+        await assertThrows(.noQuotaSourceAvailable) {
+            try await self.makeReader().currentUsageCredits()
+        }
+
+        try write("{ this is not json")
+        await assertThrowsUnexpectedQuotaResponse {
+            try await self.makeReader().currentScopedWeekly()
+        }
+        await assertThrowsUnexpectedQuotaResponse {
+            try await self.makeReader().currentUsageCredits()
+        }
     }
 
     // MARK: - Staleness

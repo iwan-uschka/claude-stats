@@ -169,7 +169,7 @@ struct SettingsView: View {
     private var quotaSourceSection: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Quota source").font(.headline)
-            Text("The 5-hour/7-day percentages come from Claude Code's own cached reading, with no setup. The statusline hook below is optional — it reports the same numbers, seconds old instead of minutes.")
+            Text("The statusline hook below is the app's primary quota source, updated seconds after Claude Code renders it — including the per-model and usage-credits bars. Without it, the app falls back to Claude Code's own cached reading, several minutes old.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -207,7 +207,7 @@ struct SettingsView: View {
 
         case nil, .notInstalled:
             Text(
-                "Optional: install the statusline hook to upgrade the tag from \"official (cached)\" to \"official\" — the same percentages, captured as Claude Code renders them instead of from its own cache. This edits ~/.claude/settings.json — you'll see exactly what changes before anything is written."
+                "Recommended: install the statusline hook to make it the app's primary quota source — captured as Claude Code renders it instead of read back from its own cache, several minutes stale. This edits ~/.claude/settings.json — you'll see exactly what changes before anything is written."
             )
             .font(.caption)
             .foregroundStyle(.secondary)

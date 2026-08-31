@@ -1,26 +1,53 @@
 import Foundation
 
-/// Serves whichever of the two account-wide quota sources has the newer
-/// reading, so neither one being unavailable can take the bars down.
+/// Serves the statusline hook's reading, falling back to Claude Code's own
+/// cached blob whenever the hook has nothing to say — so neither source being
+/// unavailable can take the bars down.
 ///
-/// ## The two sources are the same numbers at different ages
+/// ## Primary and backup, not a freshness race
 ///
-/// ``CachedUtilizationReader`` is the primary: it needs no setup, because
-/// Claude Code writes `cachedUsageUtilization` into its own state file whether
-/// or not this app exists. ``StatuslineCacheReader`` is the freshness booster:
-/// it requires installing a hook, and in exchange reports the payload seconds
-/// after Claude Code itself saw it, rather than on Claude Code's own
-/// several-minute cache cadence.
+/// ``StatuslineCacheReader`` is the primary. It is the only source this app
+/// actually writes: the hook fires within seconds of a status line render,
+/// stamps its own `captured_at`, and — since the helper script learned to copy
+/// `cachedUsageUtilization.utilization` across as it goes — carries all four
+/// bars' worth of data at that one known age.
 ///
-/// Keeping both is not redundancy for its own sake. The cached key is
-/// undocumented private state that can be renamed or removed by any Claude Code
-/// release; the statusline payload has a much longer track record. Whichever
-/// one survives an upstream change keeps the bars lit.
+/// ``CachedUtilizationReader`` is the backup, and it stays a full-fidelity one:
+/// it reads the same account-wide windows plus the scoped rows and `spend`
+/// natively, needs no setup at all, and covers every machine where the hook was
+/// never installed, has never fired, or has gone quiet. Whichever of the two
+/// survives an upstream change keeps the bars lit — the cached key is
+/// undocumented private state that any Claude Code release can rename (a
+/// `spend` object appeared inside it between 2026-08-27 and 2026-08-28), while
+/// the statusline payload has a much longer track record.
+///
+/// This used to be a freshness compare — newer `capturedAt` wins, ties to the
+/// hook — which was the right rule while the hook could only report two of the
+/// four bars and the rest had to be grafted on unconditionally. Now that a hook
+/// reading is complete on its own, comparing ages would only ever pick the
+/// less-trustworthy source's numbers on the strength of a timestamp neither
+/// source is obliged to keep moving. So the hook wins outright when it
+/// succeeds, and `cachedState` is consulted only when it doesn't.
+///
+/// ## Backfilling a partial hook reading
+///
+/// One exception to "wins outright": a hook reading can still arrive without
+/// its `utilization` half — a cache file written before the script copied it,
+/// a machine with no `jq`, or a run where `~/.claude.json` wasn't readable. So
+/// an *empty* `scopedWeekly`, or credits that are `nil` with no disabled reason
+/// either, are backfilled from `cachedState` (best-effort, through the
+/// staleness-bypassing ``QuotaProviding/currentScopedWeekly()`` and
+/// ``QuotaProviding/currentUsageCredits()``, since a blob too old for its
+/// windows still has the right scoped rows and the right month-to-date spend).
+/// Fields the hook did supply are never overwritten — it is the fresher source
+/// by construction, and a backfill that clobbered them would hand the UI a
+/// snapshot mixing two capture times.
 ///
 /// ## Failure handling
 ///
-/// One source failing is invisible — that is the entire point. An error only
-/// reaches the caller when *both* fail, and then the most actionable one wins:
+/// The primary failing is invisible — that is the entire point. An error only
+/// reaches the caller when *both* sources fail, and then the most actionable
+/// one wins:
 ///
 /// 1. A stale reading beats none, so if either source has a real-but-old
 ///    capture, that surfaces as
@@ -32,6 +59,9 @@ import Foundation
 ///    ``ClaudeStatsError/unexpectedQuotaResponse(_:)`` names something the user
 ///    could actually look at, where "nothing installed" does not.
 /// 3. Otherwise ``ClaudeStatsError/noQuotaSourceAvailable``.
+///
+/// That ordering is untouched by the priority flip: it ranks *errors*, and only
+/// runs once neither source produced a reading to rank them against.
 public struct FreshestQuotaProvider: QuotaProviding {
     private let statusline: any QuotaProviding
     private let cachedState: any QuotaProviding
@@ -45,73 +75,67 @@ public struct FreshestQuotaProvider: QuotaProviding {
     }
 
     public func currentSnapshot() async throws -> QuotaSnapshot {
-        // Sequential, not concurrent: both are a couple of local file reads,
-        // and running them in order keeps the outcome deterministic for the
-        // tie-break below.
-        let fromStatusline = await outcome(of: statusline)
-        let fromCachedState = await outcome(of: cachedState)
-
-        switch (fromStatusline, fromCachedState) {
-        case (.success(let hook), .success(let cached)):
-            // Ties go to the statusline capture: equal `capturedAt` means the
-            // same underlying reading reached us both ways, and the hook's is
-            // the one that was observed directly.
-            var winner = hook.capturedAt >= cached.capturedAt ? hook : cached
-            // Scoped limits exist only in `cachedState`'s payload — the
-            // statusline hook's schema has no `limits[]` at all, not merely an
-            // empty one. So this is the one field that isn't "pick a snapshot
-            // and use it whole": grafting it on top of whichever snapshot wins
-            // the freshness compare is what lets the two features compose,
-            // rather than the scoped bars going dark on any account where the
-            // hook is installed and (as usual) fresher.
-            winner.scopedWeekly = cached.scopedWeekly
-            // Same story as the scoped limits, one object over: `spend` exists
-            // only in `cachedState`'s payload, so the credits row would go dark
-            // whenever the hook wins the freshness compare unless it is grafted
-            // across too. Credits and reason move together — see
-            // ``QuotaSnapshot/apply(_:)``.
-            winner.apply(UsageCreditsReading(
-                credits: cached.usageCredits,
-                disabledReason: cached.usageCreditsDisabledReason
-            ))
-            return winner
-        case (.success(let hook), .failure):
-            // The whole `cachedState` snapshot failed — commonly because its
-            // windows are stale, which says nothing about whether its scoped
-            // rows are worth showing (they carry no separate freshness gate
-            // of their own either way — see ``QuotaScopedLimit``). Best
-            // effort, via the one method that bypasses that staleness gate:
-            // a hook this fresh with no scoped data of its own is exactly the
-            // case ``currentScopedWeekly()`` exists for.
-            var winner = hook
-            winner.scopedWeekly = (try? await cachedState.currentScopedWeekly()) ?? []
-            winner.apply((try? await cachedState.currentUsageCredits()) ?? .unavailable)
-            return winner
-        case (.failure, .success(let cached)):
-            return cached
-        case (.failure(let hookError), .failure(let cachedError)):
-            var error = Self.combined(hookError, cachedError)
-            // Best effort, same rationale as the `(.success, .failure)` case
-            // above: a stale reading with no scoped rows of its own can still
-            // graft `cachedState`'s, which carries no separate freshness gate.
-            if case .staleQuotaSource(var snapshot, let age) = error,
-                snapshot.scopedWeekly.isEmpty
-                    || (snapshot.usageCredits == nil && snapshot.usageCreditsDisabledReason == nil) {
-                if snapshot.scopedWeekly.isEmpty {
-                    snapshot.scopedWeekly = (try? await cachedState.currentScopedWeekly()) ?? []
+        // `cachedState` is read only when it is actually needed. On the common
+        // path — hook installed, fired recently, carrying its own `utilization`
+        // — that is never, and this poll touches one file instead of two.
+        switch await outcome(of: statusline) {
+        case .success(let hook):
+            return await backfilled(hook)
+        case .failure(let hookError):
+            switch await outcome(of: cachedState) {
+            case .success(let cached):
+                // Full-fidelity backup: this source parses the scoped rows and
+                // `spend` natively, so there is nothing to graft onto it.
+                return cached
+            case .failure(let cachedError):
+                var error = Self.combined(hookError, cachedError)
+                // Best effort, same rationale as ``backfilled(_:)``: a stale
+                // reading missing its scoped rows or credits can still take
+                // `cachedState`'s, which carry no freshness gate of their own.
+                // Whichever snapshot won `combined` may already have both (a
+                // stale `cachedState` reading always does), in which case this
+                // is skipped entirely.
+                if case .staleQuotaSource(var snapshot, let age) = error,
+                    snapshot.scopedWeekly.isEmpty
+                        || (snapshot.usageCredits == nil && snapshot.usageCreditsDisabledReason == nil) {
+                    if snapshot.scopedWeekly.isEmpty {
+                        snapshot.scopedWeekly = (try? await cachedState.currentScopedWeekly()) ?? []
+                    }
+                    // Only overwrite on a successful re-read: unlike the
+                    // scoped-rows fallback above (`[]` is a no-op when there's
+                    // nothing already), `.unavailable` would actively clear a
+                    // disabled-reason this snapshot already carried if the live
+                    // re-read merely failed.
+                    if snapshot.usageCredits == nil, snapshot.usageCreditsDisabledReason == nil,
+                        let fetched = try? await cachedState.currentUsageCredits() {
+                        snapshot.apply(fetched)
+                    }
+                    error = .staleQuotaSource(snapshot: snapshot, age: age)
                 }
-                // Only overwrite on a successful re-read: unlike the scoped-rows
-                // fallback above (`[]` is a no-op when there's nothing already),
-                // `.unavailable` would actively clear a disabled-reason this
-                // snapshot already carried if the live re-read merely failed.
-                if snapshot.usageCredits == nil, snapshot.usageCreditsDisabledReason == nil,
-                    let fetched = try? await cachedState.currentUsageCredits() {
-                    snapshot.apply(fetched)
-                }
-                error = .staleQuotaSource(snapshot: snapshot, age: age)
+                throw error
             }
-            throw error
         }
+    }
+
+    /// Fills the two fields a hook reading can legitimately arrive without —
+    /// see the type's "Backfilling a partial hook reading" note.
+    ///
+    /// Both fetches bypass `cachedState`'s staleness gate on purpose, and both
+    /// are `try?`: a backup that can't answer leaves the row out, it never
+    /// fails the poll. Nothing the hook already supplied is touched.
+    private func backfilled(_ hook: QuotaSnapshot) async -> QuotaSnapshot {
+        var snapshot = hook
+        if snapshot.scopedWeekly.isEmpty {
+            snapshot.scopedWeekly = (try? await cachedState.currentScopedWeekly()) ?? []
+        }
+        // Credits and reason move together — see ``QuotaSnapshot/apply(_:)`` —
+        // so a hook reading carrying only a `disabled_reason` counts as having
+        // answered, and is left alone rather than re-asked and overwritten.
+        if snapshot.usageCredits == nil, snapshot.usageCreditsDisabledReason == nil,
+            let fetched = try? await cachedState.currentUsageCredits() {
+            snapshot.apply(fetched)
+        }
+        return snapshot
     }
 
     /// Clears the statusline cache only.
