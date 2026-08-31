@@ -298,14 +298,17 @@ final class DisplayFormatTests: XCTestCase {
     /// The locale decides placement and separators; the payload decides the
     /// currency and the number of decimals.
     func testMoneyFollowsTheGivenLocalesConventions() {
-        XCTAssertEqual(
-            DisplayFormat.money(
-                MoneyAmount(amountMinor: 3_300, currency: "EUR", exponent: 2),
-                locale: Locale(identifier: "de_DE")
-            ),
-            // German puts the symbol last, behind a non-breaking space.
-            "33,00\u{00A0}€"
+        let formatted = DisplayFormat.money(
+            MoneyAmount(amountMinor: 3_300, currency: "EUR", exponent: 2),
+            locale: Locale(identifier: "de_DE")
         )
+        // German puts the symbol last, behind a no-break space — but which
+        // no-break space (U+00A0, U+202F, ...) is CLDR/ICU-version-specific,
+        // so normalize before comparing rather than pinning one byte.
+        let normalized = formatted
+            .replacingOccurrences(of: "\u{00A0}", with: " ")
+            .replacingOccurrences(of: "\u{202F}", with: " ")
+        XCTAssertEqual(normalized, "33,00 €")
     }
 
     // MARK: - percent

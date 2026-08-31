@@ -357,6 +357,36 @@ final class FreshestQuotaProviderTests: XCTestCase {
         XCTAssertEqual(carried?.fiveHour.percentUsed, 97)
     }
 
+    /// The freshest of the two stale snapshots already carries a
+    /// `usageCreditsDisabledReason` — a live re-read failing must not wipe it,
+    /// same as it must not invent credits that don't exist.
+    func testBothStaleFailedCreditsRetryPreservesAnAlreadyKnownDisabledReason() async {
+        let winningSnapshot = QuotaSnapshot(
+            fiveHour: QuotaWindow(percentUsed: 97),
+            sevenDay: QuotaWindow(percentUsed: 97),
+            confidence: .cachedOfficial,
+            capturedAt: now.addingTimeInterval(-1_900),
+            usageCreditsDisabledReason: "org_disabled"
+        )
+        let provider = FreshestQuotaProvider(
+            statusline: StubProvider(.failure(.staleQuotaSource(
+                snapshot: snapshot(.official, percent: 62, capturedAgo: 4_200),
+                age: 4_200
+            ))),
+            cachedState: StubProvider(
+                .failure(.staleQuotaSource(snapshot: winningSnapshot, age: 1_900)),
+                usageCredits: .failure(.unexpectedQuotaResponse("boom"))
+            )
+        )
+
+        let carried = await assertThrowsStale(age: 1_900) {
+            try await provider.currentSnapshot()
+        }
+        XCTAssertEqual(carried?.confidence, .cachedOfficial)
+        XCTAssertNil(carried?.usageCredits)
+        XCTAssertEqual(carried?.usageCreditsDisabledReason, "org_disabled")
+    }
+
     /// A stale reading is more informative than "nothing installed", so it wins
     /// the error slot.
     func testStaleBeatsAbsentWhenBothFail() async {

@@ -259,8 +259,8 @@ enum QuotaJSON {
     static func usageCredits(in utilization: [String: Any]) -> UsageCreditsReading {
         let spend = nestedObject(in: utilization, keys: ["spend"])
         let extra = nestedObject(in: utilization, keys: ["extra_usage", "extraUsage"])
-        let reason = [spend?["disabled_reason"], spend?["disabledReason"],
-                      extra?["disabled_reason"], extra?["disabledReason"]]
+        let reason = [extra?["disabled_reason"], extra?["disabledReason"],
+                      spend?["disabled_reason"], spend?["disabledReason"]]
             .lazy.compactMap { name($0) }.first
         let unavailable = UsageCreditsReading(credits: nil, disabledReason: reason)
 

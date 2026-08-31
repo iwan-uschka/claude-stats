@@ -2,7 +2,7 @@ import AppKit
 import ClaudeStatsCore
 import SwiftUI
 
-/// Draws the status item's glyph: the Claude mark, then two to four thin
+/// Draws the status item's glyph: the Claude mark, then three to four thin
 /// vertical bars — 5-hour, 7-day, and the highest scoped weekly limit, plus a
 /// hatched usage-credits bar when the account has any.
 ///
@@ -57,7 +57,7 @@ enum MenuBarGlyph {
     /// with the payload; ``width`` remains the no-credits width, which is what
     /// static layout (the dev-build dot) is positioned against.
     static func width(barCount: Int) -> CGFloat {
-        let bars = max(barCount, 0)
+        let bars = min(max(barCount, 0), maxBarCount)
         guard bars > 0 else { return markSize }
         return markSize + markToBarsGap
             + barWidth * CGFloat(bars) + barSpacing * CGFloat(bars - 1)

@@ -153,10 +153,11 @@ public struct CachedUtilizationReader: QuotaProviding {
         return QuotaJSON.usageCredits(in: utilization)
     }
 
-    /// Loads and unwraps `cachedUsageUtilization.utilization`, common to both
-    /// ``currentSnapshot()`` and ``currentScopedWeekly()``. Neither the
-    /// windows nor `fetchedAtMs` are required here — callers that need them
-    /// check separately, since ``currentScopedWeekly()`` doesn't.
+    /// Loads and unwraps `cachedUsageUtilization.utilization`, common to
+    /// ``currentSnapshot()``, ``currentScopedWeekly()`` and
+    /// ``currentUsageCredits()``. Neither the windows nor `fetchedAtMs` are
+    /// required here — callers that need them check separately, since the two
+    /// staleness-bypassing readers don't.
     private func loadUtilization() throws -> (cached: [String: Any], utilization: [String: Any]) {
         let root: [String: Any]
         // No fingerprint: a quota poll always wants the current numbers, and

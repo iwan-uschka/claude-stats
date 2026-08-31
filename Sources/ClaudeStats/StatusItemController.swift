@@ -77,12 +77,11 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
     /// to live outside the image, as a real subview on the button.
     private func addDevBuildIndicator(to button: NSStatusBarButton) {
         let bounds = button.bounds
-        // The glyph's width depends on how many bars it drew (the usage-credits
-        // bar is conditional), so take it from the image actually on the button
-        // rather than from the three-bar constant.
-        let glyphWidth = button.image?.size.width ?? MenuBarGlyph.width
+        // Positioned against the fixed no-credits width, per MenuBarGlyph's
+        // documented contract — the dot never moves even when the glyph gains
+        // or loses its fourth (credits) bar and grows wider than this.
         let imageOrigin = CGPoint(
-            x: (bounds.width - glyphWidth) / 2,
+            x: (bounds.width - MenuBarGlyph.width) / 2,
             y: (bounds.height - MenuBarGlyph.height) / 2
         )
         let dot = DevBuildDotView(frame: CGRect(

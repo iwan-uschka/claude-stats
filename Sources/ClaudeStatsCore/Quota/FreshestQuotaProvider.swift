@@ -95,12 +95,18 @@ public struct FreshestQuotaProvider: QuotaProviding {
             // above: a stale reading with no scoped rows of its own can still
             // graft `cachedState`'s, which carries no separate freshness gate.
             if case .staleQuotaSource(var snapshot, let age) = error,
-                snapshot.scopedWeekly.isEmpty || snapshot.usageCredits == nil {
+                snapshot.scopedWeekly.isEmpty
+                    || (snapshot.usageCredits == nil && snapshot.usageCreditsDisabledReason == nil) {
                 if snapshot.scopedWeekly.isEmpty {
                     snapshot.scopedWeekly = (try? await cachedState.currentScopedWeekly()) ?? []
                 }
-                if snapshot.usageCredits == nil {
-                    snapshot.apply((try? await cachedState.currentUsageCredits()) ?? .unavailable)
+                // Only overwrite on a successful re-read: unlike the scoped-rows
+                // fallback above (`[]` is a no-op when there's nothing already),
+                // `.unavailable` would actively clear a disabled-reason this
+                // snapshot already carried if the live re-read merely failed.
+                if snapshot.usageCredits == nil, snapshot.usageCreditsDisabledReason == nil,
+                    let fetched = try? await cachedState.currentUsageCredits() {
+                    snapshot.apply(fetched)
                 }
                 error = .staleQuotaSource(snapshot: snapshot, age: age)
             }

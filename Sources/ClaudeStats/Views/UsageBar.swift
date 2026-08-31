@@ -12,11 +12,12 @@ struct UsageBar: View {
     enum FillStyle {
         /// The default: flat `Color.primary` at ``fillOpacity``.
         case solid
-        /// Diagonal stripes over a fainter base, for a bar that measures
-        /// something different in kind from its neighbours (money spent
-        /// against a monthly cap, not a rate-limit window). Monochrome like
-        /// the solid fill — it is all `Color.primary`, so it inverts with the
-        /// appearance rather than needing a light and a dark palette.
+        /// Diagonal stripes at ``fillOpacity``, with the gaps showing the
+        /// track underneath — for a bar that measures something different in
+        /// kind from its neighbours (money spent against a monthly cap, not a
+        /// rate-limit window). Monochrome like the solid fill — it is all
+        /// `Color.primary`, so it inverts with the appearance rather than
+        /// needing a light and a dark palette.
         case hatched
     }
 

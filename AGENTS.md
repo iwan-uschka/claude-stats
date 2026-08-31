@@ -205,7 +205,7 @@ Two independent tiers, deliberately decoupled:
 
 - Claude mark (see `assets/claude-mark.svg`) on the left, in place of a
   generic SF Symbol.
-- 2–4 thin vertical bars, monochrome fixed fill (no color-shift-to-red), no
+- 3–4 thin vertical bars, monochrome fixed fill (no color-shift-to-red), no
   text labels — 5-hour window %, 7-day window %, and the highest-percentage
   scoped weekly limit (the popover lists them all). Minimal total width,
   matching Stats' CPU/GPU/RAM glyph but thinner. Those three are always drawn:

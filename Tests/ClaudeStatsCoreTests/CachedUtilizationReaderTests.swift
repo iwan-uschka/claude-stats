@@ -540,6 +540,21 @@ final class CachedUtilizationReaderTests: XCTestCase {
         XCTAssertNil(snapshot.usageCredits)
     }
 
+    /// A nonsense exponent means the whole reading is untrustworthy — see
+    /// ``QuotaJSON/money(_:)``.
+    func testOutOfRangeExponentYieldsNoUsageCredits() async throws {
+        try write(stateFile(extras: """
+            "spend": {
+              "used":  { "amount_minor": 100, "currency": "EUR", "exponent": 7 },
+              "limit": { "amount_minor": 3300, "currency": "EUR", "exponent": 2 },
+              "percent": 3, "enabled": true
+            }
+            """))
+
+        let snapshot = try await makeReader().currentSnapshot()
+        XCTAssertNil(snapshot.usageCredits)
+    }
+
     /// Same principle as ``QuotaJSON/window(_:)``: a missing percentage is not
     /// 0%.
     func testSpendWithoutPercentYieldsNoUsageCredits() async throws {
