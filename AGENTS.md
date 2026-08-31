@@ -77,6 +77,45 @@ Two independent tiers, deliberately decoupled:
          tooltip report Claude Code's own number and name no denominator, and
          0% is shown as 0% rather than hidden. `severity` and `is_active` are
          stored for fidelity but not yet styled.
+     - **Usage credits (`spend` + `extra_usage`) — transient, and absence is
+       normal.** `utilization.spend` carries the org's extra-usage spend as
+       money (`used` / `limit` as `{amount_minor, currency, exponent}`, plus
+       `percent`, `severity`, `enabled`), and the sibling `extra_usage` object
+       says whether credits are on at all. Read on its **own** parse path —
+       this key is never in `limits[]`, so the generic scoped-limit parser
+       doesn't see it — into `QuotaSnapshot.usageCredits` (see
+       `Models/UsageCredits.swift`), and rendered as a fourth, hatched bar in
+       both the popover and the glyph.
+       - **Every unmet condition yields `nil`, never a partial bar and never an
+         error.** `spend.enabled` must be `true`; `spend.percent` must be
+         present (a missing percentage is not 0%); `used` and `limit` must both
+         parse and agree on the currency. `extra_usage` **vetoes** a populated
+         `spend` when `is_enabled` is false or `user_disabled` is true — the
+         `spend` object can outlive the credits it describes.
+       - **Absence is the normal state of this row, not a fault.** Credits can
+         appear and disappear between two polls (the whole `spend` object turned
+         up between 2026-08-27 and 2026-08-28, and an admin can switch credits
+         off at any time). No credits means no popover row and no fourth glyph
+         bar — no placeholder, nothing in `activeErrors`, no warning. The only
+         thing ever surfaced about their absence is `disabled_reason`, carried
+         as `usageCreditsDisabledReason` and shown as a tooltip on the freshness
+         tag.
+       - **Money is formatted from the payload's own `currency` and
+         `exponent`** via `DisplayFormat.money(_:locale:)` — never a hardcoded
+         symbol, never a hardcoded `/100`, since a zero-decimal currency reports
+         `exponent: 0` and would otherwise render 100× too small. The value
+         column shows `€0.00 of €33.00`, not a percentage: 0% of an unstated
+         budget says nothing.
+       - The cap is **monthly** (`extra_usage.monthly_limit` restates
+         `spend.limit`) and the payload reports no reset timestamp for it, so
+         the countdown column stays empty. `extra_usage.spend_limit_reached` is
+         carried on the model and named in the tooltip; `severity` is stored for
+         fidelity but not yet styled.
+       - Like `scopedWeekly`, this is `cachedUsageUtilization`-only — the
+         statusline payload has no `spend` object — so `FreshestQuotaProvider`
+         grafts it onto whichever snapshot wins the freshness compare, via
+         `QuotaProviding.currentUsageCredits()`, which bypasses that source's
+         staleness gate for the same reason `currentScopedWeekly()` does.
    - **statusline hook (`official`, opt-in, sharper freshness).** Register as
      (or piggyback on) Claude Code's `statusLine` hook — receives
      `rate_limits.{five_hour,seven_day}.{used_percentage,resets_at}` via stdin,
@@ -166,12 +205,23 @@ Two independent tiers, deliberately decoupled:
 
 - Claude mark (see `assets/claude-mark.svg`) on the left, in place of a
   generic SF Symbol.
-- 3 thin vertical bars, monochrome fixed fill (no color-shift-to-red), no
+- 3–4 thin vertical bars, monochrome fixed fill (no color-shift-to-red), no
   text labels — 5-hour window %, 7-day window %, and the highest-percentage
   scoped weekly limit (the popover lists them all). Minimal total width,
-  matching Stats' CPU/GPU/RAM glyph but thinner. All three are always drawn,
-  same as the other two: with no scoped-limit reading (or no snapshot at all),
-  the third bar is simply empty — there is no narrower, two-bar state.
+  matching Stats' CPU/GPU/RAM glyph but thinner. Those three are always drawn:
+  with no scoped-limit reading (or no snapshot at all), the third bar is simply
+  empty — there is no narrower, two-bar state.
+  - A **fourth, hatched bar** is drawn *only* when the payload reports usage
+    credits, so the glyph is three bars wide normally and four wide while
+    credits exist (the width is a function of the bar count —
+    `MenuBarGlyph.width(barCount:)` — and the status item is `variableLength`,
+    so it resizes with it). Conditional, unlike the other three, because
+    credits are transient: an always-drawn empty fourth bar would imply a
+    monthly spend cap the account may not have. 0% of a real cap *is* a
+    reading and does draw the bar. The hatch marks it as a different kind of
+    measurement — money against a monthly cap, not a rate-limit window — and
+    is drawn in the same template ink, so the menu bar still tints and inverts
+    it for free.
 
 Click opens a popover:
 
@@ -193,9 +243,28 @@ Fable (weekly)     ░░░░░░░░  0%
                                     Claude Code's own scoped weekly limit and
                                     deliberately claims no denominator for the
                                     percentage.
+Usage credits      ▨▨░░░░░░   €0.00 of €33.00
+                                  ← org usage credits, from `utilization.spend`
+                                    cross-checked against `extra_usage`. Only
+                                    when credits are actually on — no credits
+                                    means no row at all, no placeholder, no
+                                    error. Hatched fill, because it measures
+                                    money against a monthly cap rather than a
+                                    rate-limit window. The value column is
+                                    money (formatted from the payload's own
+                                    `currency`/`exponent`), not a percentage,
+                                    and spans the percent + countdown columns:
+                                    the monthly cap has no reported reset, so
+                                    there is no countdown. The tooltip names
+                                    the monthly framing and says when
+                                    `spend_limit_reached` is set.
 source: official (cached) · 4m ago              ← confidence tag + freshness;
                                     `official` (no suffix) once the statusline
-                                    hook is installed and has just fired
+                                    hook is installed and has just fired.
+                                    Also carries the `disabled_reason` tooltip
+                                    when the payload said why there are no
+                                    usage credits — there is no credits row to
+                                    hang it on, and it is never an error line.
                                   [ Clear Quota Cache ]   ← deletes the
                                     statusline cache and re-polls
 

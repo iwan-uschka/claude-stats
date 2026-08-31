@@ -65,6 +65,15 @@ public struct FreshestQuotaProvider: QuotaProviding {
             // rather than the scoped bars going dark on any account where the
             // hook is installed and (as usual) fresher.
             winner.scopedWeekly = cached.scopedWeekly
+            // Same story as the scoped limits, one object over: `spend` exists
+            // only in `cachedState`'s payload, so the credits row would go dark
+            // whenever the hook wins the freshness compare unless it is grafted
+            // across too. Credits and reason move together — see
+            // ``QuotaSnapshot/apply(_:)``.
+            winner.apply(UsageCreditsReading(
+                credits: cached.usageCredits,
+                disabledReason: cached.usageCreditsDisabledReason
+            ))
             return winner
         case (.success(let hook), .failure):
             // The whole `cachedState` snapshot failed — commonly because its
@@ -76,6 +85,7 @@ public struct FreshestQuotaProvider: QuotaProviding {
             // case ``currentScopedWeekly()`` exists for.
             var winner = hook
             winner.scopedWeekly = (try? await cachedState.currentScopedWeekly()) ?? []
+            winner.apply((try? await cachedState.currentUsageCredits()) ?? .unavailable)
             return winner
         case (.failure, .success(let cached)):
             return cached
@@ -84,8 +94,20 @@ public struct FreshestQuotaProvider: QuotaProviding {
             // Best effort, same rationale as the `(.success, .failure)` case
             // above: a stale reading with no scoped rows of its own can still
             // graft `cachedState`'s, which carries no separate freshness gate.
-            if case .staleQuotaSource(var snapshot, let age) = error, snapshot.scopedWeekly.isEmpty {
-                snapshot.scopedWeekly = (try? await cachedState.currentScopedWeekly()) ?? []
+            if case .staleQuotaSource(var snapshot, let age) = error,
+                snapshot.scopedWeekly.isEmpty
+                    || (snapshot.usageCredits == nil && snapshot.usageCreditsDisabledReason == nil) {
+                if snapshot.scopedWeekly.isEmpty {
+                    snapshot.scopedWeekly = (try? await cachedState.currentScopedWeekly()) ?? []
+                }
+                // Only overwrite on a successful re-read: unlike the scoped-rows
+                // fallback above (`[]` is a no-op when there's nothing already),
+                // `.unavailable` would actively clear a disabled-reason this
+                // snapshot already carried if the live re-read merely failed.
+                if snapshot.usageCredits == nil, snapshot.usageCreditsDisabledReason == nil,
+                    let fetched = try? await cachedState.currentUsageCredits() {
+                    snapshot.apply(fetched)
+                }
                 error = .staleQuotaSource(snapshot: snapshot, age: age)
             }
             throw error

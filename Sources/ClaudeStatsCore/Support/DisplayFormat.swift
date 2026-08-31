@@ -148,8 +148,54 @@ public enum DisplayFormat {
     }
 
     /// USD with two decimals: `$4.82`.
+    ///
+    /// Hardcoded on purpose, unlike ``money(_:locale:)``: this is a *local*
+    /// estimate computed from Anthropic's published per-token USD prices, so
+    /// there is no currency field to read — the number is dollars by
+    /// construction.
     public static func cost(_ usd: Double) -> String {
         String(format: "$%.2f", usd)
+    }
+
+    // MARK: - Money
+    //
+    // Everything here is driven by the payload's own `currency` and `exponent`.
+    // No symbol and no `/100` may be hardcoded: the org's currency is whatever
+    // Anthropic bills it in, and a zero-decimal currency (JPY reports
+    // `exponent: 0`) would come out 100× too small.
+
+    /// One money amount in the given locale's conventions: `€33.00`, `¥3,300`.
+    ///
+    /// The fraction digits come from ``MoneyAmount/exponent``, not from the
+    /// locale's idea of the currency, so the string can never claim more
+    /// precision than the payload reported.
+    public static func money(_ amount: MoneyAmount, locale: Locale = .current) -> String {
+        let digits = min(max(amount.exponent, 0), 6)
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .currency
+        formatter.locale = locale
+        formatter.currencyCode = amount.currency
+        formatter.minimumFractionDigits = digits
+        formatter.maximumFractionDigits = digits
+        if let formatted = formatter.string(from: amount.decimalValue as NSDecimalNumber) {
+            return formatted
+        }
+        // Unreachable for any currency code `NumberFormatter` accepts, which is
+        // any three-letter string — but a formatter failure must still print the
+        // number rather than dropping the row's only value.
+        return "\(amount.currency) \(amount.decimalValue)"
+    }
+
+    /// The credits row's value column: `€0.00 of €33.00`.
+    ///
+    /// Deliberately money, not a percentage — the percentage is already the
+    /// bar, and "0%" of an unstated budget says nothing about how much is left.
+    public static func moneySpend(
+        used: MoneyAmount,
+        limit: MoneyAmount,
+        locale: Locale = .current
+    ) -> String {
+        "\(money(used, locale: locale)) of \(money(limit, locale: locale))"
     }
 
     /// Whole-percent label for a 0...1 fraction: `62%`.

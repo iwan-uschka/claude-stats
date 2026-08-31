@@ -99,6 +99,87 @@ final class ClaudeStatsCoreTests: XCTestCase {
         XCTAssertEqual(decoded.scopedWeekly, [])
     }
 
+    // MARK: - Usage credits coding
+
+    func testQuotaSnapshotRoundTripsWithoutUsageCredits() throws {
+        let snapshot = QuotaSnapshot(
+            fiveHour: QuotaWindow(percentUsed: 11),
+            sevenDay: QuotaWindow(percentUsed: 97),
+            confidence: .cachedOfficial,
+            capturedAt: Date(timeIntervalSince1970: 1_787_935_500)
+        )
+
+        XCTAssertNil(snapshot.usageCredits)
+        XCTAssertEqual(try roundTripped(snapshot), snapshot)
+        XCTAssertNil(try roundTripped(snapshot).usageCredits)
+    }
+
+    func testQuotaSnapshotRoundTripsWithUsageCredits() throws {
+        let snapshot = QuotaSnapshot(
+            fiveHour: QuotaWindow(percentUsed: 11),
+            sevenDay: QuotaWindow(percentUsed: 97),
+            confidence: .cachedOfficial,
+            capturedAt: Date(timeIntervalSince1970: 1_787_935_500),
+            usageCredits: UsageCredits(
+                used: MoneyAmount(amountMinor: 1_250, currency: "EUR", exponent: 2),
+                limit: MoneyAmount(amountMinor: 3_300, currency: "EUR", exponent: 2),
+                percentUsed: 37.9,
+                severity: "normal",
+                limitReached: true
+            )
+        )
+
+        let decoded = try roundTripped(snapshot)
+
+        XCTAssertEqual(decoded, snapshot)
+        XCTAssertEqual(decoded.usageCredits?.used.amountMinor, 1_250)
+        XCTAssertEqual(decoded.usageCredits?.limit.currency, "EUR")
+        XCTAssertEqual(decoded.usageCredits?.limit.exponent, 2)
+        XCTAssertEqual(decoded.usageCredits?.limitReached, true)
+        // The bar adapter: a percentage with no reset, so the countdown column
+        // stays empty.
+        XCTAssertEqual(decoded.usageCredits?.window, QuotaWindow(percentUsed: 37.9, resetsAt: nil))
+    }
+
+    /// Same contract as the scoped-limits key: a payload encoded before usage
+    /// credits existed has neither key and must still decode.
+    func testQuotaSnapshotDecodesJSONWithoutUsageCreditsKeys() throws {
+        let json = """
+        { "fiveHour": { "percentUsed": 62 },
+          "sevenDay": { "percentUsed": 31 },
+          "confidence": "official",
+          "capturedAt": 776543210,
+          "scopedWeekly": [] }
+        """
+
+        let decoded = try JSONDecoder().decode(QuotaSnapshot.self, from: Data(json.utf8))
+
+        XCTAssertNil(decoded.usageCredits)
+        XCTAssertNil(decoded.usageCreditsDisabledReason)
+    }
+
+    /// The two fields are one answer, so they move together — see
+    /// ``QuotaSnapshot/apply(_:)``.
+    func testApplyingAReadingReplacesBothCreditsAndReason() {
+        var snapshot = QuotaSnapshot(
+            fiveHour: .empty,
+            sevenDay: .empty,
+            confidence: .cachedOfficial,
+            capturedAt: Date(timeIntervalSince1970: 1_787_935_500),
+            usageCredits: MockQuotaProvider.sampleUsageCredits()
+        )
+
+        snapshot.apply(UsageCreditsReading(credits: nil, disabledReason: "org_disabled"))
+
+        XCTAssertNil(snapshot.usageCredits)
+        XCTAssertEqual(snapshot.usageCreditsDisabledReason, "org_disabled")
+
+        snapshot.apply(UsageCreditsReading(credits: MockQuotaProvider.sampleUsageCredits()))
+
+        XCTAssertNotNil(snapshot.usageCredits)
+        XCTAssertNil(snapshot.usageCreditsDisabledReason)
+    }
+
     func testMocksProvideDataForEveryWindow() async throws {
         let store = MockUsageStore()
         for window in TimeWindow.allCases {

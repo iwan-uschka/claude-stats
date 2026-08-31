@@ -44,6 +44,12 @@ import Foundation
 /// ``QuotaScopedLimit``. `accountUuid` is carried by the payload but unused —
 /// there is nothing on this side to compare it against.
 ///
+/// The sibling `spend` object (cross-checked against `extra_usage`) becomes
+/// ``QuotaSnapshot/usageCredits`` — money, not a percentage, and on its own
+/// parse path rather than through `limits[]`, which never carries it. It is
+/// absent far more often than not, and that is not a failure — see
+/// ``UsageCredits`` and ``QuotaJSON/usageCredits(in:)``.
+///
 /// ## Staleness: 60 minutes, not the statusline's 10
 ///
 /// This blob refreshes on Claude Code's own schedule, not ours: it was measured
@@ -106,12 +112,15 @@ public struct CachedUtilizationReader: QuotaProviding {
             throw ClaudeStatsError.noQuotaSourceAvailable
         }
 
+        let credits = QuotaJSON.usageCredits(in: utilization)
         let snapshot = QuotaSnapshot(
             fiveHour: windows.fiveHour,
             sevenDay: windows.sevenDay,
             confidence: .cachedOfficial,
             capturedAt: capturedAt,
-            scopedWeekly: QuotaJSON.scopedLimits(in: utilization)
+            scopedWeekly: QuotaJSON.scopedLimits(in: utilization),
+            usageCredits: credits.credits,
+            usageCreditsDisabledReason: credits.disabledReason
         )
 
         guard !snapshot.isStale(asOf: now(), threshold: stalenessThreshold) else {
@@ -133,10 +142,22 @@ public struct CachedUtilizationReader: QuotaProviding {
         return QuotaJSON.scopedLimits(in: utilization)
     }
 
-    /// Loads and unwraps `cachedUsageUtilization.utilization`, common to both
-    /// ``currentSnapshot()`` and ``currentScopedWeekly()``. Neither the
-    /// windows nor `fetchedAtMs` are required here — callers that need them
-    /// check separately, since ``currentScopedWeekly()`` doesn't.
+    /// Same payload as ``currentSnapshot()``, never gated on staleness — the
+    /// usage-credits half of ``currentScopedWeekly()``, and for the same
+    /// reason: `spend` is this source's alone (the statusline payload has no
+    /// such object), so a stale blob must not take the credits row down while
+    /// the hook keeps the account-wide numbers current. A month-long spend
+    /// total an hour behind is still the right number to show.
+    public func currentUsageCredits() async throws -> UsageCreditsReading {
+        let (_, utilization) = try loadUtilization()
+        return QuotaJSON.usageCredits(in: utilization)
+    }
+
+    /// Loads and unwraps `cachedUsageUtilization.utilization`, common to
+    /// ``currentSnapshot()``, ``currentScopedWeekly()`` and
+    /// ``currentUsageCredits()``. Neither the windows nor `fetchedAtMs` are
+    /// required here — callers that need them check separately, since the two
+    /// staleness-bypassing readers don't.
     private func loadUtilization() throws -> (cached: [String: Any], utilization: [String: Any]) {
         let root: [String: Any]
         // No fingerprint: a quota poll always wants the current numbers, and

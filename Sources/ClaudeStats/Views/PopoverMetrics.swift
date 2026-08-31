@@ -13,6 +13,16 @@ enum PopoverMetrics {
     /// name with margin; anything longer truncates (``WindowBarView`` pins its
     /// label to one line) rather than growing the row to two lines.
     static let labelColumnWidth: CGFloat = 92
+    /// Width of the percentage column on a quota row (`62%`).
+    static let percentColumnWidth: CGFloat = 34
+    /// Width of the trailing reset-countdown column (`resets in 2h 14m`).
+    static let countdownColumnWidth: CGFloat = 92
+    /// The two trailing quota columns merged into one, for a row whose value is
+    /// wider than a percentage and has no countdown to show — the usage-credits
+    /// row's `€0.00 of €33.00`. Spans exactly the same pixels, so its value
+    /// still ends flush with the countdowns above it.
+    static let percentAndCountdownColumnWidth: CGFloat =
+        percentColumnWidth + rowSpacing + countdownColumnWidth
     /// Width of the trailing numeric column (token counts).
     static let valueColumnWidth: CGFloat = 74
     /// Width of the token column in the "By model" section — wider than

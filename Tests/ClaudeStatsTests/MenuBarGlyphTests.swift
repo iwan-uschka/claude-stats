@@ -10,27 +10,56 @@ import XCTest
 final class MenuBarGlyphTests: XCTestCase {
     private let capturedAt = Date(timeIntervalSince1970: 1_787_935_500)
 
-    private func snapshot(scopedWeekly: [QuotaScopedLimit]) -> QuotaSnapshot {
+    private func snapshot(
+        scopedWeekly: [QuotaScopedLimit],
+        usageCredits: UsageCredits? = nil
+    ) -> QuotaSnapshot {
         QuotaSnapshot(
             fiveHour: QuotaWindow(percentUsed: 62),
             sevenDay: QuotaWindow(percentUsed: 31),
             confidence: .cachedOfficial,
             capturedAt: capturedAt,
-            scopedWeekly: scopedWeekly
+            scopedWeekly: scopedWeekly,
+            usageCredits: usageCredits
+        )
+    }
+
+    private func credits(percentUsed: Double) -> UsageCredits {
+        UsageCredits(
+            used: MoneyAmount(amountMinor: Int(percentUsed * 33), currency: "EUR", exponent: 2),
+            limit: MoneyAmount(amountMinor: 3_300, currency: "EUR", exponent: 2),
+            percentUsed: percentUsed
         )
     }
 
     // MARK: - Width
 
-    /// The glyph is always three bars wide — no narrower state to fall back
-    /// to, so this is the only width there is.
-    func testWidthIsAlwaysThreeBars() {
+    /// Expected width for `count` bars, spelled out independently of the
+    /// implementation's own arithmetic.
+    private func expectedWidth(bars count: Int) -> CGFloat {
+        MenuBarGlyph.markSize + MenuBarGlyph.markToBarsGap
+            + MenuBarGlyph.barWidth * CGFloat(count)
+            + MenuBarGlyph.barSpacing * CGFloat(count - 1)
+    }
+
+    func testWidthScalesWithTheBarCount() {
+        XCTAssertEqual(MenuBarGlyph.width(barCount: 2), expectedWidth(bars: 2), accuracy: 0.001)
+        XCTAssertEqual(MenuBarGlyph.width(barCount: 3), expectedWidth(bars: 3), accuracy: 0.001)
+        XCTAssertEqual(MenuBarGlyph.width(barCount: 4), expectedWidth(bars: 4), accuracy: 0.001)
+        // Each extra bar costs exactly one bar plus one gap.
         XCTAssertEqual(
-            MenuBarGlyph.width,
-            MenuBarGlyph.markSize + MenuBarGlyph.markToBarsGap
-                + MenuBarGlyph.barWidth * 3 + MenuBarGlyph.barSpacing * 2,
+            MenuBarGlyph.width(barCount: 4) - MenuBarGlyph.width(barCount: 3),
+            MenuBarGlyph.barWidth + MenuBarGlyph.barSpacing,
             accuracy: 0.001
         )
+    }
+
+    /// ``MenuBarGlyph/width`` stays the no-credits width — the one static
+    /// layout (the dev-build dot) is positioned against it.
+    func testDefaultWidthIsTheThreeBarWidth() {
+        XCTAssertEqual(MenuBarGlyph.width, expectedWidth(bars: 3), accuracy: 0.001)
+        XCTAssertEqual(MenuBarGlyph.baseBarCount, 3)
+        XCTAssertEqual(MenuBarGlyph.maxBarCount, 4)
     }
 
     // MARK: - Rendered image
@@ -86,5 +115,46 @@ final class MenuBarGlyphTests: XCTestCase {
         let description = try XCTUnwrap(MenuBarGlyph.image(for: nil).accessibilityDescription)
         XCTAssertTrue(description.hasSuffix("0% five-hour, 0% seven-day, 0% weekly usage"),
                       "unexpected description: \(description)")
+    }
+
+    // MARK: - Usage credits bar
+
+    /// Unlike the scoped bar, this one is conditional: credits are transient,
+    /// and an always-drawn empty fourth bar would imply a spend cap the
+    /// account may not have.
+    func testUsageCreditsAddAFourthBarToTheGlyphWidth() {
+        let without = MenuBarGlyph.image(for: snapshot(scopedWeekly: []))
+        let with = MenuBarGlyph.image(for: snapshot(
+            scopedWeekly: [],
+            usageCredits: credits(percentUsed: 40)
+        ))
+
+        XCTAssertEqual(without.size.width, MenuBarGlyph.width(barCount: 3), accuracy: 0.001)
+        XCTAssertEqual(with.size.width, MenuBarGlyph.width(barCount: 4), accuracy: 0.001)
+        XCTAssertEqual(with.size.height, MenuBarGlyph.height, accuracy: 0.001)
+    }
+
+    /// 0% of a real spend cap is a reading, not an absence — the bar is drawn.
+    func testZeroPercentCreditsStillDrawTheFourthBar() {
+        let image = MenuBarGlyph.image(for: snapshot(
+            scopedWeekly: [],
+            usageCredits: credits(percentUsed: 0)
+        ))
+
+        XCTAssertEqual(image.size.width, MenuBarGlyph.width(barCount: 4), accuracy: 0.001)
+    }
+
+    func testAccessibilityDescriptionNamesTheCreditsBarOnlyWhenItIsDrawn() throws {
+        let with = try XCTUnwrap(MenuBarGlyph.image(for: snapshot(
+            scopedWeekly: [QuotaScopedLimit(label: "Fable", percentUsed: 0)],
+            usageCredits: credits(percentUsed: 40)
+        )).accessibilityDescription)
+        XCTAssertTrue(with.hasSuffix("0% Fable weekly usage, 40% usage credits"),
+                      "unexpected description: \(with)")
+
+        let without = try XCTUnwrap(MenuBarGlyph.image(for: snapshot(
+            scopedWeekly: [QuotaScopedLimit(label: "Fable", percentUsed: 0)]
+        )).accessibilityDescription)
+        XCTAssertFalse(without.contains("usage credits"), "unexpected description: \(without)")
     }
 }
