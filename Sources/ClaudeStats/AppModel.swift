@@ -15,7 +15,20 @@ final class AppModel: ObservableObject {
     /// show the rate and explain how much of it is replayed cache reads.
     @Published private(set) var burnRateUsage: TokenUsage?
     @Published private(set) var estimatedCostToday: Double?
-    @Published private(set) var breakdown: EntrypointBreakdown?
+    /// Every ``TimeWindow``'s breakdown, all recomputed together by
+    /// `reloadBreakdown()`. Precomputed rather than derived on demand because
+    /// the summing walks tens of thousands of `UsageEvent`s on the main actor:
+    /// doing it when the picker changes stalled the segmented control's own
+    /// selection animation for up to a second. The three windows cost one
+    /// reload each on the paths where the data can actually change; switching
+    /// windows now only picks a different key out of here.
+    @Published private(set) var breakdownsByWindow: [TimeWindow: EntrypointBreakdown] = [:]
+    /// The breakdown for the currently-selected window, or `nil` before the
+    /// first successful reload. Computed, not `@Published` — the views'
+    /// `objectWillChange` fires from ``breakdownsByWindow`` and
+    /// ``selectedWindow``, which is all SwiftUI needs (same shape as
+    /// ``activeErrors``).
+    var breakdown: EntrypointBreakdown? { breakdownsByWindow[selectedWindow] }
     @Published private(set) var modelUsage: [ModelUsage] = [] {
         didSet { modelUsageTotal = modelUsage.reduce(TokenUsage.zero) { $0 + $1.usage } }
     }
@@ -57,10 +70,10 @@ final class AppModel: ObservableObject {
     /// would otherwise leave empty bars with no stated cause.
     var activeErrors: [String] { [localStatsError, breakdownError, quotaError].compactMap { $0 } }
 
-    /// Window selected by the "This Mac" toggle.
-    @Published var selectedWindow: TimeWindow = .fiveHour {
-        didSet { reloadBreakdown() }
-    }
+    /// Window selected by the "This Mac" toggle. Purely a choice of which
+    /// already-computed ``breakdownsByWindow`` entry to show — it triggers no
+    /// reload, so clicking the picker costs nothing but a dictionary lookup.
+    @Published var selectedWindow: TimeWindow = .fiveHour
 
     private let quotaProvider: any QuotaProviding
     private let promoNoticeProvider: any PromoNoticeProviding
@@ -319,9 +332,23 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Recomputes all three windows at once, not just ``selectedWindow`` — see
+    /// ``breakdownsByWindow``. Called from every path where the underlying
+    /// events can have changed (`refresh()`, `updateUsageStore(_:)`,
+    /// `clearQuotaCache()`); no new cadence of its own.
+    ///
+    /// Assigned in one shot at the end so a window that throws part-way through
+    /// never leaves a half-updated cache mixing two reloads' numbers. On any
+    /// failure ``breakdownsByWindow`` is left exactly as it was, which is the
+    /// same "keep the last good reading" behaviour the single-window version
+    /// had.
     private func reloadBreakdown() {
         do {
-            breakdown = try usageStore.entrypointBreakdown(for: selectedWindow)
+            var reloaded: [TimeWindow: EntrypointBreakdown] = [:]
+            for window in TimeWindow.allCases {
+                reloaded[window] = try usageStore.entrypointBreakdown(for: window)
+            }
+            breakdownsByWindow = reloaded
             breakdownError = nil
         } catch {
             breakdownError = error.localizedDescription
@@ -364,7 +391,10 @@ extension AppModel {
             usageStore: store,
             promoNoticeProvider: MockPromoNoticeProvider(notices: promoNotices)
         )
-        model.selectedWindow = window // already populates `breakdown` via didSet
+        model.selectedWindow = window
+        // Selecting a window no longer loads anything, so the breakdowns have
+        // to be filled in explicitly — one reload covers all three windows.
+        model.reloadBreakdown()
         model.snapshot = snapshot
         model.promoNotices = promoNotices
         model.planTier = try? store.detectedPlanTier()

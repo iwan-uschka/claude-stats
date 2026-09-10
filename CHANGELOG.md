@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Fixed
+- Clicking the 5h/24h/7d switcher in the popover's "This Mac" section no longer
+  stalls the UI for up to a second. Selecting a window used to trigger a
+  main-thread re-sum of every `UsageEvent` in the newly selected window, which
+  blocked the segmented control's own selection animation. All three windows are
+  now summed together whenever the underlying data can actually change (popover
+  open, manual Refresh, new session activity), so switching windows is a
+  dictionary lookup and recomputes nothing.
+
 ## [0.9.7] - 2026-08-31
 
 ### Added
