@@ -233,6 +233,19 @@ final class LocalLogUsageStoreTests: XCTestCase {
         XCTAssertEqual(week.totalTokens, 25_050)
     }
 
+    /// `entrypointBreakdowns(for:)` sums all three windows in one walk of the
+    /// widest one — the regression test for that single-pass path matching
+    /// what three separate `entrypointBreakdown(for:)` calls produce.
+    func testEntrypointBreakdownsMatchesPerWindowCallsForEveryWindow() throws {
+        let store = try makeStore()
+
+        let batch = try store.entrypointBreakdowns(for: TimeWindow.allCases)
+
+        for window in TimeWindow.allCases {
+            XCTAssertEqual(batch[window], try store.entrypointBreakdown(for: window))
+        }
+    }
+
     /// `entrypointBreakdown` sums the full ``TokenUsage`` per entrypoint, not
     /// just the collapsed `Int` — a field mix-up (e.g. cache reads folded into
     /// cache writes) would still pass a totals-only check.

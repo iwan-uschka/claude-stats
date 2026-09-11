@@ -45,6 +45,33 @@ final class AppModelTests: XCTestCase {
         func detectedPlanTier() throws -> PlanTier { throw Failure() }
     }
 
+    /// ``MockUsageStore``'s data, but counting the breakdown reads — the point
+    /// of precomputing all three windows is that switching the picker makes no
+    /// further read, which is only observable as a call count.
+    /// `@unchecked Sendable` for the same reason as
+    /// ``ScriptedPromoNoticeProvider``: `UsageStoring` is synchronous and only
+    /// the single `@MainActor` test using one ever touches it.
+    private final class CountingUsageStore: UsageStoring, @unchecked Sendable {
+        private let backing = MockUsageStore()
+        private(set) var breakdownCallCount = 0
+        private(set) var requestedWindows: [TimeWindow] = []
+        /// When set, that one window throws while the other two still succeed —
+        /// the partial-failure case the one-shot assignment has to survive.
+        var failingWindow: TimeWindow?
+
+        func entrypointBreakdown(for window: TimeWindow) throws -> EntrypointBreakdown {
+            breakdownCallCount += 1
+            requestedWindows.append(window)
+            if window == failingWindow { throw FailingUsageStore.Failure() }
+            return try backing.entrypointBreakdown(for: window)
+        }
+
+        func modelUsage(last24h: Bool) throws -> [ModelUsage] { try backing.modelUsage(last24h: last24h) }
+        func burnRateUsagePerHour() throws -> TokenUsage { try backing.burnRateUsagePerHour() }
+        func estimatedCostToday() throws -> Double { try backing.estimatedCostToday() }
+        func detectedPlanTier() throws -> PlanTier { try backing.detectedPlanTier() }
+    }
+
     /// Hands back whatever the test scripted, and records what the model asked
     /// with — the fingerprint gate is part of the contract, not an internal
     /// detail. `@unchecked Sendable` for the same reason as `MockQuotaProvider`'s
@@ -304,6 +331,72 @@ final class AppModelTests: XCTestCase {
         await waitUntil(timeout: 5) { model.snapshot != nil }
 
         XCTAssertNotNil(model.snapshot)
+    }
+
+    // MARK: - Entrypoint breakdown
+
+    /// One reload fills in every window, so the picker has nothing left to
+    /// compute when it changes.
+    func testOneReloadPrecomputesEveryWindowsBreakdown() throws {
+        let store = CountingUsageStore()
+        let model = makeModel(quota: ScriptedQuotaProvider(), store: store)
+        XCTAssertTrue(model.breakdownsByWindow.isEmpty)
+
+        model.refresh(force: true)
+
+        XCTAssertEqual(store.breakdownCallCount, TimeWindow.allCases.count)
+        XCTAssertEqual(Set(store.requestedWindows), Set(TimeWindow.allCases))
+        XCTAssertNil(model.breakdownError)
+        for window in TimeWindow.allCases {
+            let expected = try store.entrypointBreakdown(for: window)
+            model.selectedWindow = window
+            XCTAssertEqual(model.breakdownsByWindow[window], expected)
+            XCTAssertEqual(model.breakdown, expected)
+            XCTAssertEqual(model.breakdown?.window, window)
+        }
+    }
+
+    /// The regression test for the picker stall: selecting a window is a
+    /// dictionary lookup, never a re-sum of tens of thousands of events on the
+    /// main actor.
+    func testSwitchingWindowsAfterAReloadReadsTheStoreAgainNever() {
+        let store = CountingUsageStore()
+        let model = makeModel(quota: ScriptedQuotaProvider(), store: store)
+        model.refresh(force: true)
+        let callsAfterReload = store.breakdownCallCount
+
+        model.selectedWindow = .twentyFourHour
+        model.selectedWindow = .sevenDay
+        model.selectedWindow = .fiveHour
+
+        XCTAssertEqual(store.breakdownCallCount, callsAfterReload)
+    }
+
+    func testBreakdownFailureSetsTheErrorAndLeavesNoBreakdown() {
+        let model = makeModel(quota: ScriptedQuotaProvider(), store: FailingUsageStore())
+
+        model.refresh(force: true)
+
+        XCTAssertNotNil(model.breakdownError)
+        XCTAssertNil(model.breakdown)
+        XCTAssertTrue(model.breakdownsByWindow.isEmpty)
+    }
+
+    /// One window throwing must not leave a cache mixing the windows that
+    /// still succeeded with the previous reload's numbers — the whole
+    /// dictionary is assigned once, or not at all.
+    func testOneWindowFailingKeepsThePreviousBreakdownsIntact() throws {
+        let store = CountingUsageStore()
+        let model = makeModel(quota: ScriptedQuotaProvider(), store: store)
+        model.refresh(force: true)
+        let loaded = model.breakdownsByWindow
+        XCTAssertEqual(loaded.count, TimeWindow.allCases.count)
+
+        store.failingWindow = .sevenDay
+        model.refresh(force: true)
+
+        XCTAssertNotNil(model.breakdownError)
+        XCTAssertEqual(model.breakdownsByWindow, loaded)
     }
 
     // MARK: - Usage credits

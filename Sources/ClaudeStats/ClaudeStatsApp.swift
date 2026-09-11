@@ -157,11 +157,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let fresh = index.rebuild()
             DispatchQueue.main.async {
                 self.model?.updateUsageStore(fresh)
-                // Local stats already refreshed by `updateUsageStore`; this
-                // additionally re-reads the statusline cache, throttled
+                // Local stats/breakdown already refreshed by `updateUsageStore`;
+                // this additionally re-reads the statusline cache, throttled
                 // internally by `AppModel` so filesystem churn can't cause a
-                // read on every write.
-                self.model?.refresh()
+                // read on every write. `reloadLocalData: false` skips redoing
+                // the three-window breakdown sum `updateUsageStore` just did.
+                self.model?.refresh(reloadLocalData: false)
             }
         }
     }
