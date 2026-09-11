@@ -172,6 +172,27 @@ public struct LocalLogUsageStore: UsageStoring {
         return EntrypointBreakdown(window: window, usageByEntrypoint: totals)
     }
 
+    /// Sums every window in one walk of the widest one instead of one walk per
+    /// window: `events(in:to:)` binary-searches to the widest window's start,
+    /// then each event is folded into every narrower window it also falls in.
+    /// ``TimeWindow``'s three cases are nested suffixes of "now", so this
+    /// covers all of them without re-scanning from the start for each.
+    public func entrypointBreakdowns(for windows: [TimeWindow]) throws -> [TimeWindow: EntrypointBreakdown] {
+        guard let widest = windows.max(by: { $0.duration < $1.duration }) else { return [:] }
+        let now = nowProvider()
+        var totals: [TimeWindow: [Entrypoint: TokenUsage]] = [:]
+        for event in events(in: widest.startDate(endingAt: now), to: now) {
+            guard let entrypoint = event.entrypoint else { continue }
+            for window in windows where event.timestamp >= window.startDate(endingAt: now) {
+                let running = totals[window, default: [:]][entrypoint] ?? .zero
+                totals[window, default: [:]][entrypoint] = running + event.usage
+            }
+        }
+        return Dictionary(uniqueKeysWithValues: windows.map {
+            ($0, EntrypointBreakdown(window: $0, usageByEntrypoint: totals[$0] ?? [:]))
+        })
+    }
+
     /// Tokens and estimated cost grouped by ``ModelFamily``.
     ///
     /// Rows come back in ``ModelFamily/displayOrder``, followed by any

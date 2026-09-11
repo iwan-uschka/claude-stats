@@ -113,6 +113,12 @@ public protocol UsageStoring: Sendable {
     /// Per-entrypoint token counts for the given rolling window.
     func entrypointBreakdown(for window: TimeWindow) throws -> EntrypointBreakdown
 
+    /// Per-entrypoint token counts for every window in `windows`, keyed by
+    /// window. The default implementation calls ``entrypointBreakdown(for:)``
+    /// once per window; ``LocalLogUsageStore`` overrides it to sum all of them
+    /// in one pass over the widest window's events instead.
+    func entrypointBreakdowns(for windows: [TimeWindow]) throws -> [TimeWindow: EntrypointBreakdown]
+
     /// Per-model tokens and cost.
     /// - Parameter last24h: `true` for the popover's fixed 24-hour "By model"
     ///   section; `false` for all locally-known history.
@@ -126,6 +132,16 @@ public protocol UsageStoring: Sendable {
 
     /// Plan tier inferred from local history.
     func detectedPlanTier() throws -> PlanTier
+}
+
+public extension UsageStoring {
+    func entrypointBreakdowns(for windows: [TimeWindow]) throws -> [TimeWindow: EntrypointBreakdown] {
+        var result: [TimeWindow: EntrypointBreakdown] = [:]
+        for window in windows {
+            result[window] = try entrypointBreakdown(for: window)
+        }
+        return result
+    }
 }
 
 /// Errors surfaced by the data layer.

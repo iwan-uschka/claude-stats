@@ -133,10 +133,18 @@ final class AppModel: ObservableObject {
     /// `quotaPollInterval` unless `force` is set (manual "Refresh"). Returns
     /// the spawned quota-poll task (`nil` if throttled) so callers that need
     /// to know when it lands — e.g. ``pollAfterInstall()`` — can await it.
+    ///
+    /// `reloadLocalData` skips `reloadLocalStats()`/`reloadBreakdown()` for the
+    /// one caller (`ClaudeStatsApp.rebuildUsageStore`) that just ran them via
+    /// `updateUsageStore(_:)` moments earlier — those walk every `UsageEvent`
+    /// for all three windows, so redoing them here would pay that cost twice
+    /// on every FSEvents batch.
     @discardableResult
-    func refresh(force: Bool = false) -> Task<Void, Never>? {
-        reloadLocalStats()
-        reloadBreakdown()
+    func refresh(force: Bool = false, reloadLocalData: Bool = true) -> Task<Void, Never>? {
+        if reloadLocalData {
+            reloadLocalStats()
+            reloadBreakdown()
+        }
 
         let shouldPollQuota = force || shouldRunUpdateCheck(lastCheck: lastQuotaPoll, now: Date(), interval: quotaPollInterval)
         guard shouldPollQuota else { return nil }
@@ -337,18 +345,20 @@ final class AppModel: ObservableObject {
     /// events can have changed (`refresh()`, `updateUsageStore(_:)`,
     /// `clearQuotaCache()`); no new cadence of its own.
     ///
+    /// Delegates to ``UsageStoring/entrypointBreakdowns(for:)`` rather than
+    /// looping ``UsageStoring/entrypointBreakdown(for:)`` per window —
+    /// `LocalLogUsageStore` sums all three in one walk of the widest window's
+    /// events instead of three separate walks, so this no longer pays for the
+    /// 7-day slice three times over on every reload.
+    ///
     /// Assigned in one shot at the end so a window that throws part-way through
-    /// never leaves a half-updated cache mixing two reloads' numbers. On any
-    /// failure ``breakdownsByWindow`` is left exactly as it was, which is the
-    /// same "keep the last good reading" behaviour the single-window version
-    /// had.
+    /// never leaves a half-updated cache mixing two reloads' numbers. Defensive:
+    /// no shipping `UsageStoring` throws from `entrypointBreakdown(for:)` today —
+    /// `throws` there is protocol conformance — so in practice this is
+    /// all-or-nothing per reload either way.
     private func reloadBreakdown() {
         do {
-            var reloaded: [TimeWindow: EntrypointBreakdown] = [:]
-            for window in TimeWindow.allCases {
-                reloaded[window] = try usageStore.entrypointBreakdown(for: window)
-            }
-            breakdownsByWindow = reloaded
+            breakdownsByWindow = try usageStore.entrypointBreakdowns(for: TimeWindow.allCases)
             breakdownError = nil
         } catch {
             breakdownError = error.localizedDescription

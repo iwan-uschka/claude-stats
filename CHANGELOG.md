@@ -9,7 +9,10 @@
   blocked the segmented control's own selection animation. All three windows are
   now summed together whenever the underlying data can actually change (popover
   open, manual Refresh, new session activity), so switching windows is a
-  dictionary lookup and recomputes nothing.
+  dictionary lookup and recomputes nothing. All three windows are summed in one
+  pass over the widest window's events, and the FSEvents rebuild path no longer
+  reloads them twice per rebuild — so this costs one walk per real refresh, not
+  three.
 
 ## [0.9.7] - 2026-08-31
 
