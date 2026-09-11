@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.9.8] - 2026-09-11
+
 ### Fixed
 - Clicking the 5h/24h/7d switcher in the popover's "This Mac" section no longer
   stalls the UI for up to a second. Selecting a window used to trigger a
