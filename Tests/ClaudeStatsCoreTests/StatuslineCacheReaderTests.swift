@@ -73,15 +73,24 @@ final class StatuslineCacheReaderTests: XCTestCase {
         try FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: url.path)
     }
 
+    /// Scripted stand-in for ``ActiveAccountReader`` — the real one reads
+    /// `~/.claude.json`, which this suite must never touch.
+    private struct StubActiveAccount: ActiveAccountProviding {
+        let reading: ActiveAccountReading
+        func readActiveAccount() -> ActiveAccountReading { reading }
+    }
+
     private func makeReader(
         stalenessThreshold: TimeInterval = QuotaSnapshot.defaultStalenessThreshold,
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        activeAccount: ActiveAccountReading = .unknown
     ) -> StatuslineCacheReader {
         let fixedNow = now
         return StatuslineCacheReader(
             cacheDirectoryURL: directory,
             stalenessThreshold: stalenessThreshold,
             fileManager: fileManager,
+            activeAccount: StubActiveAccount(reading: activeAccount),
             now: { fixedNow }
         )
     }
@@ -119,15 +128,36 @@ final class StatuslineCacheReaderTests: XCTestCase {
     /// A cache file carrying exactly the windows given — Claude Code omits a
     /// window from the payload once it has rolled over, so "carrying only one"
     /// is a shape that really occurs.
-    private func cache(capturedAt: Date, _ windows: String..., utilization: String? = nil) -> String {
+    private func cache(
+        capturedAt: Date,
+        _ windows: String...,
+        utilization: String? = nil,
+        account: QuotaAccount? = nil
+    ) -> String {
         let extra = utilization.map { ",\n  \"utilization\": \($0)" } ?? ""
+        // Exactly the stamp the helper script writes — snake_cased keys, and
+        // only the ones the state file had.
+        let stamp = account.map { account in
+            let fields = [
+                "\"uuid\": \"\(account.uuid)\"",
+                account.organizationName.map { "\"organization_name\": \"\($0)\"" },
+            ].compactMap { $0 }
+            return ",\n  \"account\": { \(fields.joined(separator: ", ")) }"
+        } ?? ""
         return """
         {
           "captured_at": \(Int(capturedAt.timeIntervalSince1970)),
-          "rate_limits": { \(windows.joined(separator: ", ")) }\(extra)
+          "rate_limits": { \(windows.joined(separator: ", ")) }\(extra)\(stamp)
         }
         """
     }
+
+    /// The two accounts the switching tests use: the login the user moved to,
+    /// and the one they moved away from.
+    private let creativytool = QuotaAccount(
+        uuid: "0f9c1d3e-8a4b-4c2d-9e1f-6b7a8c9d0e1f", organizationName: "creativytool")
+    private let bitgrip = QuotaAccount(
+        uuid: "7d2b6a10-3c55-4f8e-9a21-0b4c5d6e7f80", organizationName: "Bitgrip")
 
     /// `weekly_scoped` + `spend` + `extra_usage` as the script copies them:
     /// verbatim sub-objects of `cachedUsageUtilization.utilization`, so
@@ -838,6 +868,420 @@ final class StatuslineCacheReaderTests: XCTestCase {
         XCTAssertThrowsError(try reader.clearCache()) { error in
             XCTAssertTrue(error is ThrowingFileManager.RemovalFailure, "\(error)")
         }
+    }
+
+    // MARK: - One group per account
+
+    /// The reported bug, end to end. The user switched the global login from
+    /// Bitgrip (7-day window resetting later, 56% used) to creativytool (7-day
+    /// resetting sooner, 0%), and one idle session kept re-rendering Bitgrip's
+    /// payload. "Latest `resets_at` wins" then handed the machine's 7-day bar
+    /// Bitgrip's 56%. Grouping by account is what stops it: the merge never
+    /// crosses the two groups, and the active account's group is what serves.
+    func testMergeNeverCrossesAccountsAndTheActiveOneServes() async throws {
+        try write(session: "left-behind", cache(
+            capturedAt: now.addingTimeInterval(-60),
+            windowJSON("seven_day", percent: 56, resetsAt: now.addingTimeInterval(20 * 3600)),
+            account: bitgrip
+        ))
+        try write(session: "current", cache(
+            capturedAt: now.addingTimeInterval(-30),
+            windowJSON("seven_day", percent: 0, resetsAt: now.addingTimeInterval(4 * 3600)),
+            account: creativytool
+        ))
+
+        let snapshot = try await makeReader(
+            activeAccount: ActiveAccountReading(account: creativytool)
+        ).currentSnapshot()
+
+        XCTAssertEqual(snapshot.sevenDay?.percentUsed, 0)
+        XCTAssertEqual(snapshot.sevenDay?.resetsAt, now.addingTimeInterval(4 * 3600))
+        XCTAssertEqual(snapshot.account, creativytool)
+    }
+
+    /// Same two files, the other way round: the account the user is logged in
+    /// as is the one that serves, whatever the other group's numbers look like.
+    func testTheOtherAccountServesWhenItIsTheActiveOne() async throws {
+        try write(session: "bitgrip", cache(
+            capturedAt: now.addingTimeInterval(-60),
+            windowJSON("five_hour", percent: 56, resetsAt: now.addingTimeInterval(3600)),
+            account: bitgrip
+        ))
+        try write(session: "creativytool", cache(
+            capturedAt: now.addingTimeInterval(-30),
+            windowJSON("five_hour", percent: 4, resetsAt: now.addingTimeInterval(3600)),
+            account: creativytool
+        ))
+
+        let snapshot = try await makeReader(
+            activeAccount: ActiveAccountReading(account: bitgrip)
+        ).currentSnapshot()
+
+        XCTAssertEqual(snapshot.fiveHour?.percentUsed, 56)
+        XCTAssertEqual(snapshot.account, bitgrip)
+    }
+
+    /// The state file names an account no cache file is stamped with — a
+    /// machine still running a script copy from before the stamp, or a login
+    /// that hasn't rendered a status line yet. That is "nothing from this
+    /// source", so `FreshestQuotaProvider` falls through to Claude Code's own
+    /// cached blob, which belongs to that same login. Another account's files
+    /// are never substituted.
+    func testActiveAccountWithNoFilesReportsNoQuotaSourceAvailable() async throws {
+        try write(session: "other", cache(
+            capturedAt: now.addingTimeInterval(-30),
+            windowJSON("five_hour", percent: 56, resetsAt: now.addingTimeInterval(3600)),
+            account: bitgrip
+        ))
+        try write(session: "unstamped", cache(
+            capturedAt: now.addingTimeInterval(-20),
+            windowJSON("five_hour", percent: 12, resetsAt: now.addingTimeInterval(3600))
+        ))
+
+        await assertThrows(.noQuotaSourceAvailable) {
+            try await self.makeReader(
+                activeAccount: ActiveAccountReading(account: self.creativytool)
+            ).currentSnapshot()
+        }
+    }
+
+    /// No state file, or one that names no account: the most recently captured
+    /// group serves. On the one-account machine every existing test describes,
+    /// that is exactly the behaviour from before accounts were modelled.
+    func testUnknownActiveAccountServesTheNewestGroup() async throws {
+        try write(session: "older", cache(
+            capturedAt: now.addingTimeInterval(-300),
+            windowJSON("five_hour", percent: 56, resetsAt: now.addingTimeInterval(3600)),
+            account: bitgrip
+        ))
+        try write(session: "newer", cache(
+            capturedAt: now.addingTimeInterval(-30),
+            windowJSON("five_hour", percent: 4, resetsAt: now.addingTimeInterval(3600)),
+            account: creativytool
+        ))
+
+        let snapshot = try await makeReader().currentSnapshot()
+
+        XCTAssertEqual(snapshot.fiveHour?.percentUsed, 4)
+        XCTAssertEqual(snapshot.account, creativytool)
+    }
+
+    /// An unstamped file can't be claimed for a named account — it may well be
+    /// the other one's. The legacy single file is unstamped by definition, so
+    /// it lands in the unknown group with the rest.
+    func testLegacyAndUnstampedFilesFormTheUnknownGroup() async throws {
+        try writeLegacy(cache(
+            capturedAt: now.addingTimeInterval(-120),
+            windowJSON("five_hour", percent: 90, resetsAt: now.addingTimeInterval(18_000))
+        ))
+        try write(session: "stamped", cache(
+            capturedAt: now.addingTimeInterval(-60),
+            windowJSON("five_hour", percent: 10, resetsAt: now.addingTimeInterval(3600)),
+            account: creativytool
+        ))
+
+        let reader = makeReader(activeAccount: ActiveAccountReading(account: creativytool))
+        let snapshot = try await reader.currentSnapshot()
+
+        // The legacy file's later reset would have won a cross-account merge.
+        XCTAssertEqual(snapshot.fiveHour?.percentUsed, 10)
+        let others = await reader.otherAccountSnapshots()
+        XCTAssertEqual(others.count, 1)
+        XCTAssertNil(others.first?.account)
+        XCTAssertEqual(others.first?.fiveHour?.percentUsed, 90)
+    }
+
+    /// The `utilization` copy is per-login too — it is lifted out of
+    /// `~/.claude.json` — so the scoped rows and the credits come from the
+    /// active account's files only, however recently another account's file was
+    /// written.
+    func testCopiedUtilizationComesFromTheActiveAccountsFilesOnly() async throws {
+        try write(session: "current", cache(
+            capturedAt: now.addingTimeInterval(-300),
+            windowJSON("five_hour", percent: 10, resetsAt: now.addingTimeInterval(3600)),
+            utilization: """
+                { "limits": [ { "kind": "weekly_scoped", "percent": 7,
+                                "scope": { "model": { "display_name": "Mine" } } } ] }
+                """,
+            account: creativytool
+        ))
+        try write(session: "left-behind", cache(
+            capturedAt: now.addingTimeInterval(-10),
+            windowJSON("five_hour", percent: 56, resetsAt: now.addingTimeInterval(3600)),
+            utilization: copiedUtilization,
+            account: bitgrip
+        ))
+
+        let reader = makeReader(activeAccount: ActiveAccountReading(account: creativytool))
+        let snapshot = try await reader.currentSnapshot()
+
+        XCTAssertEqual(snapshot.scopedWeekly.map(\.label), ["Mine"])
+        XCTAssertNil(snapshot.usageCredits)
+        // …and the staleness-bypassing accessors are scoped the same way.
+        let scopedWeekly = try await reader.currentScopedWeekly()
+        let credits = try await reader.currentUsageCredits()
+        XCTAssertEqual(scopedWeekly.map(\.label), ["Mine"])
+        XCTAssertEqual(credits, .unavailable)
+    }
+
+    // MARK: - Other accounts
+
+    /// Everything except the group that served, newest first, each carrying its
+    /// own account and its own capture time.
+    func testOtherAccountSnapshotsExcludeTheActiveGroup() async throws {
+        try write(session: "current", cache(
+            capturedAt: now.addingTimeInterval(-30),
+            windowJSON("five_hour", percent: 4, resetsAt: now.addingTimeInterval(3600)),
+            account: creativytool
+        ))
+        try write(session: "left-behind", cache(
+            capturedAt: now.addingTimeInterval(-3 * 3600),
+            windowJSON("seven_day", percent: 56, resetsAt: now.addingTimeInterval(20 * 3600)),
+            account: bitgrip
+        ))
+        try write(session: "unstamped", cache(
+            capturedAt: now.addingTimeInterval(-2 * 3600),
+            windowJSON("seven_day", percent: 31, resetsAt: now.addingTimeInterval(20 * 3600))
+        ))
+
+        let others = await makeReader(
+            activeAccount: ActiveAccountReading(account: creativytool)
+        ).otherAccountSnapshots()
+
+        XCTAssertEqual(others.map { $0.account }, [nil, bitgrip])
+        XCTAssertEqual(others.map { $0.sevenDay?.percentUsed }, [31, 56])
+        // Ungated on staleness — these rows carry their own freshness tag, and
+        // an account nobody is logged in as is exactly the cold one.
+        XCTAssertTrue(others.allSatisfy { $0.isStale(asOf: now) })
+    }
+
+    /// The state file names an account with no matching group — the same setup
+    /// `testActiveAccountWithNoFilesReportsNoQuotaSourceAvailable` throws on.
+    /// Every group on disk, the unstamped one included, is then "other":
+    /// nothing is currently being served, and that is what lets
+    /// `FreshestQuotaProvider` tell "readings exist, none of them this
+    /// account's" from "nothing at all".
+    func testOtherAccountSnapshotsIncludeEveryGroupWhenTheActiveAccountHasNone() async throws {
+        try write(session: "other", cache(
+            capturedAt: now.addingTimeInterval(-30),
+            windowJSON("five_hour", percent: 56, resetsAt: now.addingTimeInterval(3600)),
+            account: bitgrip
+        ))
+        try write(session: "unstamped", cache(
+            capturedAt: now.addingTimeInterval(-20),
+            windowJSON("five_hour", percent: 12, resetsAt: now.addingTimeInterval(3600))
+        ))
+
+        let others = await makeReader(
+            activeAccount: ActiveAccountReading(account: creativytool)
+        ).otherAccountSnapshots()
+
+        XCTAssertEqual(others.map { $0.account }, [nil, bitgrip])
+        XCTAssertEqual(others.map { $0.fiveHour?.percentUsed }, [12, 56])
+    }
+
+    /// A group whose every window has rolled over has nothing to draw: no
+    /// label, no two "no reading" lines. This is the rule that keeps the
+    /// unknown-account group from appearing on a machine whose only unstamped
+    /// files are ancient.
+    func testOtherAccountGroupWithNoLiveWindowIsLeftOut() async throws {
+        try write(session: "current", cache(
+            capturedAt: now.addingTimeInterval(-30),
+            windowJSON("five_hour", percent: 4, resetsAt: now.addingTimeInterval(3600)),
+            account: creativytool
+        ))
+        try write(session: "expired", cache(
+            capturedAt: now.addingTimeInterval(-600),
+            windowJSON("five_hour", percent: 56, resetsAt: now.addingTimeInterval(-60)),
+            account: bitgrip
+        ))
+
+        let others = await makeReader(
+            activeAccount: ActiveAccountReading(account: creativytool)
+        ).otherAccountSnapshots()
+
+        XCTAssertEqual(others, [])
+    }
+
+    /// One account, the ordinary case: nothing to list beside it.
+    func testSingleAccountHasNoOtherAccounts() async throws {
+        try write(filteredCache(capturedAt: now.addingTimeInterval(-30)))
+
+        let others = await makeReader().otherAccountSnapshots()
+
+        XCTAssertEqual(others, [])
+    }
+
+    /// Decoration, never a failure: a file-level fault is the snapshot path's
+    /// to report, and these rows just don't appear.
+    func testOtherAccountSnapshotsNeverThrow() async throws {
+        try write(session: "broken-a", "{ this is not json")
+        var others = await makeReader().otherAccountSnapshots()
+        XCTAssertEqual(others, [])
+
+        try FileManager.default.removeItem(at: sessionDirectory)
+        others = await makeReader().otherAccountSnapshots()
+        XCTAssertEqual(others, [])
+    }
+
+    // MARK: - The mislabel guard
+
+    /// The reference a switched-to account's state file provides: its own
+    /// account uuid and the 7-day reset its cached reading reported.
+    private func reference(_ account: QuotaAccount, sevenDayResetsIn seconds: TimeInterval)
+        -> ActiveAccountReference {
+        ActiveAccountReference(
+            accountUuid: account.uuid,
+            sevenDayResetsAt: now.addingTimeInterval(seconds)
+        )
+    }
+
+    /// The case grouping alone can't catch: an idle session re-renders from its
+    /// *last* API payload, so right after the switch the hook writes a file
+    /// stamped with the new account carrying the old account's numbers. Its
+    /// 7-day reset disagrees with the one Claude Code has already cached for
+    /// that account, which is what gives it away.
+    func testForeignReadingStampedWithTheActiveAccountIsDropped() async throws {
+        try write(session: "mislabelled", cache(
+            capturedAt: now.addingTimeInterval(-10),
+            windowJSON("seven_day", percent: 56, resetsAt: now.addingTimeInterval(20 * 3600)),
+            account: creativytool
+        ))
+        try write(session: "honest", cache(
+            capturedAt: now.addingTimeInterval(-60),
+            windowJSON("seven_day", percent: 3, resetsAt: now.addingTimeInterval(4 * 3600)),
+            account: creativytool
+        ))
+
+        let snapshot = try await makeReader(activeAccount: ActiveAccountReading(
+            account: creativytool,
+            reference: reference(creativytool, sevenDayResetsIn: 4 * 3600)
+        )).currentSnapshot()
+
+        XCTAssertEqual(snapshot.sevenDay?.percentUsed, 3)
+        XCTAssertEqual(snapshot.sevenDay?.resetsAt, now.addingTimeInterval(4 * 3600))
+    }
+
+    /// A reading that agrees with the cached reset is this account's, and is
+    /// kept — including when it is the only one there is.
+    func testMatchingReadingIsKept() async throws {
+        try write(session: "honest", cache(
+            capturedAt: now.addingTimeInterval(-10),
+            windowJSON("seven_day", percent: 41, resetsAt: now.addingTimeInterval(4 * 3600)),
+            account: creativytool
+        ))
+
+        let snapshot = try await makeReader(activeAccount: ActiveAccountReading(
+            account: creativytool,
+            reference: reference(creativytool, sevenDayResetsIn: 4 * 3600)
+        )).currentSnapshot()
+
+        XCTAssertEqual(snapshot.sevenDay?.percentUsed, 41)
+    }
+
+    /// The two sources spell the same instant differently — whole epoch seconds
+    /// from the statusline payload, ISO-8601 with fractional seconds from
+    /// `cachedUsageUtilization` — so a sub-tolerance difference is the same
+    /// window, not a foreign reading.
+    func testSubSecondFormattingDifferenceIsWithinTolerance() async throws {
+        try write(session: "honest", cache(
+            capturedAt: now.addingTimeInterval(-10),
+            windowJSON("seven_day", percent: 41, resetsAt: now.addingTimeInterval(4 * 3600)),
+            account: creativytool
+        ))
+
+        let snapshot = try await makeReader(activeAccount: ActiveAccountReading(
+            account: creativytool,
+            reference: reference(creativytool, sevenDayResetsIn: 4 * 3600 + 0.401826)
+        )).currentSnapshot()
+
+        XCTAssertEqual(snapshot.sevenDay?.percentUsed, 41)
+    }
+
+    /// The tolerance is a minute, and both sides of it behave.
+    func testToleranceBoundary() async throws {
+        for (offset, expected) in [(ActiveAccountReference.tolerance, 41.0),
+                                   (ActiveAccountReference.tolerance + 1, nil)] as [(TimeInterval, Double?)] {
+            try FileManager.default.removeItem(at: sessionDirectory)
+            try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
+            try write(session: "reading", cache(
+                capturedAt: now.addingTimeInterval(-10),
+                windowJSON("seven_day", percent: 41, resetsAt: now.addingTimeInterval(4 * 3600 + offset)),
+                account: creativytool
+            ))
+
+            let reader = makeReader(activeAccount: ActiveAccountReading(
+                account: creativytool,
+                reference: reference(creativytool, sevenDayResetsIn: 4 * 3600)
+            ))
+
+            if let expected {
+                let snapshot = try await reader.currentSnapshot()
+                XCTAssertEqual(snapshot.sevenDay?.percentUsed, expected)
+            } else {
+                await assertThrows(.noQuotaSourceAvailable) {
+                    try await reader.currentSnapshot()
+                }
+            }
+        }
+    }
+
+    /// With no cached reading to compare against there is no reference, and the
+    /// guard accepts everything rather than dropping readings against nothing.
+    func testWithoutAReferenceEverythingIsKept() async throws {
+        try write(session: "unverifiable", cache(
+            capturedAt: now.addingTimeInterval(-10),
+            windowJSON("seven_day", percent: 56, resetsAt: now.addingTimeInterval(20 * 3600)),
+            account: creativytool
+        ))
+
+        let snapshot = try await makeReader(
+            activeAccount: ActiveAccountReading(account: creativytool)
+        ).currentSnapshot()
+
+        XCTAssertEqual(snapshot.sevenDay?.percentUsed, 56)
+    }
+
+    /// A payload whose 7-day window has rolled over carries only `five_hour` —
+    /// there is nothing to compare, so the guard has no opinion and the reading
+    /// stands.
+    func testReadingWithoutASevenDayWindowIsNotSubjectToTheGuard() async throws {
+        try write(session: "five-hour-only", cache(
+            capturedAt: now.addingTimeInterval(-10),
+            windowJSON("five_hour", percent: 22, resetsAt: now.addingTimeInterval(3600)),
+            account: creativytool
+        ))
+
+        let snapshot = try await makeReader(activeAccount: ActiveAccountReading(
+            account: creativytool,
+            reference: reference(creativytool, sevenDayResetsIn: 4 * 3600)
+        )).currentSnapshot()
+
+        XCTAssertEqual(snapshot.fiveHour?.percentUsed, 22)
+    }
+
+    /// The guard is about *this* account's files only. Another account's
+    /// reading is expected to disagree — that is what makes it another
+    /// account's — and grouping, not the guard, is what keeps it out.
+    func testAnotherAccountsReadingIsNotDroppedByTheGuard() async throws {
+        try write(session: "left-behind", cache(
+            capturedAt: now.addingTimeInterval(-60),
+            windowJSON("seven_day", percent: 56, resetsAt: now.addingTimeInterval(20 * 3600)),
+            account: bitgrip
+        ))
+        try write(session: "current", cache(
+            capturedAt: now.addingTimeInterval(-10),
+            windowJSON("seven_day", percent: 3, resetsAt: now.addingTimeInterval(4 * 3600)),
+            account: creativytool
+        ))
+
+        let others = await makeReader(activeAccount: ActiveAccountReading(
+            account: creativytool,
+            reference: reference(creativytool, sevenDayResetsIn: 4 * 3600)
+        )).otherAccountSnapshots()
+
+        XCTAssertEqual(others.map { $0.account }, [bitgrip])
+        XCTAssertEqual(others.first?.sevenDay?.percentUsed, 56)
     }
 
     // MARK: - Default path

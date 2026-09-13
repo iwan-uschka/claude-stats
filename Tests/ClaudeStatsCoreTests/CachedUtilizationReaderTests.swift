@@ -48,12 +48,13 @@ final class CachedUtilizationReaderTests: XCTestCase {
     }
 
     /// The payload as it actually appears on a real machine, trimmed only of
-    /// the unrelated top-level keys (`projects`, `userID`, …). Keys this reader
-    /// deliberately ignores — `accountUuid`, the null scoped windows, and the
-    /// `session` / `weekly_all` entries of `limits[]` — are kept, so a future
-    /// reader for them can't quietly change what this one sees. No `spend` /
-    /// `extra_usage` here: those have their own fixtures below, and this one
-    /// doubles as the "payload with no usage credits" case.
+    /// the unrelated top-level keys (`projects`, `userID`, …). `accountUuid` is
+    /// read (see the "Which account" tests below); the null scoped windows and
+    /// the `session` / `weekly_all` entries of `limits[]` are still deliberately
+    /// ignored and kept only so a future reader for them can't quietly change
+    /// what this one sees. No `spend` / `extra_usage` here: those have their own
+    /// fixtures below, and this one doubles as the "payload with no usage
+    /// credits" case.
     private func stateFile(fetchedAt: Date) -> String {
         """
         {
@@ -775,6 +776,98 @@ final class CachedUtilizationReaderTests: XCTestCase {
         await assertThrows(.noQuotaSourceAvailable) {
             try await self.makeReader().currentSnapshot()
         }
+    }
+
+    // MARK: - Which account the numbers describe
+
+    /// The uuid inside `cachedUsageUtilization` says whose numbers these are;
+    /// the sibling `oauthAccount` fills in the name the popover shows, since
+    /// the two agree here.
+    func testAccountCombinesTheCachedUuidWithTheLoggedInDetails() async throws {
+        try write("""
+        {
+          "oauthAccount": { "accountUuid": "account-1", "emailAddress": "me@example.com",
+                            "organizationName": "Bitgrip", "organizationUuid": "org-1" },
+          "cachedUsageUtilization": {
+            "fetchedAtMs": \(Int(now.timeIntervalSince1970 * 1000) - 60_000),
+            "accountUuid": "account-1",
+            "utilization": { "five_hour": { "utilization": 11 } }
+          }
+        }
+        """)
+
+        let snapshot = try await makeReader().currentSnapshot()
+
+        let account = try XCTUnwrap(snapshot.account)
+        XCTAssertEqual(account.uuid, "account-1")
+        XCTAssertEqual(account.organizationName, "Bitgrip")
+        XCTAssertEqual(account.email, "me@example.com")
+        XCTAssertEqual(account.displayName, "Bitgrip")
+    }
+
+    /// Claude Code has cached usage for one account and is logged in as
+    /// another — the window right after a switch. The reading keeps its own
+    /// uuid and nothing else: labelling last login's numbers with this login's
+    /// organisation is exactly the mislabelling being fixed.
+    func testMismatchedAccountKeepsOnlyTheReadingsOwnUuid() async throws {
+        try write("""
+        {
+          "oauthAccount": { "accountUuid": "account-2", "organizationName": "creativytool" },
+          "cachedUsageUtilization": {
+            "fetchedAtMs": \(Int(now.timeIntervalSince1970 * 1000) - 60_000),
+            "accountUuid": "account-1",
+            "utilization": { "five_hour": { "utilization": 11 } }
+          }
+        }
+        """)
+
+        let snapshot = try await makeReader().currentSnapshot()
+
+        let account = try XCTUnwrap(snapshot.account)
+        XCTAssertEqual(account.uuid, "account-1")
+        XCTAssertNil(account.organizationName)
+    }
+
+    /// An older payload with no `accountUuid` of its own: the logged-in account
+    /// is the only claim there is.
+    func testAccountFallsBackToOAuthAccountWhenTheBlobNamesNone() async throws {
+        try write("""
+        {
+          "oauthAccount": { "accountUuid": "account-1", "organizationName": "Bitgrip" },
+          "cachedUsageUtilization": {
+            "fetchedAtMs": \(Int(now.timeIntervalSince1970 * 1000) - 60_000),
+            "utilization": { "five_hour": { "utilization": 11 } }
+          }
+        }
+        """)
+
+        let account = try await makeReader().currentSnapshot().account
+        XCTAssertEqual(account?.uuid, "account-1")
+        XCTAssertEqual(account?.organizationName, "Bitgrip")
+    }
+
+    /// Neither key present: an unknown account, which is what every reading
+    /// looked like before accounts were modelled — not a failure.
+    func testNoAccountAnywhereLeavesTheSnapshotUnattributed() async throws {
+        try write(stateFile(fetchedAt: now.addingTimeInterval(-60)))
+
+        // The shared fixture carries `cachedUsageUtilization.accountUuid` but no
+        // `oauthAccount`, so the uuid stands alone.
+        let attributed = try await makeReader().currentSnapshot()
+        let account = try XCTUnwrap(attributed.account)
+        XCTAssertEqual(account.uuid, "0f9c1d3e-8a4b-4c2d-9e1f-6b7a8c9d0e1f")
+        XCTAssertNil(account.organizationName)
+
+        try write("""
+        {
+          "cachedUsageUtilization": {
+            "fetchedAtMs": \(Int(now.timeIntervalSince1970 * 1000) - 60_000),
+            "utilization": { "five_hour": { "utilization": 11 } }
+          }
+        }
+        """)
+        let unattributed = try await makeReader().currentSnapshot()
+        XCTAssertNil(unattributed.account)
     }
 
     // MARK: - Clearing

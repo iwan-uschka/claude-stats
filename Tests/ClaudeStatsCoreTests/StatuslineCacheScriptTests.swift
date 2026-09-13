@@ -129,9 +129,14 @@ final class StatuslineCacheScriptTests: XCTestCase {
 
     /// A `~/.claude.json` with one `weekly_scoped` limit, one the filter must
     /// drop, and a `spend` — no `extra_usage`, so its absence is asserted too.
-    private func writeStateFile() throws {
+    ///
+    /// `oauthAccount` is opt-in: without one the script must omit the `account`
+    /// stamp entirely, which is its own test below.
+    private func writeStateFile(oauthAccount: String? = nil) throws {
+        let account = oauthAccount.map { "\"oauthAccount\": \($0)," } ?? ""
         try Data("""
-        { "cachedUsageUtilization": { "utilization": {
+        { \(account)
+          "cachedUsageUtilization": { "utilization": {
             "limits": [
               { "kind": "weekly_scoped", "name": "Opus", "utilization": 0.44 },
               { "kind": "session", "name": "ignored", "utilization": 0.9 }
@@ -141,6 +146,15 @@ final class StatuslineCacheScriptTests: XCTestCase {
         } } }
         """.utf8).write(to: stateFileURL)
     }
+
+    /// The `oauthAccount` object as Claude Code writes it.
+    private let fullOAuthAccount = """
+        { "accountUuid": "0f9c1d3e-8a4b-4c2d-9e1f-6b7a8c9d0e1f",
+          "emailAddress": "me@example.com",
+          "organizationName": "Bitgrip",
+          "organizationUuid": "a1b2c3d4-0000-0000-0000-000000000000",
+          "organizationRole": "admin" }
+        """
 
     // MARK: - Tests
 
@@ -248,14 +262,172 @@ final class StatuslineCacheScriptTests: XCTestCase {
 
     /// Without `jq` the script can't read the id out of the payload, so every
     /// session on that machine shares one file — the raw payload, verbatim,
-    /// which the reader dates from the file's mtime.
+    /// which the reader dates from the file's mtime. No state file is parsed
+    /// either, so neither copied key appears and the app treats the reading as
+    /// belonging to an unknown account.
     func testWithoutJqTheRawPayloadGoesToTheSharedFile() throws {
+        try writeStateFile(oauthAccount: fullOAuthAccount)
+
         try run(payload(session: "aaaa-1111"), path: try pathWithoutJq())
 
         XCTAssertEqual(try sessionFiles(), ["unknown-session.json"])
         let root = try json(of: "unknown-session.json")
         XCTAssertNil(root["captured_at"])
+        XCTAssertNil(root["account"])
+        XCTAssertNil(root["utilization"])
         XCTAssertEqual(root["session_id"] as? String, "aaaa-1111")
+    }
+
+    // MARK: - The account stamp
+
+    /// Which account the numbers belong to, copied from the state file's
+    /// `oauthAccount` — the only place that answer is available, since the
+    /// statusline payload names no account at all.
+    func testAccountIsStampedFromOAuthAccount() throws {
+        try skipUnlessJqOnPath()
+        try writeStateFile(oauthAccount: fullOAuthAccount)
+
+        try run(payload(session: "aaaa-1111"))
+
+        let account = try XCTUnwrap(try json(of: "aaaa-1111.json")["account"] as? [String: Any])
+        XCTAssertEqual(account["uuid"] as? String, "0f9c1d3e-8a4b-4c2d-9e1f-6b7a8c9d0e1f")
+        XCTAssertEqual(account["email"] as? String, "me@example.com")
+        XCTAssertEqual(account["organization_name"] as? String, "Bitgrip")
+        XCTAssertEqual(account["organization_uuid"] as? String,
+                       "a1b2c3d4-0000-0000-0000-000000000000")
+        // Only the four fields the app reads — the rest of `oauthAccount` stays
+        // in Claude Code's file.
+        XCTAssertEqual(account.count, 4)
+    }
+
+    /// Only the keys the state file actually had. A field of the wrong type is
+    /// dropped the same way rather than aborting the whole stamp.
+    func testPartialOAuthAccountStampsOnlyThePresentKeys() throws {
+        try skipUnlessJqOnPath()
+        try writeStateFile(oauthAccount: """
+            { "accountUuid": "only-a-uuid", "organizationName": null, "emailAddress": 42 }
+            """)
+
+        try run(payload(session: "aaaa-1111"))
+
+        let account = try XCTUnwrap(try json(of: "aaaa-1111.json")["account"] as? [String: Any])
+        XCTAssertEqual(account as? [String: String], ["uuid": "only-a-uuid"])
+    }
+
+    /// No `oauthAccount` — a Claude Code that has never logged in, or one that
+    /// spells the key differently — omits the whole object rather than stamping
+    /// an empty one. The rate limits and the `utilization` copy are unaffected:
+    /// the two copies are independent and both additive.
+    func testNoOAuthAccountOmitsTheStampEntirely() throws {
+        try skipUnlessJqOnPath()
+        try writeStateFile()
+
+        try run(payload(session: "aaaa-1111"))
+
+        let root = try json(of: "aaaa-1111.json")
+        XCTAssertNil(root["account"])
+        XCTAssertNotNil(root["utilization"])
+        XCTAssertNotNil(root["rate_limits"])
+    }
+
+    /// An `oauthAccount` with nothing the app can use is the same as none.
+    func testUnusableOAuthAccountOmitsTheStamp() throws {
+        try skipUnlessJqOnPath()
+        try writeStateFile(oauthAccount: #"{ "organizationRole": "admin" }"#)
+
+        try run(payload(session: "aaaa-1111"))
+
+        XCTAssertNil(try json(of: "aaaa-1111.json")["account"])
+    }
+
+    /// A non-object `oauthAccount` — a shape Claude Code has never been observed
+    /// to write, but the script's type guard must survive it without aborting
+    /// the whole extraction (which would also blank out `utilization`).
+    func testNonObjectOAuthAccountOmitsTheStampWithoutBreakingUtilization() throws {
+        try skipUnlessJqOnPath()
+        try writeStateFile(oauthAccount: "\"just-a-string\"")
+
+        try run(payload(session: "aaaa-1111"))
+
+        let root = try json(of: "aaaa-1111.json")
+        XCTAssertNil(root["account"])
+        XCTAssertNotNil(root["utilization"])
+    }
+
+    /// No state file at all: both copied keys are omitted and the rate limits
+    /// still land, which is the whole point of them being best-effort.
+    func testMissingStateFileStillWritesTheRateLimits() throws {
+        try skipUnlessJqOnPath()
+
+        try run(payload(session: "aaaa-1111"))
+
+        let root = try json(of: "aaaa-1111.json")
+        XCTAssertNil(root["account"])
+        XCTAssertNil(root["utilization"])
+        XCTAssertNotNil(root["rate_limits"])
+    }
+
+    /// A state file that opens but isn't JSON: distinct from "no state file",
+    /// which never reaches the parse at all. The `jq` call yields nothing, both
+    /// copied keys are omitted, and the rate limits still land.
+    func testMalformedStateFileOmitsBothCopiedKeys() throws {
+        try skipUnlessJqOnPath()
+        try Data("{ this is not valid json".utf8).write(to: stateFileURL)
+
+        try run(payload(session: "aaaa-1111"))
+
+        let root = try json(of: "aaaa-1111.json")
+        XCTAssertNil(root["account"])
+        XCTAssertNil(root["utilization"])
+        XCTAssertNotNil(root["rate_limits"])
+    }
+
+    /// The stamp rides the same fingerprint gate as the `utilization` copy —
+    /// one read of one file, so one sidecar entry holds both.
+    func testAccountStampIsServedFromTheFingerprintSidecarToo() throws {
+        try skipUnlessJqOnPath()
+        try writeStateFile(oauthAccount: fullOAuthAccount)
+        try run(payload(session: "aaaa-1111"))
+
+        var sidecar = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: utilizationSidecarURL)) as? [String: Any])
+        XCTAssertEqual((sidecar["account"] as? [String: Any])?["organization_name"] as? String, "Bitgrip")
+        sidecar["account"] = ["uuid": "from-the-sidecar"]
+        try JSONSerialization.data(withJSONObject: sidecar).write(to: utilizationSidecarURL)
+
+        try run(payload(session: "bbbb-2222"))
+
+        let account = try XCTUnwrap(try json(of: "bbbb-2222.json")["account"] as? [String: Any])
+        XCTAssertEqual(account["uuid"] as? String, "from-the-sidecar")
+    }
+
+    /// The upgrade path: a sidecar written by a version of this script that
+    /// predates the stamp has no `account` key at all, and its fingerprint may
+    /// still match. That entry is a miss, not a hit with "nothing to carry" —
+    /// otherwise the first renders after an update would keep writing unstamped
+    /// files until `~/.claude.json` happened to change for unrelated reasons.
+    func testLegacySidecarWithoutAnAccountKeyIsReParsedRatherThanReadAsUnstamped() throws {
+        try skipUnlessJqOnPath()
+        try writeStateFile(oauthAccount: fullOAuthAccount)
+        try run(payload(session: "aaaa-1111"))
+
+        // Simulate a sidecar written before the `account` stamp existed: the key
+        // is removed entirely, not set to null.
+        var sidecar = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: utilizationSidecarURL)) as? [String: Any])
+        sidecar.removeValue(forKey: "account")
+        try JSONSerialization.data(withJSONObject: sidecar).write(to: utilizationSidecarURL)
+
+        try run(payload(session: "bbbb-2222"))
+
+        let account = try XCTUnwrap(try json(of: "bbbb-2222.json")["account"] as? [String: Any])
+        XCTAssertEqual(account["organization_name"] as? String, "Bitgrip")
+        // The re-parse rewrote the sidecar, so the entry now carries both keys
+        // and the next render takes the fast path again.
+        let rewritten = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: utilizationSidecarURL)) as? [String: Any])
+        XCTAssertNotNil(rewritten["account"])
+        XCTAssertNotNil(rewritten["utilization"])
     }
 
     /// Case B in the script's header: an existing status line passed as

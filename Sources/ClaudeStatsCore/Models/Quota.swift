@@ -176,6 +176,14 @@ public struct QuotaSnapshot: Sendable, Hashable, Codable {
     /// (`disabled_reason`). Decoration for a tooltip; never an error, and
     /// meaningless while ``usageCredits`` is non-`nil`.
     public var usageCreditsDisabledReason: String?
+    /// Which Anthropic account this reading describes, when anything on disk
+    /// said so.
+    ///
+    /// `nil` means **unknown account**, not "the only account": a cache file
+    /// written before the helper script learned to stamp one, or a state file
+    /// with no `oauthAccount`. An unknown reading is never merged with a known
+    /// one — see ``QuotaAccount`` and ``StatuslineCacheReader``.
+    public var account: QuotaAccount?
 
     public init(
         fiveHour: QuotaWindow?,
@@ -184,7 +192,8 @@ public struct QuotaSnapshot: Sendable, Hashable, Codable {
         capturedAt: Date,
         scopedWeekly: [QuotaScopedLimit] = [],
         usageCredits: UsageCredits? = nil,
-        usageCreditsDisabledReason: String? = nil
+        usageCreditsDisabledReason: String? = nil,
+        account: QuotaAccount? = nil
     ) {
         self.fiveHour = fiveHour
         self.sevenDay = sevenDay
@@ -193,6 +202,7 @@ public struct QuotaSnapshot: Sendable, Hashable, Codable {
         self.scopedWeekly = scopedWeekly
         self.usageCredits = usageCredits
         self.usageCreditsDisabledReason = usageCreditsDisabledReason
+        self.account = account
     }
 
     /// Applies one source's usage-credits reading, credits and reason together.
@@ -206,8 +216,8 @@ public struct QuotaSnapshot: Sendable, Hashable, Codable {
         usageCreditsDisabledReason = reading.disabledReason
     }
 
-    /// Hand-written so a payload encoded before ``scopedWeekly`` or
-    /// ``usageCredits`` existed still decodes: Swift's synthesized
+    /// Hand-written so a payload encoded before ``scopedWeekly``,
+    /// ``usageCredits`` or ``account`` existed still decodes: Swift's synthesized
     /// `init(from:)` ignores property defaults and would fail on the missing
     /// keys. The two windows are decoded the same forgiving way — a missing
     /// window key decodes as `nil`, which is exactly what it means.
@@ -222,6 +232,7 @@ public struct QuotaSnapshot: Sendable, Hashable, Codable {
         usageCreditsDisabledReason = try container.decodeIfPresent(
             String.self, forKey: .usageCreditsDisabledReason
         )
+        account = try container.decodeIfPresent(QuotaAccount.self, forKey: .account)
     }
 
     /// Default staleness threshold for a cached statusline capture (~10 min).

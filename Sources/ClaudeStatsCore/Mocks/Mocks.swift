@@ -12,10 +12,12 @@ public struct MockQuotaProvider: QuotaProviding {
     private final class Box: @unchecked Sendable {
         var snapshot: QuotaSnapshot?
         var error: ClaudeStatsError?
+        var otherAccounts: [QuotaSnapshot]
 
-        init(snapshot: QuotaSnapshot?, error: ClaudeStatsError?) {
+        init(snapshot: QuotaSnapshot?, error: ClaudeStatsError?, otherAccounts: [QuotaSnapshot]) {
             self.snapshot = snapshot
             self.error = error
+            self.otherAccounts = otherAccounts
         }
     }
 
@@ -34,9 +36,22 @@ public struct MockQuotaProvider: QuotaProviding {
         set { box.error = newValue }
     }
 
-    public init(snapshot: QuotaSnapshot = MockQuotaProvider.sampleSnapshot(), error: ClaudeStatsError? = nil) {
-        self.box = Box(snapshot: snapshot, error: error)
+    /// Readings for accounts other than the active one — empty on the
+    /// one-account machine every other fixture describes.
+    public var otherAccounts: [QuotaSnapshot] {
+        get { box.otherAccounts }
+        set { box.otherAccounts = newValue }
     }
+
+    public init(
+        snapshot: QuotaSnapshot = MockQuotaProvider.sampleSnapshot(),
+        error: ClaudeStatsError? = nil,
+        otherAccounts: [QuotaSnapshot] = []
+    ) {
+        self.box = Box(snapshot: snapshot, error: error, otherAccounts: otherAccounts)
+    }
+
+    public func otherAccountSnapshots() async -> [QuotaSnapshot] { box.otherAccounts }
 
     public func currentSnapshot() async throws -> QuotaSnapshot {
         if let error = box.error { throw error }
@@ -69,6 +84,38 @@ public struct MockQuotaProvider: QuotaProviding {
             // no reset timestamp — so previews exercise the row that shows a
             // zero and an empty countdown column rather than a tidy fake.
             scopedWeekly: [QuotaScopedLimit(label: "Fable", percentUsed: 0)]
+        )
+    }
+
+    /// The account the sample readings belong to — an organisation name, since
+    /// that is what ``QuotaAccount/displayName`` shows first.
+    public static func sampleAccount(
+        uuid: String = "0f9c1d3e-8a4b-4c2d-9e1f-6b7a8c9d0e1f",
+        organizationName: String? = "creativytool"
+    ) -> QuotaAccount {
+        QuotaAccount(
+            uuid: uuid,
+            email: "me@example.com",
+            organizationName: organizationName,
+            organizationUuid: "a1b2c3d4-0000-0000-0000-000000000000"
+        )
+    }
+
+    /// A second account's reading, as it looks after the user switched the
+    /// global login away from it: same shape, its own account stamp, older.
+    public static func sampleOtherAccountSnapshot(now: Date = Date()) -> QuotaSnapshot {
+        QuotaSnapshot(
+            fiveHour: nil,
+            sevenDay: QuotaWindow(
+                percentUsed: 56,
+                resetsAt: now.addingTimeInterval(2 * 86_400 + 3 * 3600)
+            ),
+            confidence: .official,
+            capturedAt: now.addingTimeInterval(-3 * 3600),
+            account: sampleAccount(
+                uuid: "7d2b6a10-3c55-4f8e-9a21-0b4c5d6e7f80",
+                organizationName: "Bitgrip"
+            )
         )
     }
 

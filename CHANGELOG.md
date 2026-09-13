@@ -2,9 +2,19 @@
 
 ## [Unreleased]
 
+### Added
+- Quota readings are now grouped per Anthropic account, with other accounts'
+  readings shown below the current one.
+
 ### Changed
 - Quota percentages from 99% up to 100% show one decimal place (`99.4%`), so
   "almost done" no longer reads as "done".
+
+### Fixed
+- Switching accounts no longer mixes in a stale reading from the previous
+  login. Existing installs need to update the statusline script (Settings →
+  Quota source → Update Script) to get per-account stamping; until then they
+  fall back to Claude Code's own cached reading.
 
 ## [0.9.9] - 2026-09-13
 

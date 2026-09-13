@@ -64,6 +64,9 @@ struct PopoverView: View {
     private var quotaSection: some View {
         VStack(alignment: .leading, spacing: 6) {
             if let snapshot = model.snapshot {
+                if snapshot.account != nil {
+                    accountLabel(model.accountLabel(for: snapshot), isKnown: true)
+                }
                 quotaWindowRow(.fiveHour, window: snapshot.fiveHour)
                 quotaWindowRow(.sevenDay, window: snapshot.sevenDay)
                 ForEach(snapshot.scopedWeekly) { limit in
@@ -92,7 +95,70 @@ struct PopoverView: View {
                     .foregroundStyle(quotaFallbackStyle)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            otherAccountsSection
             clearCacheRow
+        }
+    }
+
+    /// Which Anthropic account the rows underneath describe.
+    ///
+    /// Above the active account's bars this is shown only when something on
+    /// disk actually said — an unstamped cache file or a state file without
+    /// `oauthAccount` leaves it out rather than labelling the rows with a
+    /// guess. On the single-account machine that is the common case there is
+    /// exactly one of these, above the two bars.
+    ///
+    /// A group in ``otherAccountsSection`` always gets a label, though, so that
+    /// its rows are never attributed to the account above them — and an
+    /// unstamped group's label is the "Unknown account" placeholder. `isKnown`
+    /// says which of the two this is: the placeholder must not claim a source
+    /// that named nothing, so it gets its own tooltip.
+    private func accountLabel(_ name: String, isKnown: Bool) -> some View {
+        Text(name)
+            .font(PopoverMetrics.captionFont)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .help(isKnown
+                ? "Anthropic account these quota numbers belong to, as Claude Code's own state file names it."
+                : "Claude Code's cache file for this account doesn't record which account it is.")
+    }
+
+    /// One compact group per account this Mac has readings for *other* than the
+    /// active one — what is left behind after switching the global login.
+    ///
+    /// Same rows and the same "no reading" rendering as the active account,
+    /// each with its own freshness tag, since these readings age independently
+    /// (the account nobody is logged in as stops being written to at all).
+    /// That includes the usage-credits row and its `disabled_reason` tooltip:
+    /// `spend` normally only reaches us for the active login, but a cache file
+    /// written just before a switch can still carry one, and a stale reading
+    /// shown with its own freshness tag beats silently dropping a reading the
+    /// other rows would have shown. Empty on a one-account machine, which is
+    /// every machine until the user switches accounts.
+    @ViewBuilder
+    private var otherAccountsSection: some View {
+        // Explicitly guarded rather than left to an empty `ForEach`, so the
+        // one-account machine — every machine until the user switches logins —
+        // puts nothing at all into the quota `VStack` here.
+        if !model.otherAccountSnapshots.isEmpty {
+            ForEach(Array(model.otherAccountSnapshots.enumerated()), id: \.offset) { _, snapshot in
+                VStack(alignment: .leading, spacing: 4) {
+                    Divider()
+                    // An unstamped group is genuinely "we don't know", not a
+                    // nameless account — see `AppModel.accountLabel(for:)`.
+                    accountLabel(model.accountLabel(for: snapshot), isKnown: snapshot.account != nil)
+                    WindowBarView(title: QuotaWindowKind.fiveHour.title, window: snapshot.fiveHour, now: now)
+                    WindowBarView(title: QuotaWindowKind.sevenDay.title, window: snapshot.sevenDay, now: now)
+                    ForEach(snapshot.scopedWeekly) { limit in
+                        scopedWeeklyRow(limit)
+                    }
+                    if let credits = snapshot.usageCredits {
+                        usageCreditsRow(credits)
+                    }
+                    sourceTagLine(for: snapshot)
+                }
+            }
         }
     }
 
@@ -460,6 +526,10 @@ struct PopoverView: View {
         model: .preview(snapshot: nil, error: ClaudeStatsError.noQuotaSourceAvailable.localizedDescription),
         clock: PopoverClock()
     )
+}
+
+#Preview("Popover — two accounts") {
+    PopoverView(model: .previewTwoAccounts(), clock: PopoverClock())
 }
 
 #Preview("Popover — stale warning") {

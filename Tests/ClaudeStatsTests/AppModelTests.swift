@@ -7,6 +7,9 @@ import XCTest
 final class AppModelTests: XCTestCase {
     private actor ScriptedQuotaProvider: QuotaProviding {
         var result: Result<QuotaSnapshot, Error> = .failure(ClaudeStatsError.noQuotaSourceAvailable)
+        /// Readings for accounts other than the active one — empty on the
+        /// one-account machine most of these tests describe.
+        var otherAccounts: [QuotaSnapshot] = []
         /// Incremented on every `currentSnapshot()` read, so tests can
         /// deterministically wait for an async poll to actually run instead of
         /// relying on a published-property condition that may already be true
@@ -20,6 +23,12 @@ final class AppModelTests: XCTestCase {
         func setResult(_ result: Result<QuotaSnapshot, Error>) {
             self.result = result
         }
+
+        func setOtherAccounts(_ snapshots: [QuotaSnapshot]) {
+            self.otherAccounts = snapshots
+        }
+
+        func otherAccountSnapshots() async -> [QuotaSnapshot] { otherAccounts }
 
         func currentSnapshot() async throws -> QuotaSnapshot {
             callCount += 1
@@ -440,6 +449,181 @@ final class AppModelTests: XCTestCase {
         XCTAssertNil(model.quotaError)
         XCTAssertNil(model.quotaWarning)
         XCTAssertTrue(model.activeErrors.isEmpty)
+    }
+
+    // MARK: - Accounts
+
+    /// Scripted stand-in for `ActiveAccountReader`: the state file it would
+    /// read is the user's real `~/.claude.json`, which this suite never touches.
+    private struct StubActiveAccount: ActiveAccountProviding {
+        let reading: ActiveAccountReading
+        func readActiveAccount() -> ActiveAccountReading { reading }
+    }
+
+    private static let creativytool = QuotaAccount(
+        uuid: "0f9c1d3e-8a4b-4c2d-9e1f-6b7a8c9d0e1f", organizationName: "creativytool")
+    private static let bitgrip = QuotaAccount(
+        uuid: "7d2b6a10-3c55-4f8e-9a21-0b4c5d6e7f80", organizationName: "Bitgrip")
+
+    /// A statusline cache file as the hook writes it, stamped with `account`.
+    private func writeCacheFile(
+        in directory: URL,
+        session: String,
+        account: QuotaAccount?,
+        fiveHourPercent: Double,
+        capturedAt: Date,
+        resetsAt: Date
+    ) throws {
+        let stamp = account.map {
+            """
+            ,
+              "account": { "uuid": "\($0.uuid)", "organization_name": "\($0.organizationName ?? "")" }
+            """
+        } ?? ""
+        let json = """
+        {
+          "captured_at": \(Int(capturedAt.timeIntervalSince1970)),
+          "rate_limits": {
+            "five_hour": { "used_percentage": \(fiveHourPercent),
+                           "resets_at": \(Int(resetsAt.timeIntervalSince1970)) }
+          }\(stamp)
+        }
+        """
+        try Data(json.utf8).write(to: directory.appendingPathComponent("\(session).json"))
+    }
+
+    /// A provider wired the way the app wires it — statusline cache plus the
+    /// backup — but pointed at a scratch cache directory, with no state file
+    /// candidates at all and the logged-in account scripted.
+    private func makeAccountAwareProvider(
+        cacheDirectory: URL, activeAccount: QuotaAccount?
+    ) -> any QuotaProviding {
+        let active = StubActiveAccount(reading: ActiveAccountReading(account: activeAccount))
+        return FreshestQuotaProvider(
+            statusline: StatuslineCacheReader(
+                cacheDirectoryURL: cacheDirectory,
+                activeAccount: active
+            ),
+            // No candidates: the backup source must not reach the real
+            // `~/.claude.json` from a test.
+            cachedState: CachedUtilizationReader(candidateURLs: []),
+            activeAccount: active
+        )
+    }
+
+    private func makeScratchCacheDirectory() throws -> URL {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("AppModelTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: directory.appendingPathComponent(
+                StatuslineCacheReader.sessionCacheDirectoryName, isDirectory: true),
+            withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        return directory
+    }
+
+    /// End to end: two accounts' cache files on disk, and the account Claude
+    /// Code is logged in as decides which one the bars show — the other one is
+    /// listed below rather than merged in or dropped.
+    func testActiveAccountFromTheStateFileDecidesWhichReadingIsShown() async throws {
+        let directory = try makeScratchCacheDirectory()
+        let sessions = directory.appendingPathComponent(
+            StatuslineCacheReader.sessionCacheDirectoryName, isDirectory: true)
+        let now = Date()
+        try writeCacheFile(in: sessions, session: "left-behind", account: Self.bitgrip,
+                           fiveHourPercent: 56, capturedAt: now.addingTimeInterval(-60),
+                           resetsAt: now.addingTimeInterval(3600))
+        try writeCacheFile(in: sessions, session: "current", account: Self.creativytool,
+                           fiveHourPercent: 4, capturedAt: now.addingTimeInterval(-30),
+                           resetsAt: now.addingTimeInterval(3600))
+
+        let model = makeModel(quota: makeAccountAwareProvider(
+            cacheDirectory: directory, activeAccount: Self.creativytool))
+        await model.refresh(force: true)?.value
+
+        XCTAssertEqual(model.snapshot?.account, Self.creativytool)
+        XCTAssertEqual(model.snapshot?.fiveHour?.percentUsed, 4)
+        XCTAssertEqual(model.otherAccountSnapshots.map { $0.account }, [Self.bitgrip])
+        XCTAssertEqual(model.otherAccountSnapshots.first?.fiveHour?.percentUsed, 56)
+        XCTAssertNil(model.quotaError)
+    }
+
+    /// One account: nothing to list, so no group appears. The unstamped
+    /// ("Unknown account") group is the same rule — it only shows up when it
+    /// isn't the group serving the bars.
+    func testSingleAccountLeavesTheOtherAccountsListEmpty() async throws {
+        let directory = try makeScratchCacheDirectory()
+        let sessions = directory.appendingPathComponent(
+            StatuslineCacheReader.sessionCacheDirectoryName, isDirectory: true)
+        let now = Date()
+        try writeCacheFile(in: sessions, session: "only", account: nil,
+                           fiveHourPercent: 12, capturedAt: now.addingTimeInterval(-30),
+                           resetsAt: now.addingTimeInterval(3600))
+
+        let model = makeModel(quota: makeAccountAwareProvider(
+            cacheDirectory: directory, activeAccount: nil))
+        await model.refresh(force: true)?.value
+
+        XCTAssertEqual(model.snapshot?.fiveHour?.percentUsed, 12)
+        XCTAssertNil(model.snapshot?.account)
+        XCTAssertTrue(model.otherAccountSnapshots.isEmpty)
+    }
+
+    /// The label above each group of rows: the account's own name when the
+    /// reading was stamped, and an explicit "we don't know" when it wasn't —
+    /// never a blank line and never the neighbouring account's name.
+    func testAccountLabelNamesTheAccountOrSaysItIsUnknown() {
+        let model = makeModel(quota: ScriptedQuotaProvider())
+        var stamped = MockQuotaProvider.sampleSnapshot()
+        stamped.account = Self.bitgrip
+
+        XCTAssertEqual(model.accountLabel(for: stamped), "Bitgrip")
+        XCTAssertEqual(model.accountLabel(for: MockQuotaProvider.sampleSnapshot()), "Unknown account")
+    }
+
+    /// The other accounts' rows come from the same files the active account's
+    /// reading does, and they survive its failure — a quota source that went
+    /// quiet for *this* login says nothing about the other one's readings.
+    func testOtherAccountsArePublishedEvenWhenTheActiveReadingFails() async {
+        let provider = ScriptedQuotaProvider()
+        var other = MockQuotaProvider.sampleSnapshot()
+        other.account = Self.bitgrip
+        await provider.setOtherAccounts([other])
+        await provider.setResult(.failure(ClaudeStatsError.noQuotaSourceAvailable))
+        let model = makeModel(quota: provider)
+
+        model.refresh(force: true)
+        await waitUntil { model.quotaError != nil }
+
+        XCTAssertNil(model.snapshot)
+        XCTAssertEqual(model.otherAccountSnapshots, [other])
+    }
+
+    /// "Clear Quota Cache" deletes every session file, the other accounts'
+    /// included, so their rows go with the active account's reading instead of
+    /// staying on screen as the only numbers.
+    func testClearQuotaCacheAlsoDropsTheOtherAccountsRows() async {
+        let provider = ScriptedQuotaProvider()
+        var other = MockQuotaProvider.sampleSnapshot()
+        other.account = Self.bitgrip
+        await provider.setOtherAccounts([other])
+        await provider.setResult(.success(MockQuotaProvider.sampleSnapshot()))
+        let model = makeModel(quota: provider)
+        model.refresh(force: true)
+        await waitUntil { !model.otherAccountSnapshots.isEmpty }
+
+        await provider.setOtherAccounts([])
+        await provider.setResult(.failure(ClaudeStatsError.noQuotaSourceAvailable))
+        let callsBeforeClear = await provider.callCount
+        model.clearQuotaCache()
+
+        XCTAssertTrue(model.otherAccountSnapshots.isEmpty)
+        // The synchronous clear is only half of it: wait for the repoll the
+        // clear kicks off and check the rows stay gone once it has answered.
+        await waitUntil(timeout: 5) { await provider.callCount > callsBeforeClear }
+        let callsAfterClear = await provider.callCount
+        XCTAssertGreaterThan(callsAfterClear, callsBeforeClear)
+        XCTAssertTrue(model.otherAccountSnapshots.isEmpty)
     }
 
     // MARK: - Promo notices

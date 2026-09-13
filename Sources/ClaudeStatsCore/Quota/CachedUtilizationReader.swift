@@ -41,8 +41,14 @@ import Foundation
 /// ```
 ///
 /// What that `percent` is a share of is **not** documented — see
-/// ``QuotaScopedLimit``. `accountUuid` is carried by the payload but unused —
-/// there is nothing on this side to compare it against.
+/// ``QuotaScopedLimit``. `accountUuid` names the account these numbers describe
+/// and becomes ``QuotaSnapshot/account``, filled out with the email and
+/// organisation name from the file's sibling `oauthAccount` object when the two
+/// agree on the uuid (and taken from `oauthAccount` outright on an older
+/// payload that carries no `accountUuid`). A mismatch keeps the reading's own
+/// uuid and nothing else: the cached numbers are the previous login's, and
+/// labelling them with the current login's organisation is exactly the
+/// mislabelling this app is trying to stop.
 ///
 /// The sibling `spend` object (cross-checked against `extra_usage`) becomes
 /// ``QuotaSnapshot/usageCredits`` — money, not a percentage, and on its own
@@ -71,7 +77,8 @@ import Foundation
 /// between 2026-08-27 and 2026-08-28. That is why the statusline path is kept
 /// alongside it rather than deleted; see ``FreshestQuotaProvider``.
 public struct CachedUtilizationReader: QuotaProviding {
-    /// Top-level key in `~/.claude.json`.
+    /// Top-level key in `~/.claude.json`. Shared with ``ActiveAccountReader``,
+    /// which reads the same blob for the mislabel guard's reference.
     static let cachedUtilizationKey = "cachedUsageUtilization"
     /// The nested object holding the per-window numbers.
     static let utilizationKey = "utilization"
@@ -96,7 +103,7 @@ public struct CachedUtilizationReader: QuotaProviding {
     }
 
     public func currentSnapshot() async throws -> QuotaSnapshot {
-        let (cached, utilization) = try loadUtilization()
+        let (root, cached, utilization) = try loadUtilization()
 
         // Each window can be independently absent — Claude Code stops reporting
         // one once it has rolled over — and an absent one stays absent on the
@@ -125,7 +132,8 @@ public struct CachedUtilizationReader: QuotaProviding {
             capturedAt: capturedAt,
             scopedWeekly: QuotaJSON.scopedLimits(in: utilization),
             usageCredits: credits.credits,
-            usageCreditsDisabledReason: credits.disabledReason
+            usageCreditsDisabledReason: credits.disabledReason,
+            account: Self.account(root: root, cached: cached)
         )
 
         guard !snapshot.isStale(asOf: now(), threshold: stalenessThreshold) else {
@@ -141,9 +149,11 @@ public struct CachedUtilizationReader: QuotaProviding {
     /// when its windows are too old to win the freshness compare, so a stale
     /// `cachedUsageUtilization` blob doesn't have to take the scoped bars down
     /// along with it while the statusline hook keeps the account-wide numbers
-    /// current.
+    /// current. Bypassing staleness does not mean bypassing whose numbers
+    /// these are, though — see ``matchesActiveAccount(root:cached:)``.
     public func currentScopedWeekly() async throws -> [QuotaScopedLimit] {
-        let (_, utilization) = try loadUtilization()
+        let (root, cached, utilization) = try loadUtilization()
+        guard Self.matchesActiveAccount(root: root, cached: cached) else { return [] }
         return QuotaJSON.scopedLimits(in: utilization)
     }
 
@@ -152,10 +162,39 @@ public struct CachedUtilizationReader: QuotaProviding {
     /// reason: `spend` is this source's alone (the statusline payload has no
     /// such object), so a stale blob must not take the credits row down while
     /// the hook keeps the account-wide numbers current. A month-long spend
-    /// total an hour behind is still the right number to show.
+    /// total an hour behind is still the right number to show — as long as
+    /// it's this account's total; see ``matchesActiveAccount(root:cached:)``.
     public func currentUsageCredits() async throws -> UsageCreditsReading {
-        let (_, utilization) = try loadUtilization()
+        let (root, cached, utilization) = try loadUtilization()
+        guard Self.matchesActiveAccount(root: root, cached: cached) else { return .unavailable }
         return QuotaJSON.usageCredits(in: utilization)
+    }
+
+    /// Which account the cached numbers describe — see the type's note on
+    /// `accountUuid`.
+    static func account(root: [String: Any], cached: [String: Any]) -> QuotaAccount? {
+        let loggedIn = QuotaJSON.object(root[ActiveAccountReader.oauthAccountKey])
+            .flatMap(QuotaAccount.init(json:))
+        // The reading's own uuid wins: it says whose numbers these are, where
+        // `oauthAccount` only says who is logged in *now*.
+        guard let readingUuid = QuotaAccount(json: cached)?.uuid else { return loggedIn }
+        if let loggedIn, loggedIn.uuid == readingUuid { return loggedIn }
+        return QuotaAccount(uuid: readingUuid)
+    }
+
+    /// Whether the cached blob's own account agrees with who is logged in
+    /// now. ``currentScopedWeekly()`` and ``currentUsageCredits()`` bypass
+    /// staleness on purpose, but must not also bypass whose numbers these
+    /// are: a blob left over from the previous login would otherwise graft
+    /// its scoped rows or spend onto the current login's bars. With nothing
+    /// to compare (either side missing a uuid) there is no known mismatch to
+    /// block on.
+    private static func matchesActiveAccount(root: [String: Any], cached: [String: Any]) -> Bool {
+        guard let loggedInUuid = QuotaJSON.object(root[ActiveAccountReader.oauthAccountKey])
+            .flatMap(QuotaAccount.init(json:))?.uuid,
+            let readingUuid = QuotaAccount(json: cached)?.uuid
+        else { return true }
+        return loggedInUuid == readingUuid
     }
 
     /// Loads and unwraps `cachedUsageUtilization.utilization`, common to
@@ -163,7 +202,8 @@ public struct CachedUtilizationReader: QuotaProviding {
     /// ``currentUsageCredits()``. Neither the windows nor `fetchedAtMs` are
     /// required here — callers that need them check separately, since the two
     /// staleness-bypassing readers don't.
-    private func loadUtilization() throws -> (cached: [String: Any], utilization: [String: Any]) {
+    private func loadUtilization() throws
+        -> (root: [String: Any], cached: [String: Any], utilization: [String: Any]) {
         let root: [String: Any]
         // No fingerprint: a quota poll always wants the current numbers, and
         // the unchanged-since gate has nothing to hand back if it fires.
@@ -192,7 +232,7 @@ public struct CachedUtilizationReader: QuotaProviding {
         else {
             throw ClaudeStatsError.noQuotaSourceAvailable
         }
-        return (cached, utilization)
+        return (root, cached, utilization)
     }
 
     /// Deliberately does nothing.
