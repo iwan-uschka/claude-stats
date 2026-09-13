@@ -419,6 +419,15 @@ empty.
   of our code runs, so there is no Dock-tile flash on launch. The runtime call
   stays authoritative for bundle-less `swift run` builds.
 
+### CHANGELOG / release note style
+
+Keep entries short — 1-3 lines each, like `0.9.2` and earlier ("Menu bar
+glyph: mark size 14 → 11.9 (15% smaller)..."). Entries from `0.9.3` onward
+drifted into paragraph-length rationale (every "why", every measurement, every
+edge case) — that belongs in commit messages / AGENTS.md, not the changelog a
+user reads to decide whether to update. State what changed and, if truly
+needed, why in a clause — not the full investigation.
+
 ### README images
 
 Two PNGs, `assets/screenshot-popover-{light,dark}.png` — menu bar strip, the
