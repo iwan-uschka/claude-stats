@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Shared layout constants for the popover, so the label columns of the quota
-/// rows, the "By source" legend and the "By model" rows line up with each other.
+/// rows, the "Tokens by source" legend and the "By model" rows line up with each other.
 enum PopoverMetrics {
     static let popoverWidth: CGFloat = 340
     static let contentPadding: CGFloat = 14
@@ -35,7 +35,7 @@ enum PopoverMetrics {
     static let percentAndCountdownColumnWidth: CGFloat =
         percentColumnWidth + rowSpacing + countdownColumnWidth
     /// Width of the token column in the "By model" section — wider than a
-    /// "By source" legend number because the counts here carry a `tok` suffix
+    /// "Tokens by source" legend number because the counts here carry a `tok` suffix
     /// and are all-time rather than windowed.
     static let modelTokenColumnWidth: CGFloat = 98
     /// Width of the cost column in the "By model" section. Wide enough for
@@ -43,12 +43,41 @@ enum PopoverMetrics {
     /// model's estimate well past the `$3.15`-sized figures this used to be
     /// sized for.
     static let costColumnWidth: CGFloat = 76
-    /// Plot height of a popover chart. Deliberately small: the chart is here
-    /// for the shape of the last 30 days, and the exact numbers are in the
-    /// legend under it. Tall enough that a quiet day is still visibly above
-    /// zero, short enough that two sections plus the quota rows still fit
-    /// without the popover needing to scroll.
-    static let chartHeight: CGFloat = 44
+    /// Overall height of a popover chart, axis labels included. The plot
+    /// itself gets what is left after the x-axis labels, so this is larger
+    /// than the 44 pt the chart ran at while its axes were hidden.
+    ///
+    /// Tall enough that a quiet day is still visibly above zero and that three
+    /// y-ticks don't collide, short enough that the section plus the quota rows
+    /// still fit without the popover needing to scroll.
+    static let chartHeight: CGFloat = 72
+    /// Spacing between a chart's x-axis tick labels, in days. Seven keeps the
+    /// labels a week apart — five of them across a 30-day window, which is as
+    /// many `Aug 16`-sized labels as fit without overlapping.
+    static let chartXAxisStrideDays = 7
+    /// Number of y-axis ticks to aim for. Three (bottom, middle, top) is what
+    /// a 72 pt chart can label without the numbers touching.
+    static let chartYAxisTickCount = 3
+    /// Length of an axis tick. Short: the tick only has to attach the label to
+    /// the axis, and the default reads as a gridline at this chart's size.
+    static let chartTickLength: CGFloat = 3
+    /// Breathing room above and below a chart — under its section title, over
+    /// the legend beneath it. The chart is the only element in the popover that
+    /// is a *picture* rather than a row of text, and run flush against those it
+    /// reads as part of them.
+    ///
+    /// Vertical only: the plot spans the popover's full content width like
+    /// every other row, so insetting it sideways would pull its axis out of the
+    /// alignment the rows above and below keep.
+    static let chartMargin: CGFloat = 6
+    /// How many days at the end of the window get no x-axis tick.
+    ///
+    /// A tick's label is centred on it and truncated at the chart's trailing
+    /// edge, so a tick in the last few days renders as `1…` however the plot is
+    /// inset — the label simply has nowhere to sit. Four days is about half of
+    /// a `16. Aug.`-sized label at this chart's scale. Nothing is lost by it:
+    /// the right edge of a trailing window is always today.
+    static let chartXAxisEdgeMarginDays = 4
     /// Diameter of a legend swatch — the dot that ties a legend row to its band
     /// in the chart.
     static let legendSwatchSize: CGFloat = 6
@@ -63,7 +92,7 @@ enum PopoverMetrics {
     /// Gap above each *other*-account disclosure group, and between two of
     /// them. Deliberately double ``quotaRowSpacing``: the groups carry no
     /// divider of their own any more (a `Divider()` there read as a top-level
-    /// section break, the same rule that separates "By source" from "By model"),
+    /// section break, the same rule that separates "Tokens by source" from "By model"),
     /// so whitespace is the only thing left saying a collapsed row belongs to
     /// neither the bars above it nor the group below it.
     static let accountGroupSpacing: CGFloat = 12

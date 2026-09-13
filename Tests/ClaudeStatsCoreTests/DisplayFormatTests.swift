@@ -406,7 +406,7 @@ final class DisplayFormatTests: XCTestCase {
 
     /// Every entrypoint keeps a row, including the ones with nothing in the
     /// window — an absent row would read as an entrypoint this Mac has never
-    /// used rather than an idle one. The "By source" legend is built from these
+    /// used rather than an idle one. The "Tokens by source" legend is built from these
     /// rows, so a dropped one would also cost its band's swatch its meaning.
     func testEmptyBreakdownStillHasARowPerEntrypoint() {
         let rows = EntrypointBreakdown.empty(window: .fiveHour).orderedRows

@@ -97,7 +97,7 @@ struct PopoverView: View {
     }
 
     /// The quota block's section title, plus the freshness tag on the same
-    /// line — the shape "By source" and "By model" already use, so the quota
+    /// line — the shape "Tokens by source" and "By model" already use, so the quota
     /// rows read as a titled section rather than as a preamble to the popover.
     ///
     /// The title names the active Anthropic account when something on disk
@@ -445,7 +445,7 @@ struct PopoverView: View {
 
     /// Explains a token total that replayed cache reads dominate, so the
     /// headline number doesn't read as fresh work. Only "By model" has one:
-    /// "By source" captions a chart spanning 30 days with legend numbers from a
+    /// "Tokens by source" captions a chart spanning 30 days with legend numbers from a
     /// five-hour window, so it has no single total for a note to describe.
     private func cacheReadNoteLine(_ note: String) -> some View {
         Text(note)
@@ -467,20 +467,17 @@ struct PopoverView: View {
     /// counterpart to the account-wide five-hour quota bar above — so it stays,
     /// as the legend's value rather than as a column.
     ///
-    /// The window label counts the days actually charted, which is fewer than
-    /// ``AppModel/chartWindowDays`` on a Mac whose logs don't go back that far.
+    /// The chart covers ``AppModel/chartWindowDays``, or fewer days on a Mac
+    /// whose logs don't go back that far — which the dated x-axis says by
+    /// itself, so the section carries no window tag.
     private var sourceSection: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text("By source")
-                    .font(PopoverMetrics.sectionTitleFont)
-                Spacer()
-                if !model.dailyHistory.isEmpty {
-                    Text("\(model.dailyHistory.days.count) days")
-                        .font(PopoverMetrics.captionFont)
-                        .foregroundStyle(.secondary)
-                }
-            }
+            // No window tag opposite the title: the x-axis is dated, so it
+            // already says both how far back the chart reaches and that it ends
+            // today. "By model" still needs its `fixed 24h` tag, having no axis
+            // of its own.
+            Text("Tokens by source")
+                .font(PopoverMetrics.sectionTitleFont)
 
             if model.dailyHistory.isEmpty {
                 // A flat line through zero would read as "you stopped working"
@@ -490,6 +487,7 @@ struct PopoverView: View {
                     .foregroundStyle(.secondary)
             } else {
                 DailyUsageChart(days: model.dailyHistory.days, series: sourceSeries)
+                    .padding(.vertical, PopoverMetrics.chartMargin)
                 sourceLegend
             }
         }

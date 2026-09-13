@@ -342,7 +342,7 @@ final class AppModelTests: XCTestCase {
 
     // MARK: - Daily history
 
-    /// The "By source" chart reads `dailyHistory` directly, so a reload has to
+    /// The "Tokens by source" chart reads `dailyHistory` directly, so a reload has to
     /// fill it — an empty one is the section's "no local usage yet" state, not
     /// a "still loading" one, and the two must not be confused.
     func testReloadFillsInTheDailyHistoryTheChartDraws() {

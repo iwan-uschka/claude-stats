@@ -22,8 +22,8 @@ struct DailyUsageSeries: Identifiable, Hashable {
     /// One point per day of ``DailyUsageChart/days``, same order.
     let points: [DailyUsagePoint]
 
-    /// Ordered bands for the "By source" chart: display order, darkest band
-    /// first, including sources that did nothing in the window.
+    /// Ordered bands for the "Tokens by source" chart: display order, darkest
+    /// band first, including sources that did nothing in the window.
     static func sources(from history: DailyUsageHistory) -> [DailyUsageSeries] {
         let shades: [Double] = [0.62, 0.40, 0.24]
         return Entrypoint.displayOrder.enumerated().map { index, entrypoint in
@@ -38,10 +38,11 @@ struct DailyUsageSeries: Identifiable, Hashable {
 
 /// A stacked 30-day area chart of daily token usage, sized for the popover.
 ///
-/// Axes are hidden: at ~44 pt tall there is no room for tick labels, and the
-/// section title already says which window this is. The numbers themselves live
-/// in the legend below the chart, which is what the reader gets exact values
-/// from.
+/// Both axes are drawn: without a y-axis the bands show shape but no
+/// magnitude, and without dated x-ticks a spike can't be tied to a day. Ticks
+/// are sparse on purpose — a label every seven days, three values up the y-axis
+/// — because thirty dated labels across a 340 pt popover would be unreadable
+/// mush. Exact per-source numbers stay in the legend under the chart.
 struct DailyUsageChart: View {
     /// Local midnights, oldest first — the x positions every series shares.
     let days: [Date]
@@ -65,6 +66,16 @@ struct DailyUsageChart: View {
         }
     }
 
+    /// Days that get an x-axis tick: every seventh, stopping short of the
+    /// window's right edge so no label is truncated there. Always at least one
+    /// tick, so a corpus shorter than the margin still dates its chart.
+    var tickDays: [Date] {
+        guard let first = days.first else { return [] }
+        let last = days.count - 1 - PopoverMetrics.chartXAxisEdgeMarginDays
+        guard last > 0 else { return [first] }
+        return stride(from: 0, through: last, by: PopoverMetrics.chartXAxisStrideDays).map { days[$0] }
+    }
+
     var body: some View {
         Chart(records) { record in
             AreaMark(
@@ -83,8 +94,30 @@ struct DailyUsageChart: View {
             range: series.map { Color.primary.opacity($0.shade) }
         )
         .chartLegend(.hidden)
-        .chartXAxis(.hidden)
-        .chartYAxis(.hidden)
+        .chartXAxis {
+            AxisMarks(values: tickDays) { value in
+                AxisTick(length: PopoverMetrics.chartTickLength, stroke: StrokeStyle(lineWidth: 0.5))
+                    .foregroundStyle(.secondary)
+                AxisValueLabel(format: .dateTime.month(.abbreviated).day())
+                    .font(PopoverMetrics.captionFont)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .chartYAxis {
+            AxisMarks(position: .leading, values: .automatic(desiredCount: PopoverMetrics.chartYAxisTickCount)) { value in
+                // A gridline, not just a tick: a value up the left edge is only
+                // readable against the band if the eye can carry it across.
+                AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5))
+                    .foregroundStyle(Color.primary.opacity(0.12))
+                AxisTick(length: PopoverMetrics.chartTickLength, stroke: StrokeStyle(lineWidth: 0.5))
+                    .foregroundStyle(.secondary)
+                AxisValueLabel {
+                    Text(value.as(Int.self).map(DisplayFormat.tokens) ?? "")
+                        .font(PopoverMetrics.captionFont)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
         .frame(height: PopoverMetrics.chartHeight)
         .accessibilityChartDescriptor(DailyUsageChartDescriptor(days: days, series: series))
     }

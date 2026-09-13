@@ -7,9 +7,9 @@
   readings shown below the current one.
 
 ### Changed
-- The popover's "This Mac" table is now a "By source" chart: 30 days of daily
-  token usage stacked per source, with each source's 5-hour count in the legend
-  under it.
+- The popover's "This Mac" table is now a "Tokens by source" chart: 30 days of
+  daily token usage stacked per source, dated x-axis and labelled y-axis, with
+  each source's 5-hour count in the legend under it.
 - Quota percentages from 99% up to 100% show one decimal place (`99.4%`), so
   "almost done" no longer reads as "done".
 - The popover's "Plan" and "Burn rate" lines are gone — the plan tier was

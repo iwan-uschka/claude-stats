@@ -33,7 +33,7 @@ public enum ModelFamily: String, Sendable, Hashable, Codable, CaseIterable {
 
 /// Token count and estimated spend for one model, over a fixed window
 /// (the popover's "By model" section uses a fixed 24h window, unlike the
-/// "By source" chart above it, which spans 30 days).
+/// "Tokens by source" chart above it, which spans 30 days).
 public struct ModelUsage: Sendable, Hashable, Codable, Identifiable {
     /// Raw model ID as it appears in the JSONL, e.g. `claude-sonnet-5`.
     public let modelID: String

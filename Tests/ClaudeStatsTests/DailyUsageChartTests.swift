@@ -3,7 +3,7 @@ import XCTest
 @testable import ClaudeStats
 @testable import ClaudeStatsCore
 
-/// Coverage for the "By source" chart's data shaping and its accessibility
+/// Coverage for the "Tokens by source" chart's data shaping and its accessibility
 /// descriptor — the two parts of the section that are logic rather than layout.
 final class DailyUsageChartTests: XCTestCase {
 
@@ -80,6 +80,44 @@ final class DailyUsageChartTests: XCTestCase {
 
         XCTAssertEqual(series.map(\.label), Entrypoint.displayOrder.map(\.displayName))
         XCTAssertTrue(series.allSatisfy { $0.points.isEmpty })
+    }
+
+    // MARK: - X-axis ticks
+
+    private func chart(dayCount: Int) -> DailyUsageChart {
+        let start = Self.utcCalendar.startOfDay(for: Self.referenceNow)
+        let days = (0..<dayCount).compactMap {
+            Self.utcCalendar.date(byAdding: .day, value: -($0), to: start)
+        }.reversed()
+        return DailyUsageChart(days: Array(days), series: [])
+    }
+
+    func testTicksAreWeeklyAndStopShortOfTheRightEdge() {
+        let chart = self.chart(dayCount: 30)
+        let ticks = chart.tickDays
+
+        // Every seventh day, and nothing in the last four — a label centred on
+        // a tick that close is truncated against the chart's trailing bound.
+        XCTAssertEqual(ticks.count, 4)
+        XCTAssertEqual(ticks, [0, 7, 14, 21].map { chart.days[$0] })
+        let cutoff = chart.days[chart.days.count - 1 - 4]
+        XCTAssertTrue(ticks.allSatisfy { $0 <= cutoff })
+    }
+
+    func testEveryTickIsADayTheChartActuallyPlots() {
+        let chart = self.chart(dayCount: 23)
+        XCTAssertTrue(chart.tickDays.allSatisfy { chart.days.contains($0) })
+    }
+
+    func testAShortWindowStillGetsOneDatedTick() {
+        // Three days is inside the edge margin from both ends; a chart with no
+        // tick at all would be undated.
+        let chart = self.chart(dayCount: 3)
+        XCTAssertEqual(chart.tickDays, [chart.days[0]])
+    }
+
+    func testNoDaysMeansNoTicks() {
+        XCTAssertTrue(chart(dayCount: 0).tickDays.isEmpty)
     }
 
     // MARK: - Accessibility

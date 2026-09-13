@@ -55,7 +55,7 @@ final class AppModel: ObservableObject {
     /// numbers as a whole, and the popover re-renders every clock tick.
     @Published private(set) var modelUsageTotal: TokenUsage = .zero
 
-    /// Daily token history behind the popover's "By source" chart, covering
+    /// Daily token history behind the popover's "Tokens by source" chart, covering
     /// ``chartWindowDays``. Empty until the first reload, and on a Mac with no
     /// local history at all — the section draws an empty state rather than a
     /// flat line through zero.
@@ -346,7 +346,7 @@ final class AppModel: ObservableObject {
     }
 
     /// The quota block's own section title — the counterpart of the literal
-    /// "By source" and "By model" titles next to it.
+    /// "Tokens by source" and "By model" titles next to it.
     ///
     /// Names the account the bars underneath describe, so the block announces
     /// itself the way the other two sections do. Two rules decide the wording:
@@ -452,7 +452,7 @@ final class AppModel: ObservableObject {
 
     /// Windows the popover actually shows a per-entrypoint number for.
     ///
-    /// Just the five-hour one since the "This Mac" table became the "By source"
+    /// Just the five-hour one since the "This Mac" table became the "Tokens by source"
     /// chart: `24h` and `7d` were integrals over ranges the chart's x-axis now
     /// covers, so loading them every reload would be summing events nothing
     /// displays.

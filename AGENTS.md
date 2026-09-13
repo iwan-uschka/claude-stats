@@ -404,7 +404,7 @@ Click opens a popover:
 ```
 ✓ me@example.com                cached
                                   ← the quota block's section title, the same
-                                    shape as "By source" and "By model" below:
+                                    shape as "Tokens by source" and "By model" below:
                                     title left, tag right. The title names the
                                     account the rows describe, from
                                     `~/.claude.json`'s `oauthAccount` (login
@@ -525,8 +525,11 @@ Usage credits ▨▨░░░░░░   €0.00 of €33.00
                                     bars above and still has a live window.
                                     Absent entirely on a one-account machine.
 
-By source                          30 days
-  ▁▂▅▃▂▆█▅▃▂▄▆█▃▂▄▅█▃▂▁▂▄▅█▆▃▂▁▃
+Tokens by source
+4M ┤
+2M ┤ ▁▂▅▃▂▆█▅▃▂▄▆█▃▂▄▅█▃▂▁▂▄▅█▆▃▂▁▃
+ 0 ┼──┬───────┬───────┬───────┬────
+   16. Aug. 23. Aug. 30. Aug. 6. Sept.
 ● CLI 18k   ● VS Code 0   ● SDK 40.6k   5h
                                   ← a stacked daily area chart of the last 30
                                     days, one band per entrypoint, plus one
@@ -564,19 +567,57 @@ By source                          30 days
                                     chip rather than vanishing. Hovering a chip
                                     shows that source's full five-hour token
                                     split, which is where the table's per-cell
-                                    tooltip went. Axes are hidden (no room at 44
-                                    pt, and the titles carry both windows: `30
-                                    days` for the chart, `5h` for the numbers),
-                                    so the chart carries a real
+                                    tooltip went.
+
+                                    Both axes are drawn, sparsely: without a
+                                    y-axis the bands show shape but no
+                                    magnitude, and without dated x-ticks a spike
+                                    can't be tied to a day — but thirty dated
+                                    labels across a 340 pt popover would be
+                                    mush, so it is one label a week and three
+                                    values up the y. **Ticks stop four days
+                                    short of the right edge**: a label is centred
+                                    on its tick and truncated at the chart's
+                                    trailing bound, so a tick any closer renders
+                                    as `1…` no matter how the plot is inset
+                                    (tried: padding the chart, then padding the
+                                    plot area — neither helps, the label has
+                                    nowhere to sit). Nothing is lost by it, since
+                                    the right edge of a trailing window is always
+                                    today.
+
+                                    Drawn axes still don't make a chart legible
+                                    to VoiceOver, so it carries a real
                                     `AXChartDescriptor` — one series per source,
                                     one point per day, y-axis reaching the
                                     tallest *stacked* day — rather than being an
-                                    unlabelled image. The window label counts
-                                    the days actually charted: a Mac whose logs
-                                    don't reach back 30 days says `9 days`, and
-                                    one with no local history at all gets `No
-                                    local usage yet` instead of a flat line
-                                    through zero. No cache-read note here: the
+                                    unlabelled image. Its value formatter guards
+                                    non-finite input and clamps to 2^53, not to
+                                    `Double(Int.max)` (which rounds up to 2^63
+                                    and traps): the framework calls it with
+                                    probe values of its own choosing, and both
+                                    traps were live crashes.
+
+                                    **No window tag** opposite the title,
+                                    unlike every other section: the dated
+                                    x-axis already says how far back the chart
+                                    reaches and that it ends today, so a
+                                    `30 days` caption would only repeat it. A
+                                    Mac whose logs don't reach back that far
+                                    simply charts fewer days; one with no local
+                                    history at all gets `No local usage yet`
+                                    instead of a flat line through zero.
+
+                                    The plot carries a small margin above and
+                                    below — it is the only element in the
+                                    popover that is a picture rather than a row
+                                    of text, and flush against the title and
+                                    legend it reads as part of them. Vertical
+                                    only: it spans the full content width like
+                                    every other row, so a sideways inset would
+                                    pull its axis out of that alignment.
+
+                                    No cache-read note here: the
                                     chart's numbers are a single window's
                                     per-source split, and "By model" (fixed 24h)
                                     keeps that explanation on screen.
@@ -707,7 +748,7 @@ image if dropped:
   it never ticks). Without it every run rewrites the countdowns and dirties
   the tree. Rendering twice must leave `git status` clean.
 - **`NSHostingView`, not `ImageRenderer`.** Originally forced: what is now
-  the "By source" section had a `.pickerStyle(.segmented)` `Picker`, i.e. an
+  the "Tokens by source" section had a `.pickerStyle(.segmented)` `Picker`, i.e. an
   `NSSegmentedControl` behind an `NSViewRepresentable`, and `ImageRenderer`
   rasterizes SwiftUI's own drawing only, painting that control as its yellow
   "unsupported view" placeholder. The picker is gone (that section is a chart
