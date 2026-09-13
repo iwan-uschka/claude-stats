@@ -30,9 +30,14 @@ final class AppModel: ObservableObject {
     /// other accounts exist isn't either.
     @Published var expandedOtherAccounts: Set<String> = []
     @Published private(set) var estimatedCostToday: Double?
-    /// Every ``TimeWindow``'s breakdown, all recomputed together by
-    /// `reloadBreakdown()` — the popover's "This Mac" table shows all three
-    /// side by side and reads straight out of here, one column per key.
+    /// Per-entrypoint breakdowns for every window in ``displayedWindows``,
+    /// recomputed together by `reloadBreakdown()` and read straight out of here
+    /// by the popover.
+    ///
+    /// Held as a dictionary, though only one window is displayed today, because
+    /// the set is a display decision that has changed twice already — the
+    /// "This Mac" table read all three at once, and before that a segmented
+    /// picker chose one key out of them.
     ///
     /// Precomputed rather than derived on demand because the summing walks tens
     /// of thousands of `UsageEvent`s on the main actor, which is not work to do
@@ -49,6 +54,12 @@ final class AppModel: ObservableObject {
     /// each popover render — the "By model" caption is about the section's
     /// numbers as a whole, and the popover re-renders every clock tick.
     @Published private(set) var modelUsageTotal: TokenUsage = .zero
+
+    /// Daily token history behind the popover's "By source" chart, covering
+    /// ``chartWindowDays``. Empty until the first reload, and on a Mac with no
+    /// local history at all — the section draws an empty state rather than a
+    /// flat line through zero.
+    @Published private(set) var dailyHistory: DailyUsageHistory = .empty
     @Published private(set) var usingSampleData: Bool
 
     /// Promo lines Claude Code has cached for its own rate-limit bars, shown
@@ -335,7 +346,7 @@ final class AppModel: ObservableObject {
     }
 
     /// The quota block's own section title — the counterpart of the literal
-    /// "This Mac" and "By model" titles next to it.
+    /// "By source" and "By model" titles next to it.
     ///
     /// Names the account the bars underneath describe, so the block announces
     /// itself the way the other two sections do. Two rules decide the wording:
@@ -434,26 +445,39 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Window the popover's charts cover. Thirty days is what the daily fold
+    /// can serve without touching retention, and about what fits at a readable
+    /// ~10 pt per day across the popover's width.
+    static let chartWindowDays = 30
+
+    /// Windows the popover actually shows a per-entrypoint number for.
+    ///
+    /// Just the five-hour one since the "This Mac" table became the "By source"
+    /// chart: `24h` and `7d` were integrals over ranges the chart's x-axis now
+    /// covers, so loading them every reload would be summing events nothing
+    /// displays.
+    static let displayedWindows: [TimeWindow] = [.fiveHour]
+
     private func reloadLocalStats() {
         do {
             estimatedCostToday = try usageStore.estimatedCostToday()
             modelUsage = try usageStore.modelUsage(last24h: true)
+            dailyHistory = try usageStore.dailyUsage(days: Self.chartWindowDays)
             localStatsError = nil
         } catch {
             localStatsError = error.localizedDescription
         }
     }
 
-    /// Recomputes all three windows at once — the "This Mac" table shows them
-    /// side by side, see ``breakdownsByWindow``. Called from every path where the underlying
-    /// events can have changed (`refresh()`, `updateUsageStore(_:)`,
-    /// `clearQuotaCache()`); no new cadence of its own.
+    /// Recomputes every window in ``displayedWindows`` at once. Called from
+    /// every path where the underlying events can have changed (`refresh()`,
+    /// `updateUsageStore(_:)`, `clearQuotaCache()`); no new cadence of its own.
     ///
     /// Delegates to ``UsageStoring/entrypointBreakdowns(for:)`` rather than
     /// looping ``UsageStoring/entrypointBreakdown(for:)`` per window —
-    /// `LocalLogUsageStore` sums all three in one walk of the widest window's
-    /// events instead of three separate walks, so this no longer pays for the
-    /// 7-day slice three times over on every reload.
+    /// `LocalLogUsageStore` sums them in one walk of the widest window's events
+    /// instead of one walk each, which mattered when the table showed three and
+    /// costs nothing now that it shows one.
     ///
     /// Assigned in one shot at the end so a window that throws part-way through
     /// never leaves a half-updated cache mixing two reloads' numbers. Defensive:
@@ -462,7 +486,7 @@ final class AppModel: ObservableObject {
     /// all-or-nothing per reload either way.
     private func reloadBreakdown() {
         do {
-            breakdownsByWindow = try usageStore.entrypointBreakdowns(for: TimeWindow.allCases)
+            breakdownsByWindow = try usageStore.entrypointBreakdowns(for: Self.displayedWindows)
             breakdownError = nil
         } catch {
             breakdownError = error.localizedDescription
@@ -510,14 +534,14 @@ extension AppModel {
             usageStore: store,
             promoNoticeProvider: MockPromoNoticeProvider(notices: promoNotices)
         )
-        // Nothing loads the breakdowns implicitly, so fill them in
-        // explicitly — one reload covers all three windows the table shows.
+        // Nothing loads the breakdowns implicitly, so fill them in explicitly.
         model.reloadBreakdown()
         model.snapshot = snapshot
         model.otherAccountSnapshots = otherAccounts
         model.promoNotices = promoNotices
         model.estimatedCostToday = try? store.estimatedCostToday()
         model.modelUsage = (try? store.modelUsage(last24h: true)) ?? []
+        model.dailyHistory = (try? store.dailyUsage(days: AppModel.chartWindowDays)) ?? .empty
         model.quotaError = error
         model.quotaWarning = warning
         return model

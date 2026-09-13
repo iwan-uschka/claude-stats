@@ -20,7 +20,7 @@ public enum Entrypoint: String, Sendable, Hashable, Codable, CaseIterable {
         self.init(rawValue: rawJSONLValue)
     }
 
-    /// Row label in the popover's "This Mac" breakdown.
+    /// Legend label in the popover's "By source" chart.
     public var displayName: String {
         switch self {
         case .cli: return "CLI"
@@ -33,8 +33,9 @@ public enum Entrypoint: String, Sendable, Hashable, Codable, CaseIterable {
     public static let displayOrder: [Entrypoint] = [.cli, .vscode, .sdkAgent]
 }
 
-/// One of the rolling windows the popover's "This Mac" table has a column
-/// for, and the slice `UsageStoring` sums over.
+/// One of the rolling windows `UsageStoring` sums over. The popover shows
+/// only ``fiveHour`` as a number today (the "By source" legend); the other two
+/// are still the slices its queries are expressed in.
 public enum TimeWindow: String, Sendable, Hashable, Codable, CaseIterable {
     case fiveHour = "5h"
     case twentyFourHour = "24h"

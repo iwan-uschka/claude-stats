@@ -404,7 +404,7 @@ Click opens a popover:
 ```
 ✓ me@example.com                cached
                                   ← the quota block's section title, the same
-                                    shape as "This Mac" and "By model" below:
+                                    shape as "By source" and "By model" below:
                                     title left, tag right. The title names the
                                     account the rows describe, from
                                     `~/.claude.json`'s `oauthAccount` (login
@@ -525,27 +525,61 @@ Usage credits ▨▨░░░░░░   €0.00 of €33.00
                                     bars above and still has a live window.
                                     Absent entirely on a one-account machine.
 
-This Mac                 5h     24h      7d
-CLI                     18k    120k    255M
-VS Code                3.4k     12k     40k
-SDK/agents            40.6k    310k    1.2M
-                                  ← one row per entrypoint, one column per
-                                    window — all three on screen at once, no
-                                    picker and no bars. The bars it replaced
-                                    were peak-relative, so they compared rows
+By source                          30 days
+  ▁▂▅▃▂▆█▅▃▂▄▆█▃▂▄▅█▃▂▁▂▄▅█▆▃▂▁▃
+● CLI 18k   ● VS Code 0   ● SDK 40.6k   5h
+                                  ← a stacked daily area chart of the last 30
+                                    days, one band per entrypoint, plus one
+                                    legend chip per band carrying that source's
+                                    **five-hour** token count.
+
+                                    This replaced a 3×3 table (one row per
+                                    entrypoint, one column per `TimeWindow`).
+                                    The `24h` and `7d` columns were integrals
+                                    over ranges the x-axis now covers — the
+                                    last point and the last seven — so they
+                                    went. `5h` did not: a daily chart has no
+                                    intra-day resolution, it is the only
+                                    sub-day reading in the popover, and it is
+                                    the machine-local counterpart to the
+                                    account-wide five-hour quota bar above. So
+                                    it survives as the legend's value rather
+                                    than as a column. (The table in turn had
+                                    replaced a segmented picker with
+                                    peak-relative bars, which compared rows
                                     inside one window and said nothing across
-                                    windows, which is the comparison this
-                                    section is read for. Row order comes from
-                                    the 7-day breakdown, so an entrypoint idle
-                                    today keeps its row; every entrypoint is
-                                    always listed, at 0 if need be. The counts
-                                    are primary ink like the labels; only the
-                                    `5h`/`24h`/`7d` headers are the secondary
-                                    caption. Hovering a cell shows that
-                                    window's full token split. No cache-read
-                                    note under this table: with three windows
-                                    on a row there is no single total for it to
-                                    caption.
+                                    windows.)
+
+                                    Monochrome — three opacities of the primary
+                                    ink, never three hues: colour in this
+                                    popover means a warning or the one brand
+                                    link. Bands are `.monotone`, never
+                                    `.catmullRom`: a spline through spiky daily
+                                    counts overshoots, and on a stack an
+                                    overshoot dips below the band underneath,
+                                    drawing usage that never happened.
+
+                                    Every entrypoint is always listed, at 0 if
+                                    need be — a silent source keeps a band and a
+                                    chip rather than vanishing. Hovering a chip
+                                    shows that source's full five-hour token
+                                    split, which is where the table's per-cell
+                                    tooltip went. Axes are hidden (no room at 44
+                                    pt, and the titles carry both windows: `30
+                                    days` for the chart, `5h` for the numbers),
+                                    so the chart carries a real
+                                    `AXChartDescriptor` — one series per source,
+                                    one point per day, y-axis reaching the
+                                    tallest *stacked* day — rather than being an
+                                    unlabelled image. The window label counts
+                                    the days actually charted: a Mac whose logs
+                                    don't reach back 30 days says `9 days`, and
+                                    one with no local history at all gets `No
+                                    local usage yet` instead of a flat line
+                                    through zero. No cache-read note here: the
+                                    chart's numbers are a single window's
+                                    per-source split, and "By model" (fixed 24h)
+                                    keeps that explanation on screen.
 
 By model (fixed 24h window)
   Sonnet   2.1M tok   $3.15
@@ -672,12 +706,12 @@ image if dropped:
   `Date` fed to both the snapshot and `PopoverClock(now:)` (never resumed, so
   it never ticks). Without it every run rewrites the countdowns and dirties
   the tree. Rendering twice must leave `git status` clean.
-- **`NSHostingView`, not `ImageRenderer`.** Originally forced: the "This Mac"
-  section had a `.pickerStyle(.segmented)` `Picker`, i.e. an
+- **`NSHostingView`, not `ImageRenderer`.** Originally forced: what is now
+  the "By source" section had a `.pickerStyle(.segmented)` `Picker`, i.e. an
   `NSSegmentedControl` behind an `NSViewRepresentable`, and `ImageRenderer`
   rasterizes SwiftUI's own drawing only, painting that control as its yellow
-  "unsupported view" placeholder. The picker is gone (that section is a plain
-  table now), and the hosting view is kept rather than re-litigated: it is the
+  "unsupported view" placeholder. The picker is gone (that section is a chart
+  now), and the hosting view is kept rather than re-litigated: it is the
   same AppKit draw path the shipping popover uses, and it is what carries the
   `NSAppearance` the next point needs — `ImageRenderer` offers a SwiftUI
   environment, not an AppKit appearance. So the

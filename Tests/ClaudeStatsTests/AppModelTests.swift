@@ -340,24 +340,52 @@ final class AppModelTests: XCTestCase {
         XCTAssertNotNil(model.snapshot)
     }
 
+    // MARK: - Daily history
+
+    /// The "By source" chart reads `dailyHistory` directly, so a reload has to
+    /// fill it — an empty one is the section's "no local usage yet" state, not
+    /// a "still loading" one, and the two must not be confused.
+    func testReloadFillsInTheDailyHistoryTheChartDraws() {
+        let model = makeModel(quota: ScriptedQuotaProvider(), store: MockUsageStore())
+        XCTAssertTrue(model.dailyHistory.isEmpty)
+
+        model.refresh(force: true)
+
+        XCTAssertEqual(model.dailyHistory.days.count, AppModel.chartWindowDays)
+        XCTAssertEqual(Set(model.dailyHistory.bySource.keys), Set(Entrypoint.allCases))
+    }
+
+    func testDailyHistoryFailureSetsTheLocalStatsErrorAndLeavesNoHistory() {
+        let model = makeModel(quota: ScriptedQuotaProvider(), store: FailingUsageStore())
+
+        model.refresh(force: true)
+
+        XCTAssertNotNil(model.localStatsError)
+        XCTAssertTrue(model.dailyHistory.isEmpty)
+    }
+
     // MARK: - Entrypoint breakdown
 
-    /// The "This Mac" table draws all three windows side by side and reads
-    /// straight out of `breakdownsByWindow`, so one reload has to leave a key
-    /// for every window — a missing one would render as an all-zero column
-    /// next to two populated ones.
-    func testOneReloadFillsInEveryWindowTheTableShows() throws {
+    /// The popover reads its per-source numbers straight out of
+    /// `breakdownsByWindow`, so one reload has to leave a key for every window
+    /// in ``AppModel/displayedWindows`` — a missing one renders as an all-zero
+    /// reading rather than as "not loaded".
+    ///
+    /// The call count is the other half: a window that is *not* displayed must
+    /// not be summed, and a displayed one must be summed once, not once per
+    /// render.
+    func testOneReloadFillsInEveryWindowTheChartShows() throws {
         let store = CountingUsageStore()
         let model = makeModel(quota: ScriptedQuotaProvider(), store: store)
         XCTAssertTrue(model.breakdownsByWindow.isEmpty)
 
         model.refresh(force: true)
 
-        XCTAssertEqual(store.breakdownCallCount, TimeWindow.allCases.count)
-        XCTAssertEqual(Set(store.requestedWindows), Set(TimeWindow.allCases))
+        XCTAssertEqual(store.breakdownCallCount, AppModel.displayedWindows.count)
+        XCTAssertEqual(Set(store.requestedWindows), Set(AppModel.displayedWindows))
         XCTAssertNil(model.breakdownError)
-        XCTAssertEqual(Set(model.breakdownsByWindow.keys), Set(TimeWindow.allCases))
-        for window in TimeWindow.allCases {
+        XCTAssertEqual(Set(model.breakdownsByWindow.keys), Set(AppModel.displayedWindows))
+        for window in AppModel.displayedWindows {
             let expected = try store.entrypointBreakdown(for: window)
             XCTAssertEqual(model.breakdownsByWindow[window], expected)
             XCTAssertEqual(model.breakdownsByWindow[window]?.window, window)
@@ -373,17 +401,19 @@ final class AppModelTests: XCTestCase {
         XCTAssertTrue(model.breakdownsByWindow.isEmpty)
     }
 
-    /// One window throwing must not leave a cache mixing the windows that
-    /// still succeeded with the previous reload's numbers — the whole
-    /// dictionary is assigned once, or not at all.
+    /// A window throwing must not leave a half-updated cache — the whole
+    /// dictionary is assigned once, or not at all. Trivial while
+    /// ``AppModel/displayedWindows`` holds one window, and deliberately kept:
+    /// that set has changed twice already, and the invariant is what makes
+    /// growing it safe.
     func testOneWindowFailingKeepsThePreviousBreakdownsIntact() throws {
         let store = CountingUsageStore()
         let model = makeModel(quota: ScriptedQuotaProvider(), store: store)
         model.refresh(force: true)
         let loaded = model.breakdownsByWindow
-        XCTAssertEqual(loaded.count, TimeWindow.allCases.count)
+        XCTAssertEqual(loaded.count, AppModel.displayedWindows.count)
 
-        store.failingWindow = .sevenDay
+        store.failingWindow = try XCTUnwrap(AppModel.displayedWindows.first)
         model.refresh(force: true)
 
         XCTAssertNotNil(model.breakdownError)

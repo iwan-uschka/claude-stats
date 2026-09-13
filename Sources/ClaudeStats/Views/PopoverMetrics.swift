@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Shared layout constants for the popover, so the label columns of the quota
-/// rows, the "This Mac" rows and the "By model" rows line up with each other.
+/// rows, the "By source" legend and the "By model" rows line up with each other.
 enum PopoverMetrics {
     static let popoverWidth: CGFloat = 340
     static let contentPadding: CGFloat = 14
@@ -34,22 +34,26 @@ enum PopoverMetrics {
     /// still ends flush with the countdowns above it.
     static let percentAndCountdownColumnWidth: CGFloat =
         percentColumnWidth + rowSpacing + countdownColumnWidth
-    /// Width of one window column in the "This Mac" table, which shows all
-    /// three windows side by side. Sized well past the widest count a row
-    /// realistically carries (`40.6k` is 30.3 pt at ``valueFont``, `255M`
-    /// less) so the three columns stay evenly spaced rather than sized to the
-    /// busiest day; label 80 + 3 × 56 + 4 × 8 of spacing still leaves slack
-    /// against 312 pt of content width.
-    static let windowColumnWidth: CGFloat = 56
     /// Width of the token column in the "By model" section — wider than a
-    /// "This Mac" column because the counts there carry a `tok` suffix and are
-    /// all-time rather than windowed.
+    /// "By source" legend number because the counts here carry a `tok` suffix
+    /// and are all-time rather than windowed.
     static let modelTokenColumnWidth: CGFloat = 98
     /// Width of the cost column in the "By model" section. Wide enough for
     /// 4-digit spend (`$1234.56`) — a heavy cache-read day can push a single
     /// model's estimate well past the `$3.15`-sized figures this used to be
     /// sized for.
     static let costColumnWidth: CGFloat = 76
+    /// Plot height of a popover chart. Deliberately small: the chart is here
+    /// for the shape of the last 30 days, and the exact numbers are in the
+    /// legend under it. Tall enough that a quiet day is still visibly above
+    /// zero, short enough that two sections plus the quota rows still fit
+    /// without the popover needing to scroll.
+    static let chartHeight: CGFloat = 44
+    /// Diameter of a legend swatch — the dot that ties a legend row to its band
+    /// in the chart.
+    static let legendSwatchSize: CGFloat = 6
+    /// Gap between a legend swatch and its label.
+    static let legendSwatchSpacing: CGFloat = 4
     static let rowSpacing: CGFloat = 8
     static let sectionSpacing: CGFloat = 10
     /// Gap between an account's active/inactive icon and its name.
@@ -59,7 +63,7 @@ enum PopoverMetrics {
     /// Gap above each *other*-account disclosure group, and between two of
     /// them. Deliberately double ``quotaRowSpacing``: the groups carry no
     /// divider of their own any more (a `Divider()` there read as a top-level
-    /// section break, the same rule that separates "This Mac" from "By model"),
+    /// section break, the same rule that separates "By source" from "By model"),
     /// so whitespace is the only thing left saying a collapsed row belongs to
     /// neither the bars above it nor the group below it.
     static let accountGroupSpacing: CGFloat = 12

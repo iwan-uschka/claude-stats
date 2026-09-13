@@ -29,7 +29,7 @@ struct PopoverView: View {
             header
             quotaSection
             Divider()
-            breakdownSection
+            sourceSection
             Divider()
             modelSection
             costSection
@@ -97,7 +97,7 @@ struct PopoverView: View {
     }
 
     /// The quota block's section title, plus the freshness tag on the same
-    /// line — the shape "This Mac" and "By model" already use, so the quota
+    /// line — the shape "By source" and "By model" already use, so the quota
     /// rows read as a titled section rather than as a preamble to the popover.
     ///
     /// The title names the active Anthropic account when something on disk
@@ -445,8 +445,8 @@ struct PopoverView: View {
 
     /// Explains a token total that replayed cache reads dominate, so the
     /// headline number doesn't read as fresh work. Only "By model" has one:
-    /// the "This Mac" table shows three windows per row and so has no single
-    /// total to caption.
+    /// "By source" captions a chart spanning 30 days with legend numbers from a
+    /// five-hour window, so it has no single total for a note to describe.
     private func cacheReadNoteLine(_ note: String) -> some View {
         Text(note)
             .font(PopoverMetrics.captionFont)
@@ -454,84 +454,92 @@ struct PopoverView: View {
             .fixedSize(horizontal: false, vertical: true)
     }
 
-    // MARK: - This Mac
+    // MARK: - By source
 
-    /// The local breakdown as a small table: one row per entrypoint, one
-    /// column per ``TimeWindow``, all three windows on screen at once.
+    /// Thirty days of local usage as a stacked chart, with one legend row of
+    /// numbers under it.
     ///
-    /// It used to be one window at a time behind a segmented picker, with a
-    /// peak-relative bar per row. The bars compared rows *within* one window
-    /// and said nothing across windows, which is the comparison this section
-    /// is actually read for ("is the SDK busier than the CLI, and is today
-    /// unusual?"). Three numeric columns answer both at once, in less height
-    /// than the picker alone took, and ``AppModel/breakdownsByWindow`` already
-    /// held every window — the picker only ever chose a key out of it.
+    /// This replaced a 3x3 table — one row per entrypoint, one column per
+    /// ``TimeWindow``. The `24h` and `7d` columns were integrals over ranges
+    /// the chart's x-axis now covers (the last point, the last seven), so they
+    /// went. `5h` did not: a daily chart has no intra-day resolution, it is the
+    /// only sub-day reading in the popover, and it is the machine-local
+    /// counterpart to the account-wide five-hour quota bar above — so it stays,
+    /// as the legend's value rather than as a column.
     ///
-    /// There is no cache-read note under this table: with three windows on one
-    /// row there is no single total for it to caption. "By model" (fixed 24h)
-    /// keeps that explanation on screen.
-    private var breakdownSection: some View {
+    /// The window label counts the days actually charted, which is fewer than
+    /// ``AppModel/chartWindowDays`` on a Mac whose logs don't go back that far.
+    private var sourceSection: some View {
         VStack(alignment: .leading, spacing: 6) {
-            breakdownTitleRow
-
-            VStack(alignment: .leading, spacing: 5) {
-                // Row order comes from the widest window, so an entrypoint
-                // that was quiet in the last five hours still has a row.
-                ForEach(breakdown(for: .sevenDay).orderedRows, id: \.entrypoint) { row in
-                    breakdownRow(row.entrypoint)
+            HStack {
+                Text("By source")
+                    .font(PopoverMetrics.sectionTitleFont)
+                Spacer()
+                if !model.dailyHistory.isEmpty {
+                    Text("\(model.dailyHistory.days.count) days")
+                        .font(PopoverMetrics.captionFont)
+                        .foregroundStyle(.secondary)
                 }
             }
-        }
-    }
 
-    /// Section title plus the three column headers, right-aligned over the
-    /// columns they label — caption and secondary, the same weight "By model"
-    /// gives its `fixed 24h` tag, so the headers read as labels rather than as
-    /// a fourth kind of number.
-    private var breakdownTitleRow: some View {
-        HStack(spacing: PopoverMetrics.rowSpacing) {
-            Text("This Mac")
-                .font(PopoverMetrics.sectionTitleFont)
-            Spacer(minLength: PopoverMetrics.rowSpacing)
-            ForEach(TimeWindow.allCases, id: \.self) { window in
-                Text(window.displayName)
+            if model.dailyHistory.isEmpty {
+                // A flat line through zero would read as "you stopped working"
+                // rather than "there is nothing here yet".
+                Text("No local usage yet")
                     .font(PopoverMetrics.captionFont)
                     .foregroundStyle(.secondary)
-                    .frame(width: PopoverMetrics.windowColumnWidth, alignment: .trailing)
+            } else {
+                DailyUsageChart(days: model.dailyHistory.days, series: sourceSeries)
+                sourceLegend
             }
         }
     }
 
-    /// One entrypoint's row: the label, then its token count in each window.
+    private var sourceSeries: [DailyUsageSeries] {
+        DailyUsageSeries.sources(from: model.dailyHistory)
+    }
+
+    /// One chip per source: swatch, label, and its five-hour token count.
     ///
-    /// A `Spacer` between label and numbers, not a wider label column: the
-    /// number block then hugs the right edge and lines up with the quota rows'
-    /// trailing columns however wide the labels get.
-    ///
-    /// Primary ink for the counts, like the labels — they are the content of
-    /// this section, not an annotation on it. Each cell keeps the full
-    /// input/output/cache split as its tooltip, which is where that detail
-    /// lived when the row had a single number.
-    private func breakdownRow(_ entrypoint: Entrypoint) -> some View {
-        HStack(spacing: PopoverMetrics.rowSpacing) {
+    /// Zipped against ``Entrypoint/displayOrder`` because
+    /// ``DailyUsageSeries/sources(from:)`` builds the bands in exactly that
+    /// order — pinned by a test, since the chip's number comes from the
+    /// entrypoint while its swatch comes from the band.
+    private var sourceLegend: some View {
+        HStack(spacing: 0) {
+            ForEach(Array(zip(Entrypoint.displayOrder, sourceSeries).enumerated()), id: \.offset) { index, pair in
+                if index > 0 { Spacer(minLength: PopoverMetrics.rowSpacing) }
+                legendChip(entrypoint: pair.0, band: pair.1)
+            }
+            Spacer(minLength: PopoverMetrics.rowSpacing)
+            // Labels every chip's number, the way the table's column headers
+            // labelled every cell under them.
+            Text(TimeWindow.fiveHour.displayName)
+                .font(PopoverMetrics.captionFont)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func legendChip(entrypoint: Entrypoint, band: DailyUsageSeries) -> some View {
+        let usage = breakdown(for: .fiveHour).usage(for: entrypoint)
+        return HStack(spacing: PopoverMetrics.legendSwatchSpacing) {
+            Circle()
+                .fill(Color.primary.opacity(band.shade))
+                .frame(width: PopoverMetrics.legendSwatchSize, height: PopoverMetrics.legendSwatchSize)
             Text(entrypoint.displayName)
                 .font(PopoverMetrics.bodyFont)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(width: PopoverMetrics.labelColumnWidth, alignment: .leading)
-            Spacer(minLength: PopoverMetrics.rowSpacing)
-            ForEach(TimeWindow.allCases, id: \.self) { window in
-                let usage = breakdown(for: window).usage(for: entrypoint)
-                Text(DisplayFormat.tokens(usage.totalTokens))
-                    .font(PopoverMetrics.valueFont)
-                    .frame(width: PopoverMetrics.windowColumnWidth, alignment: .trailing)
-                    // Per cell, not combined into one row element: a bare
-                    // "18k" announced on its own says neither which source nor
-                    // which window it belongs to.
-                    .accessibilityLabel("\(entrypoint.displayName), \(window.displayName)")
-                    .help(DisplayFormat.tokenSplit(usage))
-            }
+            Text(DisplayFormat.tokens(usage.totalTokens))
+                .font(PopoverMetrics.valueFont)
         }
+        .lineLimit(1)
+        // One element per source, like the table's cells: a bare "298.5M"
+        // announced on its own says neither which source nor which window.
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(entrypoint.displayName), \(TimeWindow.fiveHour.displayName)")
+        .accessibilityValue(DisplayFormat.tokens(usage.totalTokens))
+        // The full input/output/cache split lived on the table's cells; it
+        // moves here rather than being dropped.
+        .help(DisplayFormat.tokenSplit(usage))
     }
 
     /// The breakdown for one window, or an all-zero one before the first
