@@ -239,6 +239,36 @@ final class DailyUsageTests: XCTestCase {
         XCTAssertEqual(costs[1], costs[0] * 2, accuracy: 0.000_01)
     }
 
+    func testTodaysPointMatchesEstimatedCostToday() throws {
+        let store = makeStore(events: [
+            UsageEvent(
+                timestamp: try date("2026-07-14T09:00:00.000Z"),
+                entrypoint: .cli,
+                modelID: "claude-sonnet-5",
+                usage: TokenUsage(inputTokens: 1_000_000)
+            ),
+            UsageEvent(
+                timestamp: try date("2026-07-15T09:00:00.000Z"),
+                entrypoint: .cli,
+                modelID: "claude-opus-5",
+                usage: TokenUsage(inputTokens: 2_000_000)
+            ),
+        ])
+
+        // The popover draws the curve and the `Today` row under it from these
+        // two calls. Both count from the same local midnight, and today is
+        // always inside retention, so they cannot be allowed to disagree — a
+        // chart ending below the number printed beneath it reads as a bug in
+        // whichever the user trusts less.
+        let history = try store.dailyUsage(days: 30)
+        XCTAssertEqual(
+            try XCTUnwrap(history.total.last).estimatedCostUSD,
+            try store.estimatedCostToday(),
+            accuracy: 0.000_001
+        )
+        XCTAssertGreaterThan(try store.estimatedCostToday(), 0)
+    }
+
     // MARK: - Folded history
 
     func testFoldedCellsAndRetainedEventsCombineWithoutDoubleCounting() throws {
@@ -367,5 +397,22 @@ final class DailyUsageTests: XCTestCase {
             // or the two charts would contradict each other on \(day).
             XCTAssertLessThanOrEqual(abs(sources - models), 4, "day \(day)")
         }
+    }
+
+    func testMockCostTodayMatchesTheLastPointOfItsOwnSampleHistory() throws {
+        let now = Self.referenceNow
+        let store = MockUsageStore(calendar: Self.utcCalendar, now: { now })
+
+        // The same invariant the real store gets for free — see
+        // `testTodaysPointMatchesEstimatedCostToday`. Worth pinning on the mock
+        // too: the README screenshots are rendered from it, so a drift here
+        // ships a picture of the popover contradicting itself.
+        let history = try store.dailyUsage(days: 30)
+        XCTAssertEqual(
+            try XCTUnwrap(history.total.last).estimatedCostUSD,
+            try store.estimatedCostToday(),
+            accuracy: 0.000_001
+        )
+        XCTAssertGreaterThan(try store.estimatedCostToday(), 0)
     }
 }

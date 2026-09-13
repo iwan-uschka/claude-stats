@@ -78,6 +78,10 @@ enum PopoverMetrics {
     /// a `16. Aug.`-sized label at this chart's scale. Nothing is lost by it:
     /// the right edge of a trailing window is always today.
     static let chartXAxisEdgeMarginDays = 4
+    /// Stroke width of a single-series chart line. Heavier than a hairline so
+    /// the curve reads as data rather than as a gridline at 72 pt, and lighter
+    /// than 2 so a spiky day keeps its shape instead of blurring into a wedge.
+    static let chartLineWidth: CGFloat = 1.5
     /// Diameter of a legend swatch — the dot that ties a legend row to its band
     /// in the chart.
     static let legendSwatchSize: CGFloat = 6

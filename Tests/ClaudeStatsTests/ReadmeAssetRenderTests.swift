@@ -198,7 +198,7 @@ final class ReadmeAssetRenderTests: XCTestCase {
     /// section had a `.pickerStyle(.segmented)` `Picker`, an AppKit
     /// `NSSegmentedControl` behind an `NSViewRepresentable`, which
     /// `ImageRenderer` paints as SwiftUI's yellow "unsupported view"
-    /// placeholder. That picker is gone (the section is a plain table now), but
+    /// placeholder. That picker is gone (the section is a chart now), but
     /// the hosting view stays: it is the same AppKit draw path the shipping
     /// popover uses, and it is what carries the `NSAppearance` the next
     /// comment depends on — `ImageRenderer` exposes a SwiftUI environment, not

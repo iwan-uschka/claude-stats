@@ -359,6 +359,10 @@ Two independent tiers, deliberately decoupled:
      point, never a gap, or a line chart connects across it and draws usage
      that never happened — and the window is **shortened, never zero-padded**,
      when the corpus is younger than it was asked for.
+   - A cell carries **tokens and cost**, which is why "Est. cost" could be
+     added as a pure UI change: the spend was already in the buckets. Keep it
+     that way — a second accumulation for a second chart would mean a second
+     pass over the corpus.
 
 ### Explicit non-goals (v1)
 
@@ -632,7 +636,61 @@ By model (fixed 24h window)
                                     whole-percent share of it. The one place
                                     that explanation still appears.
 
-Est. cost today: $4.82
+Est. cost
+$6 ┤
+$4 ┤  ╱╲  ╱╲╱╲  ╱╲  ╱╲╱╲  ╱╲  ╱╲╱╲
+$0 ┼──┬───────┬───────┬───────┬────
+   16. Aug. 23. Aug. 30. Aug. 6. Sept.
+Today                              $3.05
+                                  ← a single line of estimated daily spend over
+                                    the same 30 days and the same x-ticks as
+                                    "Tokens by source" (both take them from
+                                    `PopoverChartAxis`, so a given x position
+                                    means one day in both plots).
+
+                                    A line, not a stacked area: one series with
+                                    nothing under it, and a filled band would
+                                    read as a fourth source rather than as a
+                                    different question. Same ink as the source
+                                    chart's top band — one visual weight for the
+                                    popover's own data, not a second palette.
+
+                                    `.monotone` for the reason the stacked chart
+                                    uses it, only sharper here: an overshoot
+                                    below the baseline draws **negative
+                                    dollars**. `chartYScale(includesZero:)` pins
+                                    zero into the domain so a quiet stretch
+                                    still sits visibly above the axis.
+
+                                    Y labels are `DisplayFormat.compactCost`,
+                                    not `cost` — axis ticks land on round
+                                    numbers and `$50.00` spends a third of the
+                                    popover's narrowest label on zeroes.
+                                    Decimals survive below `$10`, where `$2` and
+                                    `$2.50` are different readings.
+
+                                    "Est." moved from the row to the section
+                                    title, where it qualifies the chart too: a
+                                    curve invites reading the area under it as a
+                                    monthly bill, and this is a local estimate
+                                    from published per-token prices — on a
+                                    subscription, spend that was never charged.
+
+                                    The curve's last point *is* the `Today` row:
+                                    both count from the same local midnight on
+                                    the same calendar, and today is always
+                                    inside the retention window. Pinned by
+                                    `testTodaysPointMatchesEstimatedCostToday`,
+                                    and on the mock too, since the README
+                                    screenshots render from it.
+
+                                    Deliberately not a per-model chart. That was
+                                    the original plan and it lost: five bands
+                                    (four families plus unrecognised IDs)
+                                    against a three-shade monochrome palette,
+                                    and placing it above the `fixed 24h` rows
+                                    would have sharpened the window ambiguity
+                                    the tag only papers over.
 
 Refresh   Clear Quota Cache   Settings        Quit
                                   ← "Clear Quota Cache" deletes the statusline

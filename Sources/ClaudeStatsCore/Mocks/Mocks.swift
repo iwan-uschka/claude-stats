@@ -230,7 +230,7 @@ public struct MockUsageStore: UsageStoring {
         breakdowns: [TimeWindow: EntrypointBreakdown] = MockUsageStore.sampleBreakdowns,
         modelUsageLast24h: [ModelUsage] = MockUsageStore.sampleModelUsage,
         modelUsageAllTime: [ModelUsage]? = nil,
-        costToday: Double = 4.82,
+        costToday: Double = MockUsageStore.sampleCostToday,
         calendar: Calendar = .current,
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
@@ -251,6 +251,16 @@ public struct MockUsageStore: UsageStoring {
     }
 
     public func estimatedCostToday() throws -> Double { costToday }
+
+    /// Today's spend, taken from the same generator that draws the "Est. cost"
+    /// chart, so the curve's last point and the `Today` row under it cannot
+    /// disagree — the invariant the real store gets for free, both of its
+    /// numbers being events since the same local midnight.
+    ///
+    /// Derived rather than written out: a literal here drifts silently the
+    /// first time the fixture's token base or blended rate moves.
+    public static let sampleCostToday: Double =
+        sampleDailyUsage(days: 1).total.first?.estimatedCostUSD ?? 0
 
     public func dailyUsage(days: Int) throws -> DailyUsageHistory {
         MockUsageStore.sampleDailyUsage(days: days, now: now(), calendar: calendar)

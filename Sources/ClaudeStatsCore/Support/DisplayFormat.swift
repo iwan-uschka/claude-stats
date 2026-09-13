@@ -140,6 +140,44 @@ public enum DisplayFormat {
         String(format: "$%.2f", usd)
     }
 
+    /// USD sized for a chart axis label: `$0`, `$1.50`, `$48`, `$1.2k`.
+    ///
+    /// Not ``cost(_:)``. Axis ticks land on round numbers, and two forced
+    /// decimals turns every one of them into `$50.00` — a third of the label
+    /// spent on zeroes, on the one label the plot has to give up width for. The
+    /// precision that is dropped is precision the axis was never making a claim
+    /// about; the exact figure is the row under the chart.
+    ///
+    /// Decimals appear only below `$10`, where a tick of `$2` and a tick of
+    /// `$2.50` are different readings of the same day.
+    ///
+    /// `nil` for anything a cost axis cannot mean — non-finite, or past a
+    /// trillion dollars. Chart frameworks probe a formatter with values of
+    /// their own choosing, and `%f` on `Double.greatestFiniteMagnitude` is a
+    /// 300-digit label rather than a crash, which is worse: it renders.
+    public static func compactCost(_ usd: Double) -> String? {
+        guard usd.isFinite, abs(usd) < 1e12 else { return nil }
+        let magnitude = abs(usd)
+        let sign = usd < 0 ? "-" : ""
+        if magnitude >= 1_000 {
+            return "\(sign)$\(trimmingTrailingZeros(magnitude / 1_000, decimals: 1))k"
+        }
+        if magnitude >= 10 {
+            return "\(sign)$\(Int(magnitude.rounded()))"
+        }
+        return "\(sign)$\(trimmingTrailingZeros(magnitude, decimals: 2))"
+    }
+
+    /// `1.50` → `1.5`, `2.00` → `2`. Keeps an axis from labelling a round tick
+    /// with decimals it does not need.
+    private static func trimmingTrailingZeros(_ value: Double, decimals: Int) -> String {
+        var text = String(format: "%.\(decimals)f", value)
+        guard text.contains(".") else { return text }
+        while text.hasSuffix("0") { text.removeLast() }
+        if text.hasSuffix(".") { text.removeLast() }
+        return text
+    }
+
     // MARK: - Money
     //
     // Everything here is driven by the payload's own `currency` and `exponent`.

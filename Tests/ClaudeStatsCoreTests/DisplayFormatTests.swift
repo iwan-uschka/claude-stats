@@ -264,6 +264,49 @@ final class DisplayFormatTests: XCTestCase {
         XCTAssertEqual(DisplayFormat.cost(3.1), "$3.10")
     }
 
+    // MARK: - compactCost
+    //
+    // The "Est. cost" chart's y-axis. Ticks land on round numbers, so the cases
+    // that matter are the round ones — `$50.00` is what this exists to avoid.
+
+    func testCompactCostDropsDecimalsAtAndAboveTenDollars() {
+        XCTAssertEqual(DisplayFormat.compactCost(50), "$50")
+        XCTAssertEqual(DisplayFormat.compactCost(10), "$10")
+        XCTAssertEqual(DisplayFormat.compactCost(48.4), "$48")
+        XCTAssertEqual(DisplayFormat.compactCost(48.6), "$49")
+    }
+
+    func testCompactCostKeepsDecimalsBelowTenDollarsButNotTrailingZeros() {
+        // A $2 tick and a $2.50 tick are different readings of the same day,
+        // so the decimals have to survive down here — but `$2.00` does not.
+        XCTAssertEqual(DisplayFormat.compactCost(2), "$2")
+        XCTAssertEqual(DisplayFormat.compactCost(2.5), "$2.5")
+        XCTAssertEqual(DisplayFormat.compactCost(0.75), "$0.75")
+        XCTAssertEqual(DisplayFormat.compactCost(0.05), "$0.05")
+        XCTAssertEqual(DisplayFormat.compactCost(0), "$0")
+    }
+
+    func testCompactCostAbbreviatesThousands() {
+        XCTAssertEqual(DisplayFormat.compactCost(1_000), "$1k")
+        XCTAssertEqual(DisplayFormat.compactCost(1_234), "$1.2k")
+    }
+
+    func testCompactCostSignsNegatives() {
+        // A cost axis should never see one, but `.automatic` domains and axis
+        // probes both can — a bare `$2` for minus two dollars would be a lie.
+        XCTAssertEqual(DisplayFormat.compactCost(-2.5), "-$2.5")
+        XCTAssertEqual(DisplayFormat.compactCost(-50), "-$50")
+    }
+
+    func testCompactCostRefusesValuesAnAxisCannotMean() {
+        // Chart frameworks probe a formatter with values of their own choosing.
+        // `%f` on these is a 300-digit label, which renders — worse than a nil.
+        XCTAssertNil(DisplayFormat.compactCost(.nan))
+        XCTAssertNil(DisplayFormat.compactCost(.infinity))
+        XCTAssertNil(DisplayFormat.compactCost(-.infinity))
+        XCTAssertNil(DisplayFormat.compactCost(.greatestFiniteMagnitude))
+    }
+
     // MARK: - money
     //
     // Every case pins the locale: these assert the *currency* handling, and a

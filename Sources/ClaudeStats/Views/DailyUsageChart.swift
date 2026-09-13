@@ -22,10 +22,15 @@ struct DailyUsageSeries: Identifiable, Hashable {
     /// One point per day of ``DailyUsageChart/days``, same order.
     let points: [DailyUsagePoint]
 
+    /// The popover's chart ink, darkest first. Shared so a second chart can say
+    /// "the same weight as the source chart's top band" by construction rather
+    /// than by repeating a number.
+    static let shades: [Double] = [0.62, 0.40, 0.24]
+
     /// Ordered bands for the "Tokens by source" chart: display order, darkest
     /// band first, including sources that did nothing in the window.
     static func sources(from history: DailyUsageHistory) -> [DailyUsageSeries] {
-        let shades: [Double] = [0.62, 0.40, 0.24]
+        let shades = Self.shades
         return Entrypoint.displayOrder.enumerated().map { index, entrypoint in
             DailyUsageSeries(
                 label: entrypoint.displayName,
@@ -66,15 +71,8 @@ struct DailyUsageChart: View {
         }
     }
 
-    /// Days that get an x-axis tick: every seventh, stopping short of the
-    /// window's right edge so no label is truncated there. Always at least one
-    /// tick, so a corpus shorter than the margin still dates its chart.
-    var tickDays: [Date] {
-        guard let first = days.first else { return [] }
-        let last = days.count - 1 - PopoverMetrics.chartXAxisEdgeMarginDays
-        guard last > 0 else { return [first] }
-        return stride(from: 0, through: last, by: PopoverMetrics.chartXAxisStrideDays).map { days[$0] }
-    }
+    /// See ``PopoverChartAxis/tickDays(in:)``.
+    var tickDays: [Date] { PopoverChartAxis.tickDays(in: days) }
 
     var body: some View {
         Chart(records) { record in
@@ -188,6 +186,20 @@ struct DailyUsageChartDescriptor: AXChartDescriptorRepresentable {
     func updateChartDescriptor(_ descriptor: AXChartDescriptor) {
         // Every value here is derived from `days` and `series`, so SwiftUI
         // rebuilding this struct with new data is the whole update path.
+    }
+}
+
+/// X-axis rules shared by every dated chart in the popover, so two charts
+/// stacked in the same column can't end up ticking on different days.
+enum PopoverChartAxis {
+    /// Days that get an x-axis tick: every seventh, stopping short of the
+    /// window's right edge so no label is truncated there. Always at least one
+    /// tick, so a corpus shorter than the margin still dates its chart.
+    static func tickDays(in days: [Date]) -> [Date] {
+        guard let first = days.first else { return [] }
+        let last = days.count - 1 - PopoverMetrics.chartXAxisEdgeMarginDays
+        guard last > 0 else { return [first] }
+        return stride(from: 0, through: last, by: PopoverMetrics.chartXAxisStrideDays).map { days[$0] }
     }
 }
 

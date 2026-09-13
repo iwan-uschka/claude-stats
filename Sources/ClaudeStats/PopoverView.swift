@@ -32,6 +32,7 @@ struct PopoverView: View {
             sourceSection
             Divider()
             modelSection
+            Divider()
             costSection
             if model.usingSampleData {
                 sampleDataLine
@@ -555,9 +556,9 @@ struct PopoverView: View {
                 Text("By model")
                     .font(PopoverMetrics.sectionTitleFont)
                 Spacer()
-                // Fixed window on purpose, and tagged as such: the table
-                // above shows three windows, so "which window is this?" is a
-                // live question for the rows below it.
+                // Fixed window on purpose, and tagged as such: the chart
+                // above spans thirty dated days, so "which window is this?" is
+                // a live question for the rows below it.
                 Text("fixed 24h")
                     .font(PopoverMetrics.captionFont)
                     .foregroundStyle(.secondary)
@@ -583,13 +584,38 @@ struct PopoverView: View {
         }
     }
 
+    // MARK: - Est. cost
+
+    /// Thirty days of spend over today's exact figure.
+    ///
+    /// "Est." sits in the section title rather than on the row, where it now
+    /// qualifies the chart too. It has to: a curve invites reading the area
+    /// under it as a monthly bill, and this is a local estimate from published
+    /// per-token prices — on a subscription, spend that was never charged.
+    ///
+    /// The chart and the row can't disagree. Both count from local midnight on
+    /// the same calendar, and today is always inside the retention window, so
+    /// the curve's last point is the row's number.
     private var costSection: some View {
-        HStack {
-            Text("Est. cost today")
-                .font(PopoverMetrics.bodyFont)
-            Spacer()
-            Text(model.estimatedCostToday.map(DisplayFormat.cost) ?? "—")
-                .font(PopoverMetrics.valueFont)
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Est. cost")
+                .font(PopoverMetrics.sectionTitleFont)
+
+            if !model.dailyHistory.isEmpty {
+                DailyCostChart(
+                    days: model.dailyHistory.days,
+                    points: model.dailyHistory.total
+                )
+                .padding(.vertical, PopoverMetrics.chartMargin)
+            }
+
+            HStack {
+                Text("Today")
+                    .font(PopoverMetrics.bodyFont)
+                Spacer()
+                Text(model.estimatedCostToday.map(DisplayFormat.cost) ?? "—")
+                    .font(PopoverMetrics.valueFont)
+            }
         }
     }
 
