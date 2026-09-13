@@ -385,6 +385,15 @@ final class DisplayFormatTests: XCTestCase {
         XCTAssertEqual(DisplayFormat.percent(percentValue: 62.6), "63%")
     }
 
+    func testPercentShowsOneDecimalFrom99Percent() {
+        XCTAssertEqual(DisplayFormat.percent(percentValue: 99.4), "99.4%")
+        XCTAssertEqual(DisplayFormat.percent(percentValue: 99.96), "100%")
+        XCTAssertEqual(DisplayFormat.percent(percentValue: 99), "99%")
+        XCTAssertEqual(DisplayFormat.percent(percentValue: 98.96), "99%")
+        XCTAssertEqual(DisplayFormat.percent(percentValue: 100), "100%")
+        XCTAssertEqual(DisplayFormat.percent(percentValue: 104), "100%")
+    }
+
     // MARK: - clamping / bar geometry
 
     func testClamped01() {
