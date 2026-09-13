@@ -7,28 +7,44 @@ enum PopoverMetrics {
     static let contentPadding: CGFloat = 14
     /// Width of the leading label column shared by every row type.
     ///
-    /// 92, not the 84 the two fixed window labels needed: the scoped weekly rows
-    /// are labelled from the payload, and `"Sonnet (weekly)"` measures 84.7 pt at
-    /// ``bodyFont`` — it would have wrapped at 84. 92 clears every one-word model
-    /// name with margin; anything longer truncates (``WindowBarView`` pins its
-    /// label to one line) rather than growing the row to two lines.
-    static let labelColumnWidth: CGFloat = 92
+    /// 80, sized to the widest label that is not the app's own: the scoped
+    /// weekly rows are labelled from the payload, and `"Sonnet weekly"`
+    /// measures 76.2 pt at ``bodyFont`` (`"Usage credits"` 72.4, the two fixed
+    /// window labels far less). It was 92 while those rows read
+    /// `"Sonnet (weekly)"` and the fixed ones said `"5-hour window"`; dropping
+    /// the parentheses and the word "window" bought the bars 12 pt. A longer
+    /// model name truncates (``WindowBarView`` pins its label to one line)
+    /// rather than growing the row to two lines.
+    static let labelColumnWidth: CGFloat = 80
     /// Width of the percentage column on a quota row — widest label `99.9%`,
-    /// with margin over the 5-character monospaced-digit measurement.
-    static let percentColumnWidth: CGFloat = 40
-    /// Width of the trailing reset-countdown column (`resets in 2h 14m`).
-    static let countdownColumnWidth: CGFloat = 92
+    /// which measures 34.6 pt in the monospaced-digit ``valueFont``.
+    static let percentColumnWidth: CGFloat = 38
+    /// Width of the trailing reset-countdown column. Sized to the widest
+    /// string it ever holds, the `reset pending` placeholder (66.5 pt at
+    /// ``captionFont``); the countdowns themselves (`2h 14m`, `6d 23h`) are
+    /// under 45 pt. It was 92 while the column read `resets in 2h 14m`; the
+    /// width saved went to the bars. Not lower: the merged
+    /// ``percentAndCountdownColumnWidth`` must still hold a usage-credits
+    /// value such as `20,87 € of 33,00 €` (99.8 pt at ``valueFont``) on one
+    /// line — at 38 + 8 + 70 it has 116 pt for it.
+    static let countdownColumnWidth: CGFloat = 70
     /// The two trailing quota columns merged into one, for a row whose value is
     /// wider than a percentage and has no countdown to show — the usage-credits
     /// row's `€0.00 of €33.00`. Spans exactly the same pixels, so its value
     /// still ends flush with the countdowns above it.
     static let percentAndCountdownColumnWidth: CGFloat =
         percentColumnWidth + rowSpacing + countdownColumnWidth
-    /// Width of the trailing numeric column (token counts).
-    static let valueColumnWidth: CGFloat = 74
-    /// Width of the token column in the "By model" section — wider than
-    /// ``valueColumnWidth`` to fit the larger all-time token counts shown there.
-    static let modelTokenColumnWidth: CGFloat = valueColumnWidth + 24
+    /// Width of one window column in the "This Mac" table, which shows all
+    /// three windows side by side. Sized well past the widest count a row
+    /// realistically carries (`40.6k` is 30.3 pt at ``valueFont``, `255M`
+    /// less) so the three columns stay evenly spaced rather than sized to the
+    /// busiest day; label 80 + 3 × 56 + 4 × 8 of spacing still leaves slack
+    /// against 312 pt of content width.
+    static let windowColumnWidth: CGFloat = 56
+    /// Width of the token column in the "By model" section — wider than a
+    /// "This Mac" column because the counts there carry a `tok` suffix and are
+    /// all-time rather than windowed.
+    static let modelTokenColumnWidth: CGFloat = 98
     /// Width of the cost column in the "By model" section. Wide enough for
     /// 4-digit spend (`$1234.56`) — a heavy cache-read day can push a single
     /// model's estimate well past the `$3.15`-sized figures this used to be
@@ -36,6 +52,8 @@ enum PopoverMetrics {
     static let costColumnWidth: CGFloat = 76
     static let rowSpacing: CGFloat = 8
     static let sectionSpacing: CGFloat = 10
+    /// Gap between an account's active/inactive icon and its name.
+    static let accountMarkerSpacing: CGFloat = 4
     /// Vertical gap between the rows inside one section.
     static let quotaRowSpacing: CGFloat = 6
     /// Gap above each *other*-account disclosure group, and between two of

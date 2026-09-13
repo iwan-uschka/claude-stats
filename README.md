@@ -10,7 +10,7 @@ any), filled bottom-up. Click it for the popover:
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/screenshot-popover-dark.png">
-  <img alt="Menu bar glyph and the popover below it, showing 5-hour/7-day quota, a scoped weekly limit, usage credits, and the per-entrypoint and per-model breakdown" src="assets/screenshot-popover-light.png" width="420">
+  <img alt="Menu bar glyph and the popover below it, showing 5-hour/7-day quota, a scoped weekly limit, usage credits, a per-entrypoint table with 5h/24h/7d columns, and per-model totals" src="assets/screenshot-popover-light.png" width="420">
 </picture>
 
 ## Download
@@ -29,10 +29,10 @@ Pre-built releases (macOS app bundle, zipped) are available on the
 - Menu bar glyph showing 5-hour and 7-day quota usage plus a per-model weekly limit as three thin bars, tinted for light/dark mode automatically — the third bar is empty when Claude Code reports no scoped limit
 - A fourth, hatched bar for organisation usage credits, shown only while Claude Code reports any — most accounts never see it
 - Popover with per-window usage and reset countdowns, one row per per-model weekly limit Claude Code reports, and a usage-credits row showing money spent against the monthly cap (`€0.00 of €33.00`, in whatever currency the account is billed in)
-- Per-source breakdown (CLI / VS Code / SDK-agents) across 5h/24h/7d windows, and per-model token/cost totals
+- Per-source breakdown (CLI / VS Code / SDK-agents) as a table with the 5h, 24h and 7d windows side by side, and per-model token/cost totals
 - Local session-log parsing (`~/.claude/projects/*/*.jsonl`) — token counts and cost always available, no network or credentials needed
 - Live 5-hour/7-day quota percentage straight from Claude Code's own cached reading — no setup, no hook to install; the `statusLine` hook is optional and just makes it fresher — see [Quota source](#quota-source)
-- Account-aware: the quota section is titled with the Anthropic account Claude Code is logged in as (its login email), and any other account this Mac has readings for is listed below it as a collapsed `Inactive:` group you can open — swapping the global login no longer mixes two accounts' numbers
+- Account-aware: the quota section is titled with the Anthropic account Claude Code is logged in as (its login email), and any other account this Mac has readings for is listed below it as a collapsed row you can open with a click anywhere on it, marked with a cross against the active account's checkmark — swapping the global login no longer mixes two accounts' numbers
 - Claude Code's own rate-limit promo notices, shown below the quota bars they apply to, with any link in them clickable
 - FSEvents-driven refresh — updates on write, not on a poll timer
 
@@ -42,7 +42,7 @@ Full architecture and data-source design: see [AGENTS.md](AGENTS.md).
 
 **No setup required.** The popover's 5-hour/7-day percentage bars read Claude
 Code's own cached rate-limit numbers out of `~/.claude.json`, which it writes
-for itself — tagged `official (cached)` in the freshness line. Run Claude Code
+for itself — tagged `cached` next to the quota title. Run Claude Code
 once and the bars fill in. Claude Code refreshes that cache on its own
 schedule, so a reading can be an hour or more old; anything older than 60
 minutes is treated as stale.
@@ -56,7 +56,7 @@ app shows the exact before/after change to `~/.claude/settings.json`, backs the
 file up, and only edits the `statusLine` key (an existing statusline is
 wrapped, not replaced). **Remove** reverts it. Prefer doing it yourself?
 **Reveal Script in Finder** and follow the header comment. With the hook
-installed and freshly fired, the tag reads `official`.
+installed and freshly fired, the `cached` tag disappears.
 
 The statusline hook is the primary source and wins whenever it has a fresh
 reading; Claude Code's cached reading is the backup, used only when the hook is

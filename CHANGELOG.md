@@ -17,15 +17,30 @@
 - Accounts are labelled with the login email rather than the organisation name,
   which for a personal account is just the email with `'s Organization`
   appended.
-- Other accounts' readings are collapsed behind a disclosure, one per account,
-  closed by default, labelled `Inactive: <account>` — and the active account's
-  row is prefixed `Active:` while any of them are listed.
+- Other accounts' readings are collapsed under one row per account, closed by
+  default, marked with a cross icon — and the active account's title gets a
+  checkmark while any of them are listed.
 - The quota block now has a title row like "This Mac" and "By model": the
   account name on the left, the freshness tag on the right instead of on its
   own line under the bars.
 - Promo notices moved below the quota bars instead of between them.
 - "Clear Quota Cache" moved from the quota section into the footer, next to
   Refresh and Settings.
+- Reset countdowns show the bare time (`2h 14m`), without "resets in"; the
+  quota bars grew by the width that freed up.
+- An inactive account's rows open from a click anywhere on its row, which now
+  carries a trailing caret showing what a click will do (`⌄` reveal, `⌃`
+  collapse) and is set in the active account title's font, one shade dimmer.
+- The quota rows' labels lost the word "window" and the weekly rows their
+  parentheses (`5-hour`, `Sonnet weekly`); the bars took the width, growing
+  from 80 to 100 pt. Tooltips and VoiceOver still spell out "5-hour window".
+- "This Mac" is a table now: one row per source with the 5h, 24h and 7d token
+  counts side by side, instead of one window at a time behind a 5h/24h/7d
+  picker with a bar per row. The counts read in the same ink as their labels,
+  and hovering one still shows that window's full token split.
+- The freshness tag is gone: no `official`, no age, no `stale` suffix. A bare
+  `cached` marker appears next to the quota title while Claude Code's own
+  cached reading serves; a stale reading still shows the orange warning line.
 
 ### Fixed
 - Switching accounts no longer mixes in a stale reading from the previous

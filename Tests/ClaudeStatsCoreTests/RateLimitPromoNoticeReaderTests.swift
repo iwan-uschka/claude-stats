@@ -247,8 +247,15 @@ final class RateLimitPromoNoticeReaderTests: XCTestCase {
     }
 
     func testWindowKindTitleMatchesPopoverLabels() {
-        XCTAssertEqual(QuotaWindowKind.fiveHour.title, "5-hour window")
-        XCTAssertEqual(QuotaWindowKind.sevenDay.title, "7-day window")
+        XCTAssertEqual(QuotaWindowKind.fiveHour.title, "5-hour")
+        XCTAssertEqual(QuotaWindowKind.sevenDay.title, "7-day")
+    }
+
+    /// The row label is terse so the bars get the width; tooltips and
+    /// accessibility text, which compete with nothing, still say "window".
+    func testWindowKindSpokenTitleKeepsTheWordWindow() {
+        XCTAssertEqual(QuotaWindowKind.fiveHour.spokenTitle, "5-hour window")
+        XCTAssertEqual(QuotaWindowKind.sevenDay.spokenTitle, "7-day window")
     }
 
     /// Non-linkable text is a plain notice, not a dropped one.

@@ -53,8 +53,8 @@ final class AppModelTests: XCTestCase {
     }
 
     /// ``MockUsageStore``'s data, but counting the breakdown reads — the point
-    /// of precomputing all three windows is that switching the picker makes no
-    /// further read, which is only observable as a call count.
+    /// of summing all three windows in one reload is that rendering the table
+    /// makes no further read, which is only observable as a call count.
     /// `@unchecked Sendable` for the same reason as
     /// ``ScriptedPromoNoticeProvider``: `UsageStoring` is synchronous and only
     /// the single `@MainActor` test using one ever touches it.
@@ -340,9 +340,11 @@ final class AppModelTests: XCTestCase {
 
     // MARK: - Entrypoint breakdown
 
-    /// One reload fills in every window, so the picker has nothing left to
-    /// compute when it changes.
-    func testOneReloadPrecomputesEveryWindowsBreakdown() throws {
+    /// The "This Mac" table draws all three windows side by side and reads
+    /// straight out of `breakdownsByWindow`, so one reload has to leave a key
+    /// for every window — a missing one would render as an all-zero column
+    /// next to two populated ones.
+    func testOneReloadFillsInEveryWindowTheTableShows() throws {
         let store = CountingUsageStore()
         let model = makeModel(quota: ScriptedQuotaProvider(), store: store)
         XCTAssertTrue(model.breakdownsByWindow.isEmpty)
@@ -352,29 +354,12 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(store.breakdownCallCount, TimeWindow.allCases.count)
         XCTAssertEqual(Set(store.requestedWindows), Set(TimeWindow.allCases))
         XCTAssertNil(model.breakdownError)
+        XCTAssertEqual(Set(model.breakdownsByWindow.keys), Set(TimeWindow.allCases))
         for window in TimeWindow.allCases {
             let expected = try store.entrypointBreakdown(for: window)
-            model.selectedWindow = window
             XCTAssertEqual(model.breakdownsByWindow[window], expected)
-            XCTAssertEqual(model.breakdown, expected)
-            XCTAssertEqual(model.breakdown?.window, window)
+            XCTAssertEqual(model.breakdownsByWindow[window]?.window, window)
         }
-    }
-
-    /// The regression test for the picker stall: selecting a window is a
-    /// dictionary lookup, never a re-sum of tens of thousands of events on the
-    /// main actor.
-    func testSwitchingWindowsAfterAReloadReadsTheStoreAgainNever() {
-        let store = CountingUsageStore()
-        let model = makeModel(quota: ScriptedQuotaProvider(), store: store)
-        model.refresh(force: true)
-        let callsAfterReload = store.breakdownCallCount
-
-        model.selectedWindow = .twentyFourHour
-        model.selectedWindow = .sevenDay
-        model.selectedWindow = .fiveHour
-
-        XCTAssertEqual(store.breakdownCallCount, callsAfterReload)
     }
 
     func testBreakdownFailureSetsTheErrorAndLeavesNoBreakdown() {
@@ -383,7 +368,6 @@ final class AppModelTests: XCTestCase {
         model.refresh(force: true)
 
         XCTAssertNotNil(model.breakdownError)
-        XCTAssertNil(model.breakdown)
         XCTAssertTrue(model.breakdownsByWindow.isEmpty)
     }
 
@@ -575,21 +559,21 @@ final class AppModelTests: XCTestCase {
         var stamped = MockQuotaProvider.sampleSnapshot()
         stamped.account = Self.bitgrip
 
-        XCTAssertEqual(model.otherAccountTitle(for: stamped), "Inactive: Bitgrip")
+        XCTAssertEqual(model.otherAccountTitle(for: stamped), "Bitgrip")
         XCTAssertEqual(
             model.otherAccountTitle(for: MockQuotaProvider.sampleSnapshot()),
-            "Inactive: Unknown account"
+            "Unknown account"
         )
     }
 
     /// The quota section's own title, across all four states it has to cover.
     ///
-    /// The `Active:` prefix is the interesting half: it exists to contrast with
-    /// the `Inactive:` groups below, so on the one-account machine — every
-    /// machine until the user switches logins — the bare account name (or the
-    /// section's own name, when nothing on disk said whose reading this is) has
-    /// to win instead.
-    func testQuotaSectionTitleNamesTheAccountAndOnlyPrefixesItWhenThereAreOthers() async {
+    /// The checkmark marker is the interesting half: it exists to contrast
+    /// with the crossed inactive groups below, so on the one-account machine —
+    /// every machine until the user switches logins — it stays off and the
+    /// bare account name (or the section's own name, when nothing on disk said
+    /// whose reading this is) stands alone.
+    func testQuotaSectionTitleNamesTheAccountAndOnlyMarksItWhenThereAreOthers() async {
         var stamped = MockQuotaProvider.sampleSnapshot()
         stamped.account = Self.bitgrip
         let unstamped = MockQuotaProvider.sampleSnapshot()
@@ -609,58 +593,60 @@ final class AppModelTests: XCTestCase {
             return model
         }
 
-        // One account, stamped: the account's own name, no prefix.
+        // One account, stamped: the account's own name, no state marker.
         let alone = await titledModel(active: stamped, others: [])
         XCTAssertEqual(alone.snapshot?.account, Self.bitgrip)
         XCTAssertEqual(alone.quotaSectionTitle, "Bitgrip")
+        XCTAssertFalse(alone.showsAccountStateMarkers)
 
         // One account, unstamped: the section names itself rather than guessing.
         let anonymous = await titledModel(active: unstamped, others: [])
         XCTAssertEqual(anonymous.quotaSectionTitle, "Quota")
+        XCTAssertFalse(anonymous.showsAccountStateMarkers)
 
         // No snapshot at all is the same case — there is no account to name.
         let empty = await titledModel(active: nil, others: [])
         XCTAssertNil(empty.snapshot)
         XCTAssertEqual(empty.quotaSectionTitle, "Quota")
 
-        // Two accounts, stamped: prefixed, against the "Inactive:" group below.
+        // Two accounts, stamped: the name, with the checkmark marker on
+        // against the crossed inactive group below.
         let switched = await titledModel(active: stamped, others: [other])
         XCTAssertFalse(switched.otherAccountSnapshots.isEmpty)
-        XCTAssertEqual(switched.quotaSectionTitle, "Active: Bitgrip")
+        XCTAssertEqual(switched.quotaSectionTitle, "Bitgrip")
+        XCTAssertTrue(switched.showsAccountStateMarkers)
 
-        // Two accounts, and the active one's reading is unstamped: still
-        // prefixed — there is a contrast to draw — but it names nobody.
+        // Two accounts, and the active one's reading is unstamped: the marker
+        // still draws the contrast, and the title says it names nobody.
         let switchedAnonymous = await titledModel(active: unstamped, others: [other])
-        XCTAssertEqual(switchedAnonymous.quotaSectionTitle, "Active: Unknown account")
+        XCTAssertEqual(switchedAnonymous.quotaSectionTitle, "Unknown account")
+        XCTAssertTrue(switchedAnonymous.showsAccountStateMarkers)
     }
 
-    /// Every other-account group starts collapsed, and the disclosure binding
-    /// is the only thing that opens one — the popover rebuilds those rows on
-    /// every poll, so the open/closed state has to live on the model.
-    func testOtherAccountGroupsStartCollapsedAndToggleThroughTheBinding() {
+    /// Every other-account group starts collapsed, and toggling one leaves the
+    /// others alone — the popover rebuilds those rows on every poll, so the
+    /// open/closed state has to live on the model, keyed per group.
+    func testOtherAccountGroupsStartCollapsedAndToggleIndependently() {
         let model = makeModel(quota: ScriptedQuotaProvider())
         var stamped = MockQuotaProvider.sampleSnapshot()
         stamped.account = Self.bitgrip
         let unstamped = MockQuotaProvider.sampleSnapshot()
 
-        let stampedBinding = model.otherAccountExpansionBinding(for: stamped)
-        let unstampedBinding = model.otherAccountExpansionBinding(for: unstamped)
-
         XCTAssertTrue(model.expandedOtherAccounts.isEmpty)
-        XCTAssertFalse(stampedBinding.wrappedValue)
-        XCTAssertFalse(unstampedBinding.wrappedValue)
+        XCTAssertFalse(model.isOtherAccountExpanded(stamped))
+        XCTAssertFalse(model.isOtherAccountExpanded(unstamped))
 
-        stampedBinding.wrappedValue = true
-        XCTAssertTrue(stampedBinding.wrappedValue)
+        model.toggleOtherAccountExpansion(for: stamped)
+        XCTAssertTrue(model.isOtherAccountExpanded(stamped))
         XCTAssertEqual(model.expandedOtherAccounts, [Self.bitgrip.uuid])
         // One group opening must not open the others.
-        XCTAssertFalse(unstampedBinding.wrappedValue)
+        XCTAssertFalse(model.isOtherAccountExpanded(unstamped))
 
-        unstampedBinding.wrappedValue = true
+        model.toggleOtherAccountExpansion(for: unstamped)
         XCTAssertEqual(model.expandedOtherAccounts, [Self.bitgrip.uuid, "unknown"])
 
-        stampedBinding.wrappedValue = false
-        XCTAssertFalse(stampedBinding.wrappedValue)
+        model.toggleOtherAccountExpansion(for: stamped)
+        XCTAssertFalse(model.isOtherAccountExpanded(stamped))
         XCTAssertEqual(model.expandedOtherAccounts, ["unknown"])
     }
 
@@ -670,17 +656,34 @@ final class AppModelTests: XCTestCase {
         let model = makeModel(quota: ScriptedQuotaProvider())
         var first = MockQuotaProvider.sampleSnapshot()
         first.account = Self.bitgrip
-        model.otherAccountExpansionBinding(for: first).wrappedValue = true
+        model.toggleOtherAccountExpansion(for: first)
 
         // Same account, a different (fresher) reading — what a poll produces.
         var second = MockQuotaProvider.sampleSnapshot(now: Date().addingTimeInterval(60))
         second.account = Self.bitgrip
 
-        XCTAssertTrue(model.otherAccountExpansionBinding(for: second).wrappedValue)
+        XCTAssertTrue(model.isOtherAccountExpanded(second))
         XCTAssertFalse(
-            model.otherAccountExpansionBinding(for: MockQuotaProvider.sampleSnapshot()).wrappedValue,
+            model.isOtherAccountExpanded(MockQuotaProvider.sampleSnapshot()),
             "a different group must not inherit the open state"
         )
+    }
+
+    /// A click anywhere on an inactive account's row flips the group, and the
+    /// caret the row draws reads the same state back — the row is one button,
+    /// so the two can never disagree.
+    func testToggleOtherAccountExpansionFlipsTheGroupsState() {
+        let model = makeModel(quota: ScriptedQuotaProvider())
+        var snapshot = MockQuotaProvider.sampleSnapshot()
+        snapshot.account = Self.bitgrip
+
+        XCTAssertFalse(model.isOtherAccountExpanded(snapshot))
+        model.toggleOtherAccountExpansion(for: snapshot)
+        XCTAssertTrue(model.isOtherAccountExpanded(snapshot))
+        XCTAssertEqual(model.expandedOtherAccounts, [Self.bitgrip.uuid])
+        model.toggleOtherAccountExpansion(for: snapshot)
+        XCTAssertFalse(model.isOtherAccountExpanded(snapshot))
+        XCTAssertTrue(model.expandedOtherAccounts.isEmpty)
     }
 
     /// The other accounts' rows come from the same files the active account's

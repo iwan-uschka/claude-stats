@@ -25,25 +25,23 @@ final class AppModel: ObservableObject {
     ///
     /// Every group starts collapsed, so this is empty until something is
     /// opened. It lives on the model rather than in the view's `@State` so it
-    /// survives the popover closing and reopening, exactly like
-    /// ``selectedWindow``; it is deliberately not persisted across launches,
-    /// since which other accounts exist isn't either.
+    /// survives the popover closing and reopening, and a poll rebuilding the
+    /// rows; it is deliberately not persisted across launches, since which
+    /// other accounts exist isn't either.
     @Published var expandedOtherAccounts: Set<String> = []
     @Published private(set) var estimatedCostToday: Double?
     /// Every ``TimeWindow``'s breakdown, all recomputed together by
-    /// `reloadBreakdown()`. Precomputed rather than derived on demand because
-    /// the summing walks tens of thousands of `UsageEvent`s on the main actor:
-    /// doing it when the picker changes stalled the segmented control's own
-    /// selection animation for up to a second. The three windows cost one
-    /// reload each on the paths where the data can actually change; switching
-    /// windows now only picks a different key out of here.
+    /// `reloadBreakdown()` — the popover's "This Mac" table shows all three
+    /// side by side and reads straight out of here, one column per key.
+    ///
+    /// Precomputed rather than derived on demand because the summing walks tens
+    /// of thousands of `UsageEvent`s on the main actor, which is not work to do
+    /// while a popover is opening. The three windows cost one reload each on
+    /// the paths where the data can actually change, and
+    /// ``UsageStoring/entrypointBreakdowns(for:)`` sums them in a single walk.
+    /// Empty until the first successful reload; the view renders a missing key
+    /// as ``EntrypointBreakdown/empty(window:)``.
     @Published private(set) var breakdownsByWindow: [TimeWindow: EntrypointBreakdown] = [:]
-    /// The breakdown for the currently-selected window, or `nil` before the
-    /// first successful reload. Computed, not `@Published` — the views'
-    /// `objectWillChange` fires from ``breakdownsByWindow`` and
-    /// ``selectedWindow``, which is all SwiftUI needs (same shape as
-    /// ``activeErrors``).
-    var breakdown: EntrypointBreakdown? { breakdownsByWindow[selectedWindow] }
     @Published private(set) var modelUsage: [ModelUsage] = [] {
         didSet { modelUsageTotal = modelUsage.reduce(TokenUsage.zero) { $0 + $1.usage } }
     }
@@ -84,11 +82,6 @@ final class AppModel: ObservableObject {
     /// popover clears `snapshot` on a quota failure, so a masked `quotaError`
     /// would otherwise leave empty bars with no stated cause.
     var activeErrors: [String] { [localStatsError, breakdownError, quotaError].compactMap { $0 } }
-
-    /// Window selected by the "This Mac" toggle. Purely a choice of which
-    /// already-computed ``breakdownsByWindow`` entry to show — it triggers no
-    /// reload, so clicking the picker costs nothing but a dictionary lookup.
-    @Published var selectedWindow: TimeWindow = .fiveHour
 
     private let quotaProvider: any QuotaProviding
     private let promoNoticeProvider: any PromoNoticeProviding
@@ -350,25 +343,37 @@ final class AppModel: ObservableObject {
     /// - **The account's name, or the literal "Quota".** An unstamped reading
     ///   (or no reading at all) must not be labelled with a guessed account, so
     ///   the section falls back to naming itself rather than naming nobody.
-    /// - **The `Active:` prefix only exists when there is something to be
-    ///   active *against*** — i.e. when ``otherAccountSnapshots`` is non-empty
-    ///   and "Inactive:" groups follow. On the one-account machine, which is
-    ///   every machine until the user switches logins, the prefix would
-    ///   contrast with nothing and the bare name reads better.
+    /// - **"Unknown account" instead of "Quota" once other accounts are
+    ///   listed.** With inactive groups below, the title marks *which* login
+    ///   the bars belong to (see ``showsAccountStateMarkers``), so an unstamped
+    ///   active reading has to say it names nobody rather than hide behind
+    ///   the section name.
     ///
-    /// Lives here rather than in the view so all four combinations are
-    /// testable.
+    /// The active/inactive contrast itself is drawn by icons in the view, not
+    /// by words here. Lives here rather than in the view so all four
+    /// combinations are testable.
     var quotaSectionTitle: String {
         let name = snapshot?.account?.displayName
         guard !otherAccountSnapshots.isEmpty else { return name ?? "Quota" }
-        return "Active: \(name ?? "Unknown account")"
+        return name ?? "Unknown account"
     }
+
+    /// Whether the account titles carry their state icons — a checkmark on
+    /// the active account's title, a cross on every inactive group.
+    ///
+    /// Only when there is something to be active *against*: on the
+    /// one-account machine, which is every machine until the user switches
+    /// logins, a checkmark would contrast with nothing and the bare name
+    /// reads better. The inactive groups exist only in that same case, so
+    /// their crosses need no separate gate.
+    var showsAccountStateMarkers: Bool { !otherAccountSnapshots.isEmpty }
 
     /// What the popover calls one of the *other* accounts' disclosure groups.
     ///
-    /// Prefixed "Inactive:" against ``quotaSectionTitle``'s "Active:", so a
-    /// collapsed row says what it is without a number: these readings belong to
-    /// a login nobody is currently signed in as.
+    /// The bare account name; the view puts a cross icon in front of it,
+    /// against the checkmark on ``quotaSectionTitle``, so a collapsed row says
+    /// what it is without a number: these readings belong to a login nobody is
+    /// currently signed in as.
     ///
     /// An unstamped reading is genuinely "we don't know whose this is" — a
     /// cache file written before the hook script learned to stamp one — so it
@@ -376,7 +381,7 @@ final class AppModel: ObservableObject {
     /// account next to it. Lives here rather than in the view so both branches
     /// are testable.
     func otherAccountTitle(for snapshot: QuotaSnapshot) -> String {
-        "Inactive: \(snapshot.account?.displayName ?? "Unknown account")"
+        snapshot.account?.displayName ?? "Unknown account"
     }
 
     /// Stable key for one other-account group's expansion state.
@@ -388,25 +393,24 @@ final class AppModel: ObservableObject {
         snapshot.account?.uuid ?? "unknown"
     }
 
-    /// Two-way binding onto ``expandedOtherAccounts`` for one group's
-    /// `DisclosureGroup`.
+    /// Whether one other-account group is currently open.
     ///
-    /// A `Set` of open keys rather than a `Bool` per row because the rows are
-    /// rebuilt from the snapshots on every refresh: anything stored per view
-    /// would collapse the group the moment a poll lands.
-    func otherAccountExpansionBinding(for snapshot: QuotaSnapshot) -> Binding<Bool> {
+    /// A `Set` of open keys on the model rather than a `Bool` per row because
+    /// the rows are rebuilt from the snapshots on every refresh: anything
+    /// stored per view would collapse the group the moment a poll lands.
+    func isOtherAccountExpanded(_ snapshot: QuotaSnapshot) -> Bool {
+        expandedOtherAccounts.contains(Self.otherAccountKey(for: snapshot))
+    }
+
+    /// Flips one group open or closed — what a click anywhere on the inactive
+    /// account's row does, since the whole row is one button.
+    func toggleOtherAccountExpansion(for snapshot: QuotaSnapshot) {
         let key = Self.otherAccountKey(for: snapshot)
-        return Binding(
-            get: { [weak self] in self?.expandedOtherAccounts.contains(key) ?? false },
-            set: { [weak self] isExpanded in
-                guard let self else { return }
-                if isExpanded {
-                    self.expandedOtherAccounts.insert(key)
-                } else {
-                    self.expandedOtherAccounts.remove(key)
-                }
-            }
-        )
+        if expandedOtherAccounts.contains(key) {
+            expandedOtherAccounts.remove(key)
+        } else {
+            expandedOtherAccounts.insert(key)
+        }
     }
 
     /// The promo notice for one bar, or `nil` when there is none.
@@ -440,8 +444,8 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// Recomputes all three windows at once, not just ``selectedWindow`` — see
-    /// ``breakdownsByWindow``. Called from every path where the underlying
+    /// Recomputes all three windows at once — the "This Mac" table shows them
+    /// side by side, see ``breakdownsByWindow``. Called from every path where the underlying
     /// events can have changed (`refresh()`, `updateUsageStore(_:)`,
     /// `clearQuotaCache()`); no new cadence of its own.
     ///
@@ -478,7 +482,6 @@ extension AppModel {
     /// only same-file code can seed them synchronously — previews would otherwise
     /// render one frame of empty state before the async quota read lands.
     static func preview(
-        window: TimeWindow = .fiveHour,
         snapshot: QuotaSnapshot? = MockQuotaProvider.sampleSnapshot(),
         error: String? = nil,
         warning: String? = nil,
@@ -507,9 +510,8 @@ extension AppModel {
             usageStore: store,
             promoNoticeProvider: MockPromoNoticeProvider(notices: promoNotices)
         )
-        model.selectedWindow = window
-        // Selecting a window no longer loads anything, so the breakdowns have
-        // to be filled in explicitly — one reload covers all three windows.
+        // Nothing loads the breakdowns implicitly, so fill them in
+        // explicitly — one reload covers all three windows the table shows.
         model.reloadBreakdown()
         model.snapshot = snapshot
         model.otherAccountSnapshots = otherAccounts
@@ -561,7 +563,7 @@ extension AppModel {
     /// below renders the same call the renderer does.
     ///
     /// - Parameter now: pinned by the renderer so every time-derived string
-    ///   ("resets in …", "… ago") is byte-stable across runs; defaults to
+    ///   (the reset countdowns) is byte-stable across runs; defaults to
     ///   `Date()` for the canvas, which wants a live-looking clock.
     static func previewShowcase(now: Date = Date()) -> AppModel {
         preview(
@@ -611,7 +613,7 @@ extension AppModel {
             confidence: .official,
             capturedAt: now.addingTimeInterval(-42 * 60)
         )
-        let model = preview(window: .sevenDay, snapshot: snapshot)
+        let model = preview(snapshot: snapshot)
         model.quotaWarning = ClaudeStatsError
             .staleQuotaSource(snapshot: snapshot, age: 42 * 60)
             .localizedDescription

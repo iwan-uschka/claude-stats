@@ -54,7 +54,7 @@ final class DisplayFormatTests: XCTestCase {
     func testResetCountdownWording() {
         XCTAssertEqual(
             DisplayFormat.resetCountdown(2 * 3600 + 14 * 60),
-            "resets in 2h 14m"
+            "2h 14m"
         )
     }
 
@@ -72,7 +72,7 @@ final class DisplayFormatTests: XCTestCase {
         )
         XCTAssertEqual(
             DisplayFormat.resetCountdown(window.timeUntilReset(from: now)),
-            "resets in 2h 14m"
+            "2h 14m"
         )
     }
 
@@ -100,7 +100,7 @@ final class DisplayFormatTests: XCTestCase {
         )
 
         XCTAssertEqual(DisplayFormat.windowPercent(window), "62%")
-        XCTAssertEqual(DisplayFormat.windowCountdown(window, from: now), "resets in 2h 14m")
+        XCTAssertEqual(DisplayFormat.windowCountdown(window, from: now), "2h 14m")
     }
 
     /// A window that exists but reports no reset: "pending" for the two
@@ -129,39 +129,21 @@ final class DisplayFormatTests: XCTestCase {
         XCTAssertEqual(DisplayFormat.windowPercent(QuotaWindow(percentUsed: 0)), "0%")
     }
 
-    // MARK: - age
+    // MARK: - sourceTag
 
-    func testAgeWording() {
-        XCTAssertEqual(DisplayFormat.age(40), "40s ago")
-        XCTAssertEqual(DisplayFormat.age(5 * 60 + 30), "5m ago")
-        XCTAssertEqual(DisplayFormat.age(2 * 3600), "2h ago")
-        XCTAssertEqual(DisplayFormat.age(3 * 86_400 + 3600), "3d ago")
-    }
-
-    func testAgeCollapsesSubSecondAndNegativeToJustNow() {
-        XCTAssertEqual(DisplayFormat.age(0), "just now")
-        XCTAssertEqual(DisplayFormat.age(0.4), "just now")
-        XCTAssertEqual(DisplayFormat.age(-30), "just now")
-        XCTAssertEqual(DisplayFormat.age(.nan), "just now")
-    }
-
-    func testSourceTagMatchesTheMockupLine() {
-        XCTAssertEqual(
-            DisplayFormat.sourceTag(confidence: .official, age: 40),
-            "official · 40s ago"
-        )
+    /// Only the backup source is named: both carry Anthropic's numbers, so
+    /// "official" said nothing, while "cached" warns the reading may be old.
+    /// No age, no "stale" suffix — freshness is not part of the tag.
+    func testSourceTagNamesOnlyTheCachedSource() {
+        XCTAssertNil(DisplayFormat.sourceTag(confidence: .official))
+        XCTAssertEqual(DisplayFormat.sourceTag(confidence: .cachedOfficial), "cached")
+        XCTAssertNil(QuotaConfidence.official.tagLabel)
+        XCTAssertEqual(QuotaConfidence.cachedOfficial.tagLabel, "cached")
     }
 
     func testSourceTagReadsFromASnapshot() {
-        let now = Date()
-        let snapshot = MockQuotaProvider.sampleSnapshot(now: now)
-        XCTAssertEqual(
-            DisplayFormat.sourceTag(
-                confidence: snapshot.confidence,
-                age: snapshot.age(asOf: now)
-            ),
-            "official · 40s ago"
-        )
+        let snapshot = MockQuotaProvider.sampleSnapshot(now: Date())
+        XCTAssertNil(DisplayFormat.sourceTag(confidence: snapshot.confidence))
     }
 
     // MARK: - tokens
@@ -243,35 +225,6 @@ final class DisplayFormatTests: XCTestCase {
             DisplayFormat.cacheReadNote(total),
             "67% cache reads — billed at 1/10 the input rate"
         )
-    }
-
-    /// Mirrors the "This Mac" caption: it is computed from every entrypoint
-    /// row summed, so a quiet row that is cache-read-light can't suppress it.
-    func testCacheReadNoteOverSummedEntrypointRows() {
-        let breakdown = EntrypointBreakdown(
-            window: .fiveHour,
-            usageByEntrypoint: [
-                .cli: TokenUsage(inputTokens: 30_000, cacheReadInputTokens: 20_000),
-                .sdkAgent: TokenUsage(inputTokens: 10_000, cacheReadInputTokens: 60_000),
-            ]
-        )
-
-        XCTAssertEqual(
-            breakdown.totalUsage,
-            TokenUsage(inputTokens: 40_000, cacheReadInputTokens: 80_000)
-        )
-        XCTAssertEqual(
-            DisplayFormat.cacheReadNote(breakdown.totalUsage),
-            "67% cache reads — billed at 1/10 the input rate"
-        )
-
-        // A window with no cache-read dominance stays uncaptioned.
-        let fresh = EntrypointBreakdown(
-            window: .fiveHour,
-            usageByEntrypoint: [.cli: TokenUsage(inputTokens: 10_000, outputTokens: 5_000)]
-        )
-        XCTAssertNil(DisplayFormat.cacheReadNote(fresh.totalUsage))
-        XCTAssertNil(DisplayFormat.cacheReadNote(EntrypointBreakdown.empty(window: .fiveHour).totalUsage))
     }
 
     /// The share is rounded to a whole percent, both ways — the caption is a
@@ -451,27 +404,12 @@ final class DisplayFormatTests: XCTestCase {
         XCTAssertEqual(DisplayFormat.barFraction(value: -10, total: 100), 0)
     }
 
-    func testBreakdownRowsScaleAgainstThePeakRow() {
-        let breakdown = MockUsageStore.sampleBreakdowns[.twentyFourHour]!
-        let rows = breakdown.orderedRows
-        let peak = rows.map(\.usage.totalTokens).max() ?? 0
-        let fractions = rows.map {
-            DisplayFormat.barFraction(value: $0.usage.totalTokens, peak: peak)
-        }
-
-        // Exactly one row is full-width, and every row is inside 0...1.
-        XCTAssertEqual(fractions.filter { $0 == 1 }.count, 1)
-        XCTAssertTrue(fractions.allSatisfy { $0 >= 0 && $0 <= 1 })
-        // sdk-cli is the busiest entrypoint in the sample data.
-        XCTAssertEqual(rows.max { $0.usage.totalTokens < $1.usage.totalTokens }?.entrypoint, .sdkAgent)
-    }
-
-    func testEmptyBreakdownProducesAllZeroFractions() {
+    /// Every entrypoint keeps a row in the "This Mac" table, including the
+    /// ones with nothing in the window — an absent row would read as an
+    /// entrypoint this Mac has never used rather than an idle one.
+    func testEmptyBreakdownStillHasARowPerEntrypoint() {
         let rows = EntrypointBreakdown.empty(window: .fiveHour).orderedRows
-        let peak = rows.map(\.usage.totalTokens).max() ?? 0
-        XCTAssertEqual(rows.count, Entrypoint.displayOrder.count)
-        XCTAssertTrue(rows.allSatisfy {
-            DisplayFormat.barFraction(value: $0.usage.totalTokens, peak: peak) == 0
-        })
+        XCTAssertEqual(rows.map(\.entrypoint), Entrypoint.displayOrder)
+        XCTAssertTrue(rows.allSatisfy { $0.usage.totalTokens == 0 })
     }
 }

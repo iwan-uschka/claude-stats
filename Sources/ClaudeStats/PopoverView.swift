@@ -12,8 +12,8 @@ import SwiftUI
 struct PopoverView: View {
     @ObservedObject var model: AppModel
 
-    /// Drives the reset countdowns and the freshness tag off a single tick, so
-    /// they never disagree with each other. Injected rather than owned because
+    /// Drives the reset countdowns off a single tick, so the rows never
+    /// disagree with each other. Injected rather than owned because
     /// only ``StatusItemController`` knows when the popover is actually visible.
     @ObservedObject var clock: PopoverClock
 
@@ -110,12 +110,15 @@ struct PopoverView: View {
     /// about the numbers below, and the title row has the width for it.
     private var quotaTitleRow: some View {
         HStack {
-            Text(model.quotaSectionTitle)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .help(model.snapshot?.account != nil
-                    ? "Anthropic account these quota numbers belong to, as Claude Code's own state file names it."
-                    : "Claude Code's cache file for this account doesn't record which account it is.")
+            HStack(spacing: PopoverMetrics.accountMarkerSpacing) {
+                if model.showsAccountStateMarkers {
+                    accountStateMarker(active: true)
+                }
+                Text(model.quotaSectionTitle)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            .help(accountHelp(for: model.snapshot))
             Spacer(minLength: PopoverMetrics.rowSpacing)
             if let snapshot = model.snapshot {
                 sourceTagLine(for: snapshot)
@@ -144,13 +147,22 @@ struct PopoverView: View {
     /// One collapsed group per account this Mac has readings for *other* than
     /// the active one — what is left behind after switching the global login.
     ///
-    /// Each group is a ``DisclosureGroup`` that starts closed, so the popover's
-    /// height doesn't grow by a whole second account's worth of rows for
-    /// readings the user is not currently living in. The collapsed row is
-    /// `Inactive: <account>` and nothing else — no summary percentage, which
-    /// would be a number about an account the bars above aren't describing.
-    /// It pairs with the `Active:` prefix ``quotaTitleRow`` takes on once these
-    /// groups exist, so the two rows read as one list of accounts.
+    /// Each group starts closed, so the popover's height doesn't grow by a
+    /// whole second account's worth of rows for readings the user is not
+    /// currently living in. The collapsed row is a cross icon and the account
+    /// name, nothing else — no summary percentage, which would be a number
+    /// about an account the bars above aren't describing. It pairs with the
+    /// checkmark ``quotaTitleRow`` takes on once these groups exist, and is set
+    /// in the same ``PopoverMetrics/sectionTitleFont`` in the same primary ink,
+    /// so the two read as one list of accounts rather than as a section and a
+    /// footnote under it.
+    ///
+    /// The whole row is one plain `Button`, not a ``DisclosureGroup``: a
+    /// disclosure toggles from its chevron alone, and puts that chevron on the
+    /// left where it reports the group's *state*. Here the caret is trailing
+    /// and names the **action** instead — `chevron.down` on a closed row means
+    /// "reveal below", `chevron.up` on an open one means "collapse" — which is
+    /// the one thing a reader of a collapsed row wants to know.
     ///
     /// Separated by whitespace alone — ``PopoverMetrics/accountGroupSpacing``,
     /// no divider and no indent. A `Divider()` per group is what the popover
@@ -170,8 +182,8 @@ struct PopoverView: View {
     ///
     /// Which groups are open lives on ``AppModel/expandedOtherAccounts`` rather
     /// than in `@State` here, so it survives the popover being closed and
-    /// reopened the way ``AppModel/selectedWindow`` does — and is deliberately
-    /// not persisted across launches, since the set of other accounts isn't
+    /// reopened, and a poll rebuilding the rows — and is deliberately not
+    /// persisted across launches, since the set of other accounts isn't
     /// either.
     @ViewBuilder
     private var otherAccountsSection: some View {
@@ -181,29 +193,57 @@ struct PopoverView: View {
         if !model.otherAccountSnapshots.isEmpty {
             VStack(alignment: .leading, spacing: PopoverMetrics.accountGroupSpacing) {
                 ForEach(Array(model.otherAccountSnapshots.enumerated()), id: \.offset) { _, snapshot in
-                    DisclosureGroup(isExpanded: model.otherAccountExpansionBinding(for: snapshot)) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            WindowBarView(title: QuotaWindowKind.fiveHour.title, window: snapshot.fiveHour, now: now)
-                            WindowBarView(title: QuotaWindowKind.sevenDay.title, window: snapshot.sevenDay, now: now)
-                            ForEach(snapshot.scopedWeekly) { limit in
-                                scopedWeeklyRow(limit)
+                    let expanded = model.isOtherAccountExpanded(snapshot)
+                    VStack(alignment: .leading, spacing: PopoverMetrics.quotaRowSpacing) {
+                        Button {
+                            model.toggleOtherAccountExpansion(for: snapshot)
+                        } label: {
+                            HStack(spacing: PopoverMetrics.accountMarkerSpacing) {
+                                accountStateMarker(active: false)
+                                // An unstamped group is genuinely "we don't know", not a
+                                // nameless account — see `AppModel.otherAccountTitle(for:)`.
+                                Text(model.otherAccountTitle(for: snapshot))
+                                    .lineLimit(1)
+                                    .truncationMode(.tail)
+                                Spacer(minLength: PopoverMetrics.rowSpacing)
+                                // The caret names the action, not the state:
+                                // pointing down on a closed row because
+                                // clicking reveals rows below it, up on an open
+                                // one because clicking folds them away. It
+                                // inherits the row's ink, so it reads as part
+                                // of the label rather than as a control bolted
+                                // to its end.
+                                Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                                    .accessibilityHidden(true)
                             }
-                            if let credits = snapshot.usageCredits {
-                                usageCreditsRow(credits)
-                            }
-                            sourceTagLine(for: snapshot)
-                        }
-                    } label: {
-                        // An unstamped group is genuinely "we don't know", not a
-                        // nameless account — see `AppModel.otherAccountTitle(for:)`.
-                        Text(model.otherAccountTitle(for: snapshot))
-                            .font(PopoverMetrics.captionFont)
+                            .font(PopoverMetrics.sectionTitleFont)
+                            // Secondary ink on purpose, against the active
+                            // title's primary: same weight, one step dimmer, so
+                            // the row reads as an account heading that is not
+                            // the one the bars above describe. Icon, name and
+                            // caret all inherit it.
                             .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                            .help(snapshot.account != nil
-                                ? "Anthropic account these quota numbers belong to, as Claude Code's own state file names it."
-                                : "Claude Code's cache file for this account doesn't record which account it is.")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .help(accountHelp(for: snapshot))
+                        .accessibilityAddTraits(.isButton)
+                        .accessibilityValue(expanded ? "expanded" : "collapsed")
+
+                        if expanded {
+                            VStack(alignment: .leading, spacing: 4) {
+                                WindowBarView(title: QuotaWindowKind.fiveHour.title, window: snapshot.fiveHour, now: now)
+                                WindowBarView(title: QuotaWindowKind.sevenDay.title, window: snapshot.sevenDay, now: now)
+                                ForEach(snapshot.scopedWeekly) { limit in
+                                    scopedWeeklyRow(limit)
+                                }
+                                if let credits = snapshot.usageCredits {
+                                    usageCreditsRow(credits)
+                                }
+                                sourceTagLine(for: snapshot)
+                            }
+                        }
                     }
                 }
             }
@@ -241,7 +281,7 @@ struct PopoverView: View {
     /// does for the two account-wide bars.
     private func scopedWeeklyRow(_ limit: QuotaScopedLimit) -> some View {
         WindowBarView(
-            title: "\(limit.label) (weekly)",
+            title: "\(limit.label) weekly",
             window: limit.window,
             now: now,
             showsPendingResetPlaceholder: false
@@ -296,29 +336,53 @@ struct PopoverView: View {
         return text
     }
 
-    /// The freshness tag, carrying the `disabled_reason` tooltip when there is
-    /// one.
+    /// The source tag — `cached` while Claude Code's own cached reading
+    /// serves, nothing at all for a statusline capture. No age, no "stale":
+    /// freshness is not displayed; an over-threshold reading surfaces as the
+    /// orange warning line under the bars instead.
     ///
     /// Trailing on the active account's title row (see ``quotaTitleRow``) and
     /// at the foot of an expanded other-account group, which has no title row
-    /// of its own — each group's readings age independently, so each carries
-    /// its own tag rather than borrowing the active account's.
-    ///
-    /// That reason has nowhere else to go: with no credits there is no credits
-    /// row to hang it on, and it must not become an error line — "credits are
-    /// off" is a normal configuration, not a fault. `.help` is only attached
-    /// when a reason exists, so the tag never shows an empty tooltip.
+    /// of its own. Those groups come from statusline files, so in practice
+    /// the foot stays empty; it is rendered from the same rule so the two
+    /// places can't drift.
     @ViewBuilder
     private func sourceTagLine(for snapshot: QuotaSnapshot) -> some View {
-        let tag = Text(sourceTag(for: snapshot))
-            .font(PopoverMetrics.captionFont)
-            .foregroundStyle(.secondary)
-
-        if snapshot.usageCredits == nil, let reason = snapshot.usageCreditsDisabledReason {
-            tag.help("Usage credits aren't being reported for this account: \(reason)")
-        } else {
-            tag
+        if let tag = DisplayFormat.sourceTag(confidence: snapshot.confidence) {
+            Text(tag)
+                .font(PopoverMetrics.captionFont)
+                .foregroundStyle(.secondary)
+                .help("Claude Code's own cached copy of the rate limits, from its state file — it can be an hour or more behind. The statusline hook, once installed, replaces it.")
         }
+    }
+
+    /// The active/inactive marker in front of an account name: the same
+    /// checkmark Settings shows next to "Statusline hook installed", and a
+    /// cross for a login nobody is signed in as. Deliberately uncoloured —
+    /// they inherit the title's ink — because "inactive" is a state, not a
+    /// fault; the shapes alone carry the contrast. Shown only while both
+    /// kinds exist, see ``AppModel/showsAccountStateMarkers``.
+    private func accountStateMarker(active: Bool) -> some View {
+        Image(systemName: active ? "checkmark.circle.fill" : "xmark.circle.fill")
+            .accessibilityLabel(active ? "Active account" : "Inactive account")
+    }
+
+    /// Tooltip for an account title or disclosure label: which account the
+    /// rows describe, plus the `disabled_reason` for missing usage credits
+    /// when the payload gave one.
+    ///
+    /// That reason has nowhere else to go: with no credits there is no credits
+    /// row to hang it on, the source tag is usually absent, and it must not
+    /// become an error line — "credits are off" is a normal configuration,
+    /// not a fault.
+    private func accountHelp(for snapshot: QuotaSnapshot?) -> String {
+        var text = snapshot?.account != nil
+            ? "Anthropic account these quota numbers belong to, as Claude Code's own state file names it."
+            : "Claude Code's cache file for this account doesn't record which account it is."
+        if let snapshot, snapshot.usageCredits == nil, let reason = snapshot.usageCreditsDisabledReason {
+            text += " Usage credits aren't being reported for this account: \(reason)"
+        }
+        return text
     }
 
     /// Claude Code's own promo line for a bar, with any URL in it clickable.
@@ -358,7 +422,7 @@ struct PopoverView: View {
             // so `.isLink` isn't just cosmetic: VoiceOver still needs an
             // explicit action, since collapsing to one element loses the
             // `AttributedString` link's own default activation.
-            .accessibilityLabel(notice.bar.title)
+            .accessibilityLabel(notice.bar.spokenTitle)
             .accessibilityValue(notice.text)
             .accessibilityAddTraits(notice.body.linkURL != nil ? .isLink : [])
             .accessibilityAction {
@@ -379,24 +443,10 @@ struct PopoverView: View {
         return model.quotaWarning != nil ? Color.orange : Color.secondary
     }
 
-    private func sourceTag(for snapshot: QuotaSnapshot) -> String {
-        let tag = DisplayFormat.sourceTag(
-            confidence: snapshot.confidence,
-            age: snapshot.age(asOf: now)
-        )
-        // Each source has its own cadence: the statusline hook fires per
-        // render (~10 min), Claude Code refreshes its cached blob on a much
-        // slower schedule (~60 min, sometimes hours) — one threshold would
-        // mislabel the other.
-        let threshold: TimeInterval = switch snapshot.confidence {
-        case .official: QuotaSnapshot.defaultStalenessThreshold
-        case .cachedOfficial: CachedUtilizationReader.defaultStalenessThreshold
-        }
-        return snapshot.isStale(asOf: now, threshold: threshold) ? tag + " · stale" : tag
-    }
-
     /// Explains a token total that replayed cache reads dominate, so the
-    /// headline number doesn't read as fresh work.
+    /// headline number doesn't read as fresh work. Only "By model" has one:
+    /// the "This Mac" table shows three windows per row and so has no single
+    /// total to caption.
     private func cacheReadNoteLine(_ note: String) -> some View {
         Text(note)
             .font(PopoverMetrics.captionFont)
@@ -406,42 +456,89 @@ struct PopoverView: View {
 
     // MARK: - This Mac
 
+    /// The local breakdown as a small table: one row per entrypoint, one
+    /// column per ``TimeWindow``, all three windows on screen at once.
+    ///
+    /// It used to be one window at a time behind a segmented picker, with a
+    /// peak-relative bar per row. The bars compared rows *within* one window
+    /// and said nothing across windows, which is the comparison this section
+    /// is actually read for ("is the SDK busier than the CLI, and is today
+    /// unusual?"). Three numeric columns answer both at once, in less height
+    /// than the picker alone took, and ``AppModel/breakdownsByWindow`` already
+    /// held every window — the picker only ever chose a key out of it.
+    ///
+    /// There is no cache-read note under this table: with three windows on one
+    /// row there is no single total for it to caption. "By model" (fixed 24h)
+    /// keeps that explanation on screen.
     private var breakdownSection: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text("This Mac")
-                    .font(PopoverMetrics.sectionTitleFont)
-                Spacer()
-                Picker("Window", selection: $model.selectedWindow) {
-                    ForEach(TimeWindow.allCases, id: \.self) { window in
-                        Text(window.displayName).tag(window)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .controlSize(.small)
-                .frame(width: 132)
-            }
-
-            let breakdown = model.breakdown ?? .empty(window: model.selectedWindow)
-            let rows = breakdown.orderedRows
-            let peak = rows.map(\.usage.totalTokens).max() ?? 0
+            breakdownTitleRow
 
             VStack(alignment: .leading, spacing: 5) {
-                ForEach(rows, id: \.entrypoint) { row in
-                    EntrypointRow(
-                        entrypoint: row.entrypoint,
-                        usage: row.usage,
-                        peakTokens: peak
-                    )
+                // Row order comes from the widest window, so an entrypoint
+                // that was quiet in the last five hours still has a row.
+                ForEach(breakdown(for: .sevenDay).orderedRows, id: \.entrypoint) { row in
+                    breakdownRow(row.entrypoint)
                 }
             }
-            // Every entrypoint row summed — like "By model", the caption is
-            // about the section's numbers as a whole, not any single row.
-            if let note = DisplayFormat.cacheReadNote(breakdown.totalUsage) {
-                cacheReadNoteLine(note)
+        }
+    }
+
+    /// Section title plus the three column headers, right-aligned over the
+    /// columns they label — caption and secondary, the same weight "By model"
+    /// gives its `fixed 24h` tag, so the headers read as labels rather than as
+    /// a fourth kind of number.
+    private var breakdownTitleRow: some View {
+        HStack(spacing: PopoverMetrics.rowSpacing) {
+            Text("This Mac")
+                .font(PopoverMetrics.sectionTitleFont)
+            Spacer(minLength: PopoverMetrics.rowSpacing)
+            ForEach(TimeWindow.allCases, id: \.self) { window in
+                Text(window.displayName)
+                    .font(PopoverMetrics.captionFont)
+                    .foregroundStyle(.secondary)
+                    .frame(width: PopoverMetrics.windowColumnWidth, alignment: .trailing)
             }
         }
+    }
+
+    /// One entrypoint's row: the label, then its token count in each window.
+    ///
+    /// A `Spacer` between label and numbers, not a wider label column: the
+    /// number block then hugs the right edge and lines up with the quota rows'
+    /// trailing columns however wide the labels get.
+    ///
+    /// Primary ink for the counts, like the labels — they are the content of
+    /// this section, not an annotation on it. Each cell keeps the full
+    /// input/output/cache split as its tooltip, which is where that detail
+    /// lived when the row had a single number.
+    private func breakdownRow(_ entrypoint: Entrypoint) -> some View {
+        HStack(spacing: PopoverMetrics.rowSpacing) {
+            Text(entrypoint.displayName)
+                .font(PopoverMetrics.bodyFont)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(width: PopoverMetrics.labelColumnWidth, alignment: .leading)
+            Spacer(minLength: PopoverMetrics.rowSpacing)
+            ForEach(TimeWindow.allCases, id: \.self) { window in
+                let usage = breakdown(for: window).usage(for: entrypoint)
+                Text(DisplayFormat.tokens(usage.totalTokens))
+                    .font(PopoverMetrics.valueFont)
+                    .frame(width: PopoverMetrics.windowColumnWidth, alignment: .trailing)
+                    // Per cell, not combined into one row element: a bare
+                    // "18k" announced on its own says neither which source nor
+                    // which window it belongs to.
+                    .accessibilityLabel("\(entrypoint.displayName), \(window.displayName)")
+                    .help(DisplayFormat.tokenSplit(usage))
+            }
+        }
+    }
+
+    /// The breakdown for one window, or an all-zero one before the first
+    /// reload has landed — every window is recomputed together, so a missing
+    /// key means "nothing read yet", never "this window is stale".
+    private func breakdown(for window: TimeWindow) -> EntrypointBreakdown {
+        model.breakdownsByWindow[window] ?? .empty(window: window)
     }
 
     // MARK: - By model
@@ -452,7 +549,9 @@ struct PopoverView: View {
                 Text("By model")
                     .font(PopoverMetrics.sectionTitleFont)
                 Spacer()
-                // Fixed window on purpose — not tied to the toggle above.
+                // Fixed window on purpose, and tagged as such: the table
+                // above shows three windows, so "which window is this?" is a
+                // live question for the rows below it.
                 Text("fixed 24h")
                     .font(PopoverMetrics.captionFont)
                     .foregroundStyle(.secondary)
@@ -597,10 +696,6 @@ struct PopoverView: View {
         )),
         clock: PopoverClock()
     )
-}
-
-#Preview("Popover — 24h breakdown") {
-    PopoverView(model: .preview(window: .twentyFourHour), clock: PopoverClock())
 }
 
 /// The state the README screenshot is rendered from — see

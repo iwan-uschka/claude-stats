@@ -54,12 +54,23 @@ public enum QuotaWindowKind: String, Sendable, Hashable, Codable, CaseIterable {
     }
 
     /// The popover's row label for this window.
+    ///
+    /// Deliberately terse — no "window" suffix. The label column is shared
+    /// with rows labelled from the payload (`Sonnet weekly`, `Usage credits`),
+    /// and every point the two fixed labels give up goes to the bars, which
+    /// are the thing the row is actually read for.
     public var title: String {
         switch self {
-        case .fiveHour: return "5-hour window"
-        case .sevenDay: return "7-day window"
+        case .fiveHour: return "5-hour"
+        case .sevenDay: return "7-day"
         }
     }
+
+    /// The same window spelled out, for tooltips and accessibility text.
+    ///
+    /// Nothing is competing for width there, and "5-hour" on its own reads as
+    /// a fragment when it is announced rather than seen in a column.
+    public var spokenTitle: String { "\(title) window" }
 }
 
 /// How trustworthy a ``QuotaSnapshot`` is.
@@ -81,8 +92,19 @@ public enum QuotaConfidence: String, Sendable, Codable {
     /// constantly for unrelated keys.
     case cachedOfficial = "official (cached)"
 
-    /// Label shown in the popover's freshness tag.
+    /// Full label, shown in Settings where there is room to spell it out.
     public var displayLabel: String { rawValue }
+
+    /// What the popover's source tag shows: nothing for a statusline capture
+    /// (both sources carry Anthropic's own numbers, so "official"
+    /// distinguished nothing), `cached` for the backup — the one fact worth a
+    /// word, because that reading can be an hour behind.
+    public var tagLabel: String? {
+        switch self {
+        case .official: nil
+        case .cachedOfficial: "cached"
+        }
+    }
 }
 
 /// One scoped weekly sub-limit, as reported by a `weekly_scoped` entry in

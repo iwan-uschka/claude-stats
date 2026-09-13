@@ -52,31 +52,24 @@ public enum DisplayFormat {
         return "\(seconds)s"
     }
 
-    /// Countdown phrase for a quota window: `resets in 2h 14m`, or
-    /// `reset pending` once the deadline has passed / is unknown.
+    /// Countdown for a quota window: `2h 14m`, or `reset pending` once the
+    /// deadline has passed / is unknown. Bare duration, no "resets in" — the
+    /// column sits to the right of a bar labelled "window", so the time alone
+    /// reads as the time until it resets.
     public static func resetCountdown(_ interval: TimeInterval?) -> String {
         guard let interval, interval > 0 else { return "reset pending" }
-        return "resets in \(duration(interval))"
+        return duration(interval)
     }
 
-    /// Freshness suffix for the confidence tag: `40s ago`, `5m ago`, `2h ago`,
-    /// `3d ago`, or `just now` for anything under a second (including clock
-    /// skew that makes the age negative).
-    public static func age(_ interval: TimeInterval) -> String {
-        guard interval >= 1, interval.isFinite else { return "just now" }
-
-        let total = Int(interval.rounded(.down))
-        if total < 60 { return "\(total)s ago" }
-        if total < 3_600 { return "\(total / 60)m ago" }
-        if total < 86_400 { return "\(total / 3_600)h ago" }
-        return "\(total / 86_400)d ago"
-    }
-
-    /// The quota title row's confidence/freshness tag: `official · 40s ago`. No
-    /// `source:` prefix — it sits beside the account name in the title row, where
-    /// the prefix only added noise.
-    public static func sourceTag(confidence: QuotaConfidence, age: TimeInterval) -> String {
-        "\(confidence.displayLabel) · \(self.age(age))"
+    /// The quota title row's source tag: `nil` for a statusline capture,
+    /// `cached` for Claude Code's own cached copy. No age and no "stale"
+    /// suffix — the reading's freshness is not shown; an over-threshold
+    /// reading surfaces as the orange staleness warning line instead. Every
+    /// reading is Anthropic's own number, so "official" said nothing and is
+    /// left out; only the coarser backup source is named — see
+    /// ``QuotaConfidence/tagLabel``.
+    public static func sourceTag(confidence: QuotaConfidence) -> String? {
+        confidence.tagLabel
     }
 
     // MARK: - Numbers
@@ -270,9 +263,4 @@ public enum DisplayFormat {
         return clamped01(Double(value) / Double(total))
     }
 
-    /// Fraction of the largest row, for comparable per-row bars in a breakdown
-    /// table. Returns 0 for every row when all rows are zero.
-    public static func barFraction(value: Int, peak: Int) -> Double {
-        barFraction(value: value, total: peak)
-    }
 }

@@ -33,7 +33,8 @@ public enum Entrypoint: String, Sendable, Hashable, Codable, CaseIterable {
     public static let displayOrder: [Entrypoint] = [.cli, .vscode, .sdkAgent]
 }
 
-/// The rolling window selected by the "This Mac" breakdown toggle.
+/// One of the rolling windows the popover's "This Mac" table has a column
+/// for, and the slice `UsageStoring` sums over.
 public enum TimeWindow: String, Sendable, Hashable, Codable, CaseIterable {
     case fiveHour = "5h"
     case twentyFourHour = "24h"
@@ -79,8 +80,7 @@ public struct EntrypointBreakdown: Sendable, Hashable, Codable {
         usage(for: entrypoint).totalTokens
     }
 
-    /// Field-wise sum across all entrypoints — what the breakdown-wide
-    /// cache-read caption is computed from.
+    /// Field-wise sum across all entrypoints, split by token kind.
     public var totalUsage: TokenUsage {
         usageByEntrypoint.values.reduce(.zero, +)
     }

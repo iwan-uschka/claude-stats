@@ -106,14 +106,23 @@ Two independent tiers, deliberately decoupled:
      - **Every other account's readings are still carried**, through
        `QuotaProviding.otherAccountSnapshots()` — listed below the active
        account's rows, never gated on staleness, never an error, and left out
-       entirely for a group whose windows have all rolled over. Each group is a
-       **disclosure that starts collapsed**: the closed row is
-       `Inactive: <account>` alone, with no summary number (a percentage there
-       would be about an account the glyph and the bars above aren't
-       describing), and opening it reveals exactly the rows below. The active
-       account's own section title takes the matching `Active:` prefix, and only
-       while such a group exists — with nothing to contrast against, the bare
-       account name reads better. Which groups are open lives in
+       entirely for a group whose windows have all rolled over. Each group
+       **starts collapsed**: the closed row is a cross icon
+       (`xmark.circle.fill`, uncoloured), the account name, and a trailing
+       caret, with no summary number (a percentage there would be about an
+       account the glyph and the bars above aren't describing). The whole row
+       is a single plain `Button`, not a `DisclosureGroup` — clicking anywhere
+       on it reveals exactly the rows below. The caret shows the **action, not
+       the state**: `chevron.down` while closed (click to reveal), `chevron.up`
+       while open (click to collapse), in the row's own ink. The row is set in
+       `PopoverMetrics.sectionTitleFont` like the active account's title row,
+       but in secondary ink — same weight, one step dimmer — so the accounts
+       read as one list while the dimmer one is visibly not the account the
+       bars describe. The active account's own section title takes the
+       matching checkmark (`checkmark.circle.fill`, the icon Settings uses next
+       to "Statusline hook installed", uncoloured here), and only while such a
+       group exists (`AppModel.showsAccountStateMarkers`) — with nothing to
+       contrast against, the bare account name reads better. Which groups are open lives in
        `AppModel.expandedOtherAccounts` (keyed by account uuid, `"unknown"` for
        the unstamped group), so it survives the popover closing and the rows
        being rebuilt by a poll — and is not persisted across launches, since
@@ -178,8 +187,8 @@ Two independent tiers, deliberately decoupled:
          off at any time). No credits means no popover row and no fourth glyph
          bar — no placeholder, nothing in `activeErrors`, no warning. The only
          thing ever surfaced about their absence is `disabled_reason`, carried
-         as `usageCreditsDisabledReason` and shown as a tooltip on the freshness
-         tag.
+         as `usageCreditsDisabledReason` and appended to the quota title's
+         tooltip (and to an inactive account's row tooltip).
        - **Money is formatted from the payload's own `currency` and
          `exponent`** via `DisplayFormat.money(_:locale:)` — never a hardcoded
          symbol, never a hardcoded `/100`, since a zero-decimal currency reports
@@ -375,7 +384,7 @@ Two independent tiers, deliberately decoupled:
 Click opens a popover:
 
 ```
-Active: me@example.com          official (cached) · 4m ago
+✓ me@example.com                cached
                                   ← the quota block's section title, the same
                                     shape as "This Mac" and "By model" below:
                                     title left, tag right. The title names the
@@ -385,24 +394,39 @@ Active: me@example.com          official (cached) · 4m ago
                                     short uuid) — only when something on disk
                                     says; an unstamped reading (or no reading at
                                     all) titles the section `Quota` rather than
-                                    guessing a name. The `Active:` prefix
+                                    guessing a name. The ✓ checkmark icon
                                     appears **only** when there is at least one
-                                    other account listed below to contrast with;
+                                    other account listed below to contrast with
+                                    (then an unstamped reading is titled
+                                    "Unknown account", not "Quota");
                                     on the one-account machine the bare name
                                     stands alone. Tooltip distinguishes a named
                                     account from the unstamped fallback.
-                                    The tag is the confidence + freshness one:
-                                    `official` (no suffix) once the statusline
-                                    hook is installed and has just fired, with a
-                                    `· stale` suffix past that source's
-                                    threshold. It also carries the
-                                    `disabled_reason` tooltip when the payload
+                                    The trailing tag is `cached` while Claude
+                                    Code's own cached reading serves, and
+                                    absent once the statusline hook is
+                                    installed and has fired — "official" is
+                                    never printed, both sources are. No age
+                                    and no `· stale` suffix: freshness is not
+                                    displayed; an over-threshold reading shows
+                                    the orange warning line instead. The title
+                                    also carries the `disabled_reason` tooltip
+                                    when the payload
                                     said why there are no usage credits — there
                                     is no credits row to hang it on, and it is
                                     never an error line.
-5-hour window     ▓▓▓▓▓▓░░ 62%     resets in 2h 14m
-7-day window       ▓▓▓░░░░░ 31%     resets in 4d 6h
-5-hour window     ░░░░░░░░  —       no reading
+5-hour      ▓▓▓▓▓▓░░░░ 62%    2h 14m
+7-day       ▓▓▓░░░░░░░ 31%    4d 6h
+                                  ← countdown column is the bare time until
+                                    the window resets; no "resets in" prefix.
+                                    The labels carry no "window" suffix and the
+                                    weekly rows no parentheses: the label column
+                                    is 80 pt, sized to the payload-labelled rows
+                                    (`Sonnet weekly`), and everything those two
+                                    gave up went to the bar, now 100 pt wide.
+                                    Tooltips and VoiceOver still say "5-hour
+                                    window" — nothing competes for width there.
+5-hour      ░░░░░░░░░░  —      no reading
                                   ← how either of the two rows above renders
                                     while no quota source reports that window
                                     (`QuotaSnapshot.fiveHour == nil`) — after
@@ -411,7 +435,7 @@ Active: me@example.com          official (cached) · 4m ago
                                     Empty track, em dash, "no reading": never
                                     0%, which would be a number nobody
                                     reported.
-Fable (weekly)     ░░░░░░░░  0%
+Fable weekly ░░░░░░░░░  0%
                                   ← one row per `weekly_scoped` entry in the
                                     payload's `limits[]`, labelled from
                                     `scope.model.display_name`. Only when the
@@ -421,7 +445,7 @@ Fable (weekly)     ░░░░░░░░  0%
                                     Claude Code's own scoped weekly limit and
                                     deliberately claims no denominator for the
                                     percentage.
-Usage credits      ▨▨░░░░░░   €0.00 of €33.00
+Usage credits ▨▨░░░░░░   €0.00 of €33.00
                                   ← org usage credits, from `utilization.spend`
                                     cross-checked against `extra_usage`. Only
                                     when credits are actually on — no credits
@@ -449,41 +473,71 @@ Usage credits      ▨▨░░░░░░   €0.00 of €33.00
                                     with no snapshot at all, the "no source yet"
                                     / just-cleared-cache line.
 
-› Inactive: other@example.com     ← one collapsed disclosure per *other*
-                                    account this Mac has readings for — what is
-                                    left behind after switching the global
-                                    login. Closed by default, showing the
-                                    account name and nothing else; no summary
-                                    percentage. Pairs with the `Active:` prefix
-                                    above. Separated from the bars and from each
-                                    other by whitespace only — no divider (that
-                                    line marks a top-level section) and no
-                                    indent.
-⌄ Inactive: other@example.com     ← expanded: the same rows as above, same `—` /
-5-hour window     ░░░░░░░░  —       "no reading" for an expired window, its own
-7-day window       ▓▓▓▓▓░░░ 56%     freshness tag at the foot (it has no title
-official · 3h ago                   row to hang one on), no usage-credits row
+✕ other@example.com            ⌄  ← one collapsed group per *other* account
+                                    this Mac has readings for — what is left
+                                    behind after switching the global login.
+                                    Closed by default, showing the ✕ cross icon
+                                    and the account name, nothing else; no
+                                    summary percentage. Set in the same
+                                    semibold section-title font as the active
+                                    account's title above but in secondary
+                                    ink (one step dimmer), so the two read as one list of
+                                    accounts rather than as a section with a
+                                    footnote under it. The whole row is one
+                                    button, not a disclosure: clicking anywhere
+                                    on it toggles the group. The caret is
+                                    trailing and names the *action*, not the
+                                    state — `⌄` on a closed row because
+                                    clicking reveals the rows below, `⌃` on an
+                                    open one because clicking folds them away.
+                                    Pairs with the ✓ checkmark above. Separated
+                                    from the bars and from each other by
+                                    whitespace only — no divider (that line
+                                    marks a top-level section) and no indent.
+✕ other@example.com            ⌃  ← expanded: the same rows as above, same `—` /
+5-hour      ░░░░░░░░░░  —           "no reading" for an expired window, a
+7-day       ▓▓▓▓▓░░░░░ 56%          `cached` tag at the foot only if that group
+                                    came from the backup source (it never does:
+                                    statusline files are the only per-account
+                                    readings), no usage-credits row
                                     (that data only ever exists for the active
-                                    account). Labelled "Inactive: Unknown
+                                    account). Labelled "✕ Unknown
                                     account" for the unstamped group, which is
                                     shown only when it isn't the one driving the
                                     bars above and still has a live window.
                                     Absent entirely on a one-account machine.
 
-This Mac               5h   24h   7d
-  CLI                   ▓░   ▓▓   ▓▓▓
-  VS Code                ░    ▓    ▓▓
-  SDK/agents            ▓▓   ▓▓▓  ▓▓▓▓
-81% cache reads — billed at 1/10 the input rate  ← only when cache reads are
-                                    >50% of the total, as a whole-percent share
-                                    of it; same line under the model rows.
-                                    Hovering a row shows the full token split.
+This Mac                 5h     24h      7d
+CLI                     18k    120k    255M
+VS Code                3.4k     12k     40k
+SDK/agents            40.6k    310k    1.2M
+                                  ← one row per entrypoint, one column per
+                                    window — all three on screen at once, no
+                                    picker and no bars. The bars it replaced
+                                    were peak-relative, so they compared rows
+                                    inside one window and said nothing across
+                                    windows, which is the comparison this
+                                    section is read for. Row order comes from
+                                    the 7-day breakdown, so an entrypoint idle
+                                    today keeps its row; every entrypoint is
+                                    always listed, at 0 if need be. The counts
+                                    are primary ink like the labels; only the
+                                    `5h`/`24h`/`7d` headers are the secondary
+                                    caption. Hovering a cell shows that
+                                    window's full token split. No cache-read
+                                    note under this table: with three windows
+                                    on a row there is no single total for it to
+                                    caption.
 
-By model (fixed 24h window, not tied to the 5h/24h/7d toggle above)
+By model (fixed 24h window)
   Sonnet   2.1M tok   $3.15
   Opus      180k tok   $2.70
   Haiku     640k tok   $0.19
   Fable      90k tok   $0.08
+81% cache reads — billed at 1/10 the input rate  ← only when cache reads are
+                                    >50% of the model rows' total, as a
+                                    whole-percent share of it. The one place
+                                    that explanation still appears.
 
 Est. cost today: $4.82
 
@@ -496,9 +550,13 @@ Refresh   Clear Quota Cache   Settings        Quit
                                     though it belonged to the last one.
 ```
 
-Freshness tag names the source that won: `official (cached)` (Claude Code's own
-cached reading, the zero-setup default) or `official` (a fresh statusline
-capture, once that hook is installed). No estimate fallback: with neither
+The source tag names the source only when it is the backup: `cached` (Claude
+Code's own cached reading, the zero-setup default) versus nothing at all (a
+statusline capture, once that hook is installed). Both are Anthropic's own
+numbers, so the word "official" is not printed, and neither the reading's age
+nor a "stale" marker is shown — staleness surfaces only as the orange warning
+line. Settings still spells out the full `QuotaConfidence.displayLabel`. No
+estimate fallback: with neither
 source reporting, the popover shows an error instead of a number; a
 real-but-old reading keeps the last numbers with an orange staleness warning.
 "Clear Quota Cache" deletes the statusline cache only — the whole per-session
@@ -594,12 +652,17 @@ image if dropped:
   can never disagree with the popover's rows.
 - **A pinned clock.** The PNGs are committed, so `renderDate` is a fixed
   `Date` fed to both the snapshot and `PopoverClock(now:)` (never resumed, so
-  it never ticks). Without it every run rewrites "resets in 2h 14m" and dirties
+  it never ticks). Without it every run rewrites the countdowns and dirties
   the tree. Rendering twice must leave `git status` clean.
-- **`NSHostingView`, not `ImageRenderer`.** The "This Mac" switcher is a
-  `.pickerStyle(.segmented)` `Picker`, i.e. an `NSSegmentedControl` behind an
-  `NSViewRepresentable`. `ImageRenderer` rasterizes SwiftUI's own drawing only
-  and paints that control as its yellow "unsupported view" placeholder. So the
+- **`NSHostingView`, not `ImageRenderer`.** Originally forced: the "This Mac"
+  section had a `.pickerStyle(.segmented)` `Picker`, i.e. an
+  `NSSegmentedControl` behind an `NSViewRepresentable`, and `ImageRenderer`
+  rasterizes SwiftUI's own drawing only, painting that control as its yellow
+  "unsupported view" placeholder. The picker is gone (that section is a plain
+  table now), and the hosting view is kept rather than re-litigated: it is the
+  same AppKit draw path the shipping popover uses, and it is what carries the
+  `NSAppearance` the next point needs — `ImageRenderer` offers a SwiftUI
+  environment, not an AppKit appearance. So the
   card is hosted in a borderless `NSWindow` and captured with
   `cacheDisplay(in:to:)` into an `NSBitmapImageRep` whose `pixelsWide/High` are
   4× its `size` — that ratio is where the 4× scale comes from.

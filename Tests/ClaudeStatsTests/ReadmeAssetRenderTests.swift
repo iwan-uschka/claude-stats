@@ -20,8 +20,8 @@ import XCTest
 /// with `bash scripts/render-readme-assets.sh`.
 @MainActor
 final class ReadmeAssetRenderTests: XCTestCase {
-    /// Pinned so every time-derived string in the popover ("resets in 2h 14m",
-    /// "40s ago") is identical on every run — the PNGs are committed, and a
+    /// Pinned so every time-derived string in the popover (the reset
+    /// countdowns, "2h 14m") is identical on every run — the PNGs are committed, and a
     /// live clock would dirty the tree on each render.
     private static let renderDate = Date(timeIntervalSince1970: 1_756_600_000)
 
@@ -194,12 +194,16 @@ final class ReadmeAssetRenderTests: XCTestCase {
     /// The popover card on its own, transparent outside the rounded body.
     ///
     /// Rendered through a real `NSHostingView` in an offscreen window rather
-    /// than `ImageRenderer`. `ImageRenderer` rasterizes SwiftUI's own drawing
-    /// only: the "This Mac" window switcher is a `.pickerStyle(.segmented)`
-    /// `Picker`, i.e. an AppKit `NSSegmentedControl` behind an
-    /// `NSViewRepresentable`, and the renderer paints it as SwiftUI's yellow
-    /// "unsupported view" placeholder. A hosting view in a window is the real
-    /// AppKit draw path, so the control renders as it actually looks.
+    /// than `ImageRenderer`. That started as a hard requirement — the "This Mac"
+    /// section had a `.pickerStyle(.segmented)` `Picker`, an AppKit
+    /// `NSSegmentedControl` behind an `NSViewRepresentable`, which
+    /// `ImageRenderer` paints as SwiftUI's yellow "unsupported view"
+    /// placeholder. That picker is gone (the section is a plain table now), but
+    /// the hosting view stays: it is the same AppKit draw path the shipping
+    /// popover uses, and it is what carries the `NSAppearance` the next
+    /// comment depends on — `ImageRenderer` exposes a SwiftUI environment, not
+    /// an AppKit appearance, and `PopoverMetrics.brandLinkColor` resolves
+    /// against the latter.
     ///
     /// The 4× comes from the `NSBitmapImageRep` being allocated at
     /// `pixelsWide/High = points × scale` while its `size` stays in points —

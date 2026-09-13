@@ -27,9 +27,9 @@ struct UsageBar: View {
     var fillOpacity: Double = 0.75
     var fillStyle: FillStyle = .solid
     /// Set when this bar isn't already wrapped by a labelled, combined
-    /// accessibility element (e.g. a caller using it standalone). Callers like
-    /// `WindowBarView`/`EntrypointRow` that already combine+label the whole row
-    /// should leave this `nil` so they aren't overridden with an empty label.
+    /// accessibility element (e.g. a caller using it standalone). A caller like
+    /// `WindowBarView`, which already combines and labels the whole row,
+    /// should leave this `nil` so it isn't overridden with an empty label.
     var accessibilityLabel: String? = nil
 
     private var clampedFraction: Double {
