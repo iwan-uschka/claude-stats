@@ -235,10 +235,10 @@ final class AppModel: ObservableObject {
 
     /// Deletes the statusline cache and re-polls until a fresh reading lands.
     ///
-    /// The escape hatch for a number that looks stuck or wrong — several
-    /// concurrent Claude Code sessions share one cache file, so any of them can
-    /// overwrite it with its own older reading. Plain "Refresh" can't help there:
-    /// it re-reads the very file that holds the bad value.
+    /// The escape hatch for a number that looks stuck or wrong. Per-session
+    /// cache files stop one quiet session from overwriting a busy one, but they
+    /// can't help when every file on disk is wrong. Plain "Refresh" can't help
+    /// there either: it re-reads the very files that hold the bad value.
     ///
     /// Only the statusline cache goes: `~/.claude.json` is Claude Code's own
     /// live state file (see `CachedUtilizationReader.clearCache()`), so the

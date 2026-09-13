@@ -258,8 +258,8 @@ struct PopoverView: View {
     }
 
     /// Deliberately not gated on `snapshot == nil`: the whole point is to clear a
-    /// value that looks live but is actually a stale write from another Claude
-    /// Code session, so it has to be reachable while a number is on screen.
+    /// value that looks live but is wrong — every session's cache file agreeing
+    /// on a bad number — so it has to be reachable while a number is on screen.
     private var clearCacheRow: some View {
         HStack {
             Spacer()

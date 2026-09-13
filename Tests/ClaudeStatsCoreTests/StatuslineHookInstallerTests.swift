@@ -528,8 +528,7 @@ final class StatuslineHookInstallerTests: XCTestCase {
 
     /// Without this, `StatuslineCacheReader` would keep serving the last real
     /// capture as `.official` for up to its staleness threshold after the
-    /// hook that used to refresh it is gone. Every session's file goes, not
-    /// just one — the cache is a directory now.
+    /// hook that used to refresh it is gone.
     func testUninstallDeletesTheStatuslineCache() throws {
         try writeCachedSession()
         _ = try installer.install(bundledScript: bundledScript)
@@ -547,13 +546,28 @@ final class StatuslineHookInstallerTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: sessionCacheURL.path))
     }
 
+    /// Every session's file goes, not just one — the cache is a directory, and
+    /// a regression that removed a single hardcoded name would leave the other.
+    func testUninstallDeletesEverySessionsCacheFileNotJustOne() throws {
+        try writeCachedSession()
+        try writeCachedSession(named: "session-b.json")
+        _ = try installer.install(bundledScript: bundledScript)
+
+        try installer.uninstall()
+
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: sessionCacheURL.deletingLastPathComponent().path))
+    }
+
     /// Stands in for a status line render having happened: one session's cache
-    /// file, where the reader looks for it.
-    private func writeCachedSession() throws {
-        try FileManager.default.createDirectory(
-            at: sessionCacheURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+    /// file, where the reader looks for it. `named` picks a second session's
+    /// file in the same directory.
+    private func writeCachedSession(named name: String? = nil) throws {
+        let sessionDirectory = sessionCacheURL.deletingLastPathComponent()
+        let url: URL = name.map { sessionDirectory.appendingPathComponent($0) } ?? sessionCacheURL
+        try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
         try Data(#"{"rate_limits": {"five_hour": {"used_percentage": 10}}}"#.utf8)
-            .write(to: sessionCacheURL)
+            .write(to: url)
     }
 
     func testUninstallNoOpWhenNoSettingsFileAtAll() throws {

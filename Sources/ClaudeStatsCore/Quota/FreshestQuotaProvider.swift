@@ -142,9 +142,10 @@ public struct FreshestQuotaProvider: QuotaProviding {
         return snapshot
     }
 
-    /// Clears the statusline cache only.
+    /// Clears the statusline cache only — the per-session directory plus the
+    /// legacy single file.
     ///
-    /// That file is this app's own; the other source is Claude Code's live
+    /// Those files are this app's own; the other source is Claude Code's live
     /// state file, which is not ours to delete — see
     /// ``CachedUtilizationReader/clearCache()``. So this stays the escape hatch
     /// for a stuck statusline reading, and after it runs the bars fall back to

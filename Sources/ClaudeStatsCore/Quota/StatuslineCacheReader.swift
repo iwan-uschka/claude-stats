@@ -54,7 +54,9 @@ import Foundation
 /// 2. The latest `resets_at` wins — a later reset is a later window.
 /// 3. Same `resets_at` (i.e. the same window) breaks toward the **highest**
 ///    percentage: utilization within one window never decreases, so a lower
-///    reading is the older one.
+///    reading is the older one. Identical percentages — two sessions polled
+///    before either made a new API call — break toward the most recently
+///    captured, which changes nothing on screen but keeps the pick stable.
 /// 4. A reading with no `resets_at` at all ranks below any reading that has
 ///    one; among themselves, the most recently captured wins.
 ///

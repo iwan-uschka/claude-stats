@@ -188,9 +188,10 @@ public struct StatuslineHookInstaller {
 
     /// Restores `statusLine` to whatever our script was wrapping (or removes
     /// the key entirely if it wasn't wrapping anything), deletes the installed
-    /// script, and deletes the statusline cache file (best-effort). No-op if
-    /// we're not currently installed. Only the `statusLine` member's text is
-    /// touched — see ``JSONObjectSurgery``.
+    /// script, and clears the statusline cache — the per-session directory and
+    /// the legacy single file (best-effort). No-op if we're not currently
+    /// installed. Only the `statusLine` member's text is touched — see
+    /// ``JSONObjectSurgery``.
     public func uninstall() throws {
         guard let command = try currentCommand(),
               let wrapping = wrappedOriginal(from: command)

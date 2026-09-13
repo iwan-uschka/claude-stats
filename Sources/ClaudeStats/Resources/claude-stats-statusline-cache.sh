@@ -104,7 +104,8 @@
 # ------------
 # One file per session, `statusline-cache/<session_id>.json` inside the cache
 # directory — `session_id` straight from the payload, stripped to
-# `[A-Za-z0-9._-]` so it can't escape that directory, and
+# `[A-Za-z0-9._-]` and of leading dots so it can't escape that directory or
+# hide in it, and
 # `unknown-session.json` when the payload names no session or `jq` isn't there
 # to read it out. Older copies of this script wrote a single
 # `statusline-cache.json` beside the directory; that file is no longer written,
@@ -288,8 +289,9 @@ extract_utilization() {
 # --- write the cache -------------------------------------------------------
 # Names this session's cache file. `session_id` is a documented, stable-per-
 # session top-level field of the payload; everything outside `[A-Za-z0-9._-]`
-# is stripped, so no `/` survives and the name can only ever land inside
-# `$session_cache_dir`. An empty result — no `session_id`, or nothing left of
+# is stripped, then any leading dots, so no `/` survives, the name can only
+# ever land inside `$session_cache_dir`, and it is never a hidden file the
+# reader would skip. An empty result — no `session_id`, or nothing left of
 # it — falls back to the shared name, as does the no-`jq` path: hand-parsing
 # JSON to find the id would cost more wrong answers than it saves files.
 session_cache_file() {
@@ -298,6 +300,10 @@ session_cache_file() {
     id=$(printf '%s' "$input" \
       | jq -r 'if (.session_id | type) == "string" then .session_id else empty end' 2>/dev/null)
     id=$(printf '%s' "$id" | LC_ALL=C tr -cd 'A-Za-z0-9._-')
+    # A leading dot would make a hidden file, which the reader skips on every
+    # read and therefore never prunes either — strip them. Plain parameter
+    # expansion in a loop, since `${id##+(.)}` needs extglob.
+    while [ "${id#.}" != "$id" ]; do id="${id#.}"; done
   fi
   [ -n "$id" ] || id="$fallback_session_name"
   printf '%s/%s.json' "$session_cache_dir" "$id"

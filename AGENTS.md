@@ -131,7 +131,8 @@ Two independent tiers, deliberately decoupled:
      - **One cache file per session, merged on read.** The hook writes
        `~/Library/Application Support/ClaudeStats/statusline-cache/<session_id>.json`
        — the payload's own top-level `session_id`, stripped to `[A-Za-z0-9._-]`
-       — not one shared file. Every running Claude Code process runs the hook
+       and of leading dots (a hidden file is one the reader never sees) — not
+       one shared file. Every running Claude Code process runs the hook
        and pipes in the rate limits *its own* last API response carried, while
        an idle session re-renders its status line on timers alone; one shared
        file therefore meant last writer wins, with hours-old numbers stamped as
