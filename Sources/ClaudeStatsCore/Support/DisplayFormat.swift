@@ -212,7 +212,8 @@ public enum DisplayFormat {
         return "\(Int(value.rounded()))%"
     }
 
-    /// Whole-percent label for an already-percent value, clamped to 0...100.
+    /// Percent label for an already-percent value, clamped to 0...100 — same
+    /// formatting as ``percent(fraction:)`` (one decimal place from 99% up).
     public static func percent(percentValue: Double) -> String {
         percent(fraction: percentValue / 100)
     }

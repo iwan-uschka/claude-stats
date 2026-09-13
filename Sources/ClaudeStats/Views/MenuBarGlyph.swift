@@ -116,14 +116,14 @@ enum MenuBarGlyph {
         let scope = scopedWeeklyLabel.map { "\($0) " } ?? ""
         let fiveHourText = fiveHourFraction == nil
             ? "five-hour unknown"
-            : "\(Int(bars[0].fraction * 100))% five-hour"
+            : "\(DisplayFormat.percent(fraction: bars[0].fraction)) five-hour"
         let sevenDayText = sevenDayFraction == nil
             ? "seven-day unknown"
-            : "\(Int(bars[1].fraction * 100))% seven-day"
+            : "\(DisplayFormat.percent(fraction: bars[1].fraction)) seven-day"
         var description = "Claude Stats\(devSuffix): \(fiveHourText), \(sevenDayText), "
-            + "\(Int(bars[2].fraction * 100))% \(scope)weekly usage"
+            + "\(DisplayFormat.percent(fraction: bars[2].fraction)) \(scope)weekly usage"
         if let usageCreditsFraction {
-            description += ", \(Int(DisplayFormat.clamped01(usageCreditsFraction) * 100))% usage credits"
+            description += ", \(DisplayFormat.percent(fraction: usageCreditsFraction)) usage credits"
         }
         image.accessibilityDescription = description
         return image

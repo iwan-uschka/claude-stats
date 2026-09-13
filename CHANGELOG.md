@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+- Quota percentages from 99% up to 100% show one decimal place (`99.4%`), so
+  "almost done" no longer reads as "done".
+
 ## [0.9.9] - 2026-09-13
 
 ### Changed
