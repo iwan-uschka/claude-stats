@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.9.9] - 2026-09-13
+
 ### Changed
 - The 5-hour and 7-day rows now show `—` and **no reading** instead of 0% when
   no quota source currently reports that window — the normal state just after a
