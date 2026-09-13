@@ -8,7 +8,8 @@
   window rolls over and before the next API call, since Claude Code drops a
   window from its payloads once it has reset. The matching bar in the menu bar
   glyph is drawn empty and its accessibility text says the window is unknown
-  rather than 0%.
+  rather than 0%, and the popover row's own bar is hidden from VoiceOver for
+  the same case so it doesn't announce a "0%" nobody reported.
 
 ### Fixed
 - The quota bars no longer show another session's stale numbers — or a
