@@ -95,7 +95,7 @@ public struct MockQuotaProvider: QuotaProviding {
     public static func sampleAccount(
         uuid: String = "0f9c1d3e-8a4b-4c2d-9e1f-6b7a8c9d0e1f",
         email: String? = "me@example.com",
-        organizationName: String? = "creativytool"
+        organizationName: String? = "Example Org"
     ) -> QuotaAccount {
         QuotaAccount(
             uuid: uuid,
@@ -119,7 +119,7 @@ public struct MockQuotaProvider: QuotaProviding {
             account: sampleAccount(
                 uuid: "7d2b6a10-3c55-4f8e-9a21-0b4c5d6e7f80",
                 email: "other@example.com",
-                organizationName: "Bitgrip"
+                organizationName: "Other Org"
             )
         )
     }

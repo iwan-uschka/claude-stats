@@ -151,7 +151,7 @@ final class StatuslineCacheScriptTests: XCTestCase {
     private let fullOAuthAccount = """
         { "accountUuid": "0f9c1d3e-8a4b-4c2d-9e1f-6b7a8c9d0e1f",
           "emailAddress": "me@example.com",
-          "organizationName": "Bitgrip",
+          "organizationName": "Other Org",
           "organizationUuid": "a1b2c3d4-0000-0000-0000-000000000000",
           "organizationRole": "admin" }
         """
@@ -292,7 +292,7 @@ final class StatuslineCacheScriptTests: XCTestCase {
         let account = try XCTUnwrap(try json(of: "aaaa-1111.json")["account"] as? [String: Any])
         XCTAssertEqual(account["uuid"] as? String, "0f9c1d3e-8a4b-4c2d-9e1f-6b7a8c9d0e1f")
         XCTAssertEqual(account["email"] as? String, "me@example.com")
-        XCTAssertEqual(account["organization_name"] as? String, "Bitgrip")
+        XCTAssertEqual(account["organization_name"] as? String, "Other Org")
         XCTAssertEqual(account["organization_uuid"] as? String,
                        "a1b2c3d4-0000-0000-0000-000000000000")
         // Only the four fields the app reads — the rest of `oauthAccount` stays
@@ -391,7 +391,7 @@ final class StatuslineCacheScriptTests: XCTestCase {
 
         var sidecar = try XCTUnwrap(
             JSONSerialization.jsonObject(with: Data(contentsOf: utilizationSidecarURL)) as? [String: Any])
-        XCTAssertEqual((sidecar["account"] as? [String: Any])?["organization_name"] as? String, "Bitgrip")
+        XCTAssertEqual((sidecar["account"] as? [String: Any])?["organization_name"] as? String, "Other Org")
         sidecar["account"] = ["uuid": "from-the-sidecar"]
         try JSONSerialization.data(withJSONObject: sidecar).write(to: utilizationSidecarURL)
 
@@ -421,7 +421,7 @@ final class StatuslineCacheScriptTests: XCTestCase {
         try run(payload(session: "bbbb-2222"))
 
         let account = try XCTUnwrap(try json(of: "bbbb-2222.json")["account"] as? [String: Any])
-        XCTAssertEqual(account["organization_name"] as? String, "Bitgrip")
+        XCTAssertEqual(account["organization_name"] as? String, "Other Org")
         // The re-parse rewrote the sidecar, so the entry now carries both keys
         // and the next render takes the fast path again.
         let rewritten = try XCTUnwrap(

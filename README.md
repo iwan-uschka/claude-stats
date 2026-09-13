@@ -10,7 +10,7 @@ any), filled bottom-up. Click it for the popover:
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/screenshot-popover-dark.png">
-  <img alt="Menu bar glyph and the popover below it, showing 5-hour/7-day quota, a scoped weekly limit, usage credits, a 30-day stacked chart of tokens by source with its 5h legend, per-model totals, and a 30-day estimated-cost line over today's figure" src="assets/screenshot-popover-light.png" width="420">
+  <img alt="Menu bar glyph and the popover below it, showing the signed-in account's 5-hour/7-day quota, a scoped weekly limit, usage credits, a second account collapsed below them, a 30-day stacked chart of tokens by source with its 5h legend, per-model totals, and a 30-day estimated-cost line over today's figure" src="assets/screenshot-popover-light.png" width="420">
 </picture>
 
 ## Download

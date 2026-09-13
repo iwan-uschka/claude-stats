@@ -483,28 +483,28 @@ final class FreshestQuotaProviderTests: XCTestCase {
         func readActiveAccount() -> ActiveAccountReading { reading }
     }
 
-    private let bitgrip = QuotaAccount(
-        uuid: "7d2b6a10-3c55-4f8e-9a21-0b4c5d6e7f80", organizationName: "Bitgrip")
-    private let creativytool = QuotaAccount(
-        uuid: "0f9c1d3e-8a4b-4c2d-9e1f-6b7a8c9d0e1f", organizationName: "creativytool")
+    private let otherOrg = QuotaAccount(
+        uuid: "7d2b6a10-3c55-4f8e-9a21-0b4c5d6e7f80", organizationName: "Other Org")
+    private let exampleOrg = QuotaAccount(
+        uuid: "0f9c1d3e-8a4b-4c2d-9e1f-6b7a8c9d0e1f", organizationName: "Example Org")
 
     /// Other accounts come from the statusline cache alone — the backup source
     /// reads a file that only ever describes the current login.
     func testOtherAccountSnapshotsComeFromTheStatuslineSource() async {
         var other = snapshot(.official, percent: 56, capturedAgo: 3_600)
-        other.account = bitgrip
+        other.account = otherOrg
         let provider = FreshestQuotaProvider(
             statusline: StubProvider(
                 .success(snapshot(.official, percent: 4, capturedAgo: 30)),
                 otherAccounts: [other]
             ),
             cachedState: StubProvider(.success(snapshot(.cachedOfficial, percent: 11, capturedAgo: 900))),
-            activeAccount: StubActiveAccount(reading: ActiveAccountReading(account: creativytool))
+            activeAccount: StubActiveAccount(reading: ActiveAccountReading(account: exampleOrg))
         )
 
         let others = await provider.otherAccountSnapshots()
 
-        XCTAssertEqual(others.map { $0.account }, [bitgrip])
+        XCTAssertEqual(others.map { $0.account }, [otherOrg])
         XCTAssertEqual(others.first?.fiveHour?.percentUsed, 56)
     }
 
@@ -514,17 +514,17 @@ final class FreshestQuotaProviderTests: XCTestCase {
     /// else's numbers.
     func testActiveAccountWithNoReadingAnywhereIsNoReadingNotAnError() async throws {
         var other = snapshot(.official, percent: 56, capturedAgo: 3_600)
-        other.account = bitgrip
+        other.account = otherOrg
         let provider = FreshestQuotaProvider(
             statusline: StubProvider(.failure(.noQuotaSourceAvailable), otherAccounts: [other]),
             cachedState: StubProvider(.failure(.noQuotaSourceAvailable)),
-            activeAccount: StubActiveAccount(reading: ActiveAccountReading(account: creativytool)),
+            activeAccount: StubActiveAccount(reading: ActiveAccountReading(account: exampleOrg)),
             now: { self.now }
         )
 
         let result = try await provider.currentSnapshot()
 
-        XCTAssertEqual(result.account, creativytool)
+        XCTAssertEqual(result.account, exampleOrg)
         XCTAssertNil(result.fiveHour)
         XCTAssertNil(result.sevenDay)
         // Dated now: what was observed now is the *absence*, and another
@@ -539,7 +539,7 @@ final class FreshestQuotaProviderTests: XCTestCase {
         let provider = FreshestQuotaProvider(
             statusline: StubProvider(.failure(.noQuotaSourceAvailable)),
             cachedState: StubProvider(.failure(.noQuotaSourceAvailable)),
-            activeAccount: StubActiveAccount(reading: ActiveAccountReading(account: creativytool))
+            activeAccount: StubActiveAccount(reading: ActiveAccountReading(account: exampleOrg))
         )
 
         await assertThrows(.noQuotaSourceAvailable) {
@@ -551,7 +551,7 @@ final class FreshestQuotaProviderTests: XCTestCase {
     /// an empty reading *for*, so the error stands.
     func testUnknownActiveAccountWithOtherReadingsStillThrows() async {
         var other = snapshot(.official, percent: 56, capturedAgo: 3_600)
-        other.account = bitgrip
+        other.account = otherOrg
         let provider = FreshestQuotaProvider(
             statusline: StubProvider(.failure(.noQuotaSourceAvailable), otherAccounts: [other]),
             cachedState: StubProvider(.failure(.noQuotaSourceAvailable)),
@@ -567,7 +567,7 @@ final class FreshestQuotaProviderTests: XCTestCase {
     /// not replaced by an empty "no reading" snapshot.
     func testStaleActiveReadingIsNotReplacedByAnEmptyOne() async {
         var other = snapshot(.official, percent: 56, capturedAgo: 3_600)
-        other.account = bitgrip
+        other.account = otherOrg
         let provider = FreshestQuotaProvider(
             statusline: StubProvider(
                 .failure(.staleQuotaSource(
@@ -575,7 +575,7 @@ final class FreshestQuotaProviderTests: XCTestCase {
                 otherAccounts: [other]
             ),
             cachedState: StubProvider(.failure(.noQuotaSourceAvailable)),
-            activeAccount: StubActiveAccount(reading: ActiveAccountReading(account: creativytool))
+            activeAccount: StubActiveAccount(reading: ActiveAccountReading(account: exampleOrg))
         )
 
         let carried = await assertThrowsStale(age: 1_200) {

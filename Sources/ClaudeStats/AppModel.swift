@@ -579,7 +579,15 @@ extension AppModel {
     }
 
     /// Everything the popover can draw at once: both fixed windows, the promo
-    /// notice, the scoped weekly row and a part-spent usage-credits bar.
+    /// notice, the scoped weekly row, a part-spent usage-credits bar, and two
+    /// accounts — the active one titling the quota section, the other collapsed
+    /// beneath it.
+    ///
+    /// The second account is here rather than only in ``previewTwoAccounts``
+    /// because the README screenshot is the one picture most readers see, and a
+    /// single-account shot says nothing about what a machine that has been
+    /// logged into two accounts looks like. Collapsed, which is the shipping
+    /// default — the screenshot shows the state the app actually opens in.
     ///
     /// The single source of truth for the README asset renderer
     /// (`Tests/ClaudeStatsTests/ReadmeAssetRenderTests.swift`), so the shipped
@@ -590,9 +598,12 @@ extension AppModel {
     ///   (the reset countdowns) is byte-stable across runs; defaults to
     ///   `Date()` for the canvas, which wants a live-looking clock.
     static func previewShowcase(now: Date = Date()) -> AppModel {
-        preview(
-            snapshot: MockQuotaProvider.sampleShowcaseSnapshot(now: now),
-            promoNotices: [MockPromoNoticeProvider.sampleNotice()]
+        var active = MockQuotaProvider.sampleShowcaseSnapshot(now: now)
+        active.account = MockQuotaProvider.sampleAccount()
+        return preview(
+            snapshot: active,
+            promoNotices: [MockPromoNoticeProvider.sampleNotice()],
+            otherAccounts: [MockQuotaProvider.sampleOtherAccountSnapshot(now: now)]
         )
     }
 

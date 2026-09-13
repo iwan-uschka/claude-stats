@@ -189,7 +189,7 @@ final class ClaudeStatsCoreTests: XCTestCase {
         let account = QuotaAccount(
             uuid: "0f9c1d3e-8a4b-4c2d-9e1f-6b7a8c9d0e1f",
             email: "me@example.com",
-            organizationName: "Bitgrip",
+            organizationName: "Other Org",
             organizationUuid: "a1b2c3d4-0000-0000-0000-000000000000"
         )
         let snapshot = QuotaSnapshot(
@@ -204,7 +204,7 @@ final class ClaudeStatsCoreTests: XCTestCase {
 
         XCTAssertEqual(decoded, snapshot)
         XCTAssertEqual(decoded.account, account)
-        XCTAssertEqual(decoded.account?.organizationName, "Bitgrip")
+        XCTAssertEqual(decoded.account?.organizationName, "Other Org")
     }
 
     /// Same contract as the scoped-limits and usage-credits keys: a payload

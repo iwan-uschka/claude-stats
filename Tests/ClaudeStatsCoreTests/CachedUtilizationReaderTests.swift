@@ -787,7 +787,7 @@ final class CachedUtilizationReaderTests: XCTestCase {
         try write("""
         {
           "oauthAccount": { "accountUuid": "account-1", "emailAddress": "me@example.com",
-                            "organizationName": "Bitgrip", "organizationUuid": "org-1" },
+                            "organizationName": "Other Org", "organizationUuid": "org-1" },
           "cachedUsageUtilization": {
             "fetchedAtMs": \(Int(now.timeIntervalSince1970 * 1000) - 60_000),
             "accountUuid": "account-1",
@@ -800,7 +800,7 @@ final class CachedUtilizationReaderTests: XCTestCase {
 
         let account = try XCTUnwrap(snapshot.account)
         XCTAssertEqual(account.uuid, "account-1")
-        XCTAssertEqual(account.organizationName, "Bitgrip")
+        XCTAssertEqual(account.organizationName, "Other Org")
         XCTAssertEqual(account.email, "me@example.com")
         XCTAssertEqual(account.displayName, "me@example.com")
     }
@@ -812,7 +812,7 @@ final class CachedUtilizationReaderTests: XCTestCase {
     func testMismatchedAccountKeepsOnlyTheReadingsOwnUuid() async throws {
         try write("""
         {
-          "oauthAccount": { "accountUuid": "account-2", "organizationName": "creativytool" },
+          "oauthAccount": { "accountUuid": "account-2", "organizationName": "Example Org" },
           "cachedUsageUtilization": {
             "fetchedAtMs": \(Int(now.timeIntervalSince1970 * 1000) - 60_000),
             "accountUuid": "account-1",
@@ -833,7 +833,7 @@ final class CachedUtilizationReaderTests: XCTestCase {
     func testAccountFallsBackToOAuthAccountWhenTheBlobNamesNone() async throws {
         try write("""
         {
-          "oauthAccount": { "accountUuid": "account-1", "organizationName": "Bitgrip" },
+          "oauthAccount": { "accountUuid": "account-1", "organizationName": "Other Org" },
           "cachedUsageUtilization": {
             "fetchedAtMs": \(Int(now.timeIntervalSince1970 * 1000) - 60_000),
             "utilization": { "five_hour": { "utilization": 11 } }
@@ -843,7 +843,7 @@ final class CachedUtilizationReaderTests: XCTestCase {
 
         let account = try await makeReader().currentSnapshot().account
         XCTAssertEqual(account?.uuid, "account-1")
-        XCTAssertEqual(account?.organizationName, "Bitgrip")
+        XCTAssertEqual(account?.organizationName, "Other Org")
     }
 
     /// Neither key present: an unknown account, which is what every reading
