@@ -128,13 +128,46 @@ Two independent tiers, deliberately decoupled:
      but only fires while Claude Code is actively rendering a status line in a
      terminal. Cache to disk, treat as stale after ~10 min — see
      `Sources/ClaudeStatsCore/Quota/StatuslineCacheReader.swift`.
+     - **One cache file per session, merged on read.** The hook writes
+       `~/Library/Application Support/ClaudeStats/statusline-cache/<session_id>.json`
+       — the payload's own top-level `session_id`, stripped to `[A-Za-z0-9._-]`
+       and of leading dots (a hidden file is one the reader never sees) — not
+       one shared file. Every running Claude Code process runs the hook
+       and pipes in the rate limits *its own* last API response carried, while
+       an idle session re-renders its status line on timers alone; one shared
+       file therefore meant last writer wins, with hours-old numbers stamped as
+       captured "now". Observed: bars reading 0% (5h) / 25% (7d) against a real
+       68% / 44%.
+       - **A window missing from a payload is expired, not 0%.** Claude Code
+         drops a window from `rate_limits` entirely once its `resets_at` has
+         passed, so a quiet session's payload can carry `seven_day` alone.
+         Mapping the absent one to an empty window is how the 0% above got on
+         screen; `QuotaJSON.optionalWindows(in:)` keeps absence absent and the
+         reader ranks only the readings that exist.
+       - **Merge rule, per window, independently.** Ignore any reading whose
+         `resets_at` has passed; take the latest `resets_at` (a later reset is
+         a later window); on a tie — i.e. the same window — take the *highest*
+         percentage, since utilization within one window never decreases, so a
+         lower number is the older read; a reading with no `resets_at` ranks
+         below every reading that has one, and among those the newest capture
+         wins. The snapshot's `capturedAt` is the newest `captured_at` among
+         the files that actually contributed a window, and the staleness gate
+         applies to that.
+       - The single `statusline-cache.json` older script copies wrote is no
+         longer written but still read, as one more input, so a machine whose
+         hook hasn't been reinstalled keeps working. Session files unwritten
+         for 7 days are deleted as the reader passes over them; the legacy file
+         is not, since it may be that machine's only reading.
      - **The cache carries all four bars, not two.** When `jq` is available the
        helper script also reads Claude Code's own `~/.claude.json` (located the
        way `ClaudeConfigDirectory.stateFileCandidates()` does) and merges the
        `weekly_scoped` entries of `limits[]` plus `spend` and `extra_usage`
-       into the same cache file, under a third top-level `utilization` key
-       shaped exactly as those objects appear in `cachedUsageUtilization` — so
-       `QuotaJSON.scopedLimits(in:)` / `usageCredits(in:)` read them unchanged.
+       into the same cache file it writes the rate limits to, under a third
+       top-level `utilization` key shaped exactly as those objects appear in
+       `cachedUsageUtilization` — so `QuotaJSON.scopedLimits(in:)` /
+       `usageCredits(in:)` read them unchanged. Not merged window-style: every
+       session copies the same `~/.claude.json`, so the reader simply takes
+       this object from the most recently captured file that carries one.
        That is what makes a hook-only reading complete, and why the hook can be
        primary rather than a freshness booster. Strictly best-effort and
        additive: no `jq`, no state file, or a malformed one simply omits the
@@ -316,9 +349,10 @@ cached reading, the zero-setup default) or `official` (a fresh statusline
 capture, once that hook is installed). No estimate fallback: with neither
 source reporting, the popover shows an error instead of a number; a
 real-but-old reading keeps the last numbers with an orange staleness warning.
-"Clear Quota Cache" deletes the statusline cache only — `~/.claude.json` is
-Claude Code's, not ours — so the bars fall back to the cached-state numbers
-rather than going empty.
+"Clear Quota Cache" deletes the statusline cache only — the whole per-session
+directory plus the legacy single file; `~/.claude.json` is Claude Code's, not
+ours — so the bars fall back to the cached-state numbers rather than going
+empty.
 
 ## Tech / release
 

@@ -7,10 +7,14 @@ import Foundation
 /// ## Primary and backup, not a freshness race
 ///
 /// ``StatuslineCacheReader`` is the primary. It is the only source this app
-/// actually writes: the hook fires within seconds of a status line render,
-/// stamps its own `captured_at`, and — since the helper script learned to copy
-/// `cachedUsageUtilization.utilization` across as it goes — carries all four
-/// bars' worth of data at that one known age.
+/// actually writes: the hook fires within seconds of a status line render, and
+/// — since the helper script learned to copy `cachedUsageUtilization.utilization`
+/// across as it goes — carries all four bars' worth of data. Each running
+/// Claude Code session writes its own cache file, stamped with the time *that
+/// file* was written, and the reader merges them per window: a session that
+/// has been idle for hours can no longer restamp its own stale numbers as
+/// captured "now" and overwrite a busy session's. What reaches this type is
+/// the merged result, dated by the newest file that contributed to it.
 ///
 /// ``CachedUtilizationReader`` is the backup, and it stays a full-fidelity one:
 /// it reads the same account-wide windows plus the scoped rows and `spend`
@@ -138,9 +142,10 @@ public struct FreshestQuotaProvider: QuotaProviding {
         return snapshot
     }
 
-    /// Clears the statusline cache only.
+    /// Clears the statusline cache only — the per-session directory plus the
+    /// legacy single file.
     ///
-    /// That file is this app's own; the other source is Claude Code's live
+    /// Those files are this app's own; the other source is Claude Code's live
     /// state file, which is not ours to delete — see
     /// ``CachedUtilizationReader/clearCache()``. So this stays the escape hatch
     /// for a stuck statusline reading, and after it runs the bars fall back to

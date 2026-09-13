@@ -58,11 +58,13 @@ public struct StatuslineHookInstaller {
 
     public let settingsURL: URL
     public let installedScriptURL: URL
-    /// ``uninstall()`` also removes whatever's at this path (best-effort) —
-    /// without it, ``StatuslineCacheReader`` would keep serving the last real
-    /// capture as `.official` for up to its staleness threshold (~10 min)
-    /// after the hook that used to refresh it is gone.
-    public let cacheURL: URL
+    /// Application Support directory holding the hook's cache — the same path
+    /// ``StatuslineCacheReader`` reads. ``uninstall()`` clears both cache
+    /// locations under it (best-effort); without that,
+    /// ``StatuslineCacheReader`` would keep serving the last real capture as
+    /// `.official` for up to its staleness threshold (~10 min) after the hook
+    /// that used to refresh it is gone.
+    public let cacheDirectoryURL: URL
     /// `FileManager` isn't marked `Sendable`, but `.default` and other
     /// instances are documented thread-safe.
     nonisolated(unsafe) private let fileManager: FileManager
@@ -71,13 +73,13 @@ public struct StatuslineHookInstaller {
     public init(
         settingsURL: URL,
         installedScriptURL: URL,
-        cacheURL: URL = StatuslineCacheReader.defaultCacheURL,
+        cacheDirectoryURL: URL = StatuslineCacheReader.defaultCacheDirectoryURL,
         fileManager: FileManager = .default,
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
     ) {
         self.settingsURL = settingsURL
         self.installedScriptURL = installedScriptURL
-        self.cacheURL = cacheURL
+        self.cacheDirectoryURL = cacheDirectoryURL
         self.fileManager = fileManager
         self.homeDirectory = homeDirectory
     }
@@ -186,9 +188,10 @@ public struct StatuslineHookInstaller {
 
     /// Restores `statusLine` to whatever our script was wrapping (or removes
     /// the key entirely if it wasn't wrapping anything), deletes the installed
-    /// script, and deletes the statusline cache file (best-effort). No-op if
-    /// we're not currently installed. Only the `statusLine` member's text is
-    /// touched — see ``JSONObjectSurgery``.
+    /// script, and clears the statusline cache — the per-session directory and
+    /// the legacy single file (best-effort). No-op if we're not currently
+    /// installed. Only the `statusLine` member's text is touched — see
+    /// ``JSONObjectSurgery``.
     public func uninstall() throws {
         guard let command = try currentCommand(),
               let wrapping = wrappedOriginal(from: command)
@@ -207,8 +210,11 @@ public struct StatuslineHookInstaller {
         try? fileManager.removeItem(at: installedScriptURL)
         // Best-effort, same as the script removal above: without this,
         // StatuslineCacheReader keeps serving the last real capture as
-        // `.official` until it ages past its own staleness threshold.
-        try? fileManager.removeItem(at: cacheURL)
+        // `.official` until it ages past its own staleness threshold. Routed
+        // through the reader so "what counts as the cache" is defined in one
+        // place — today a per-session directory plus the legacy single file.
+        try? StatuslineCacheReader(cacheDirectoryURL: cacheDirectoryURL, fileManager: fileManager)
+            .clearCache()
     }
 
     // MARK: - Command line construction

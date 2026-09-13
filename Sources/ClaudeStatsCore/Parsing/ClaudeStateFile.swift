@@ -44,7 +44,7 @@ public struct ClaudeStateFileFingerprint: Sendable, Hashable {
 ///
 /// The `open` → `fstat`-on-that-descriptor → read-that-descriptor sequence is
 /// the same single-descriptor trick as
-/// `StatuslineCacheReader.readCacheFileWithModificationDate()`, at nanosecond
+/// `StatuslineCacheReader.readFileWithModificationDate(at:)`, at nanosecond
 /// mtime + inode resolution: two separate syscalls could otherwise straddle an
 /// atomic `mktemp` + `rename` and pair one file's bytes with another's stat.
 ///

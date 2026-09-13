@@ -7,7 +7,8 @@ final class StatuslineHookInstallerTests: XCTestCase {
     private var directory: URL!
     private var settingsURL: URL!
     private var scriptURL: URL!
-    private var cacheURL: URL!
+    private var cacheDirectoryURL: URL!
+    private var sessionCacheURL: URL!
     private var installer: StatuslineHookInstaller!
 
     private let bundledScript = Data("#!/usr/bin/env bash\necho v1\n".utf8)
@@ -20,10 +21,13 @@ final class StatuslineHookInstallerTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         settingsURL = directory.appendingPathComponent("settings.json")
         scriptURL = directory.appendingPathComponent(StatuslineHookInstaller.scriptFileName)
-        // Own temp path, never the real default — `uninstall()` deletes
-        // whatever's at `cacheURL`, and this suite must never touch the
+        // Own temp path, never the real default — `uninstall()` clears the
+        // cache under `cacheDirectoryURL`, and this suite must never touch the
         // real ~/Library/Application Support/ClaudeStats cache.
-        cacheURL = directory.appendingPathComponent("statusline-cache.json")
+        cacheDirectoryURL = directory.appendingPathComponent("ClaudeStats", isDirectory: true)
+        sessionCacheURL = cacheDirectoryURL
+            .appendingPathComponent(StatuslineCacheReader.sessionCacheDirectoryName, isDirectory: true)
+            .appendingPathComponent("session-a.json")
         // Explicit, guaranteed-non-home directory: every test but the two
         // $HOME-relative-path tests below expects an absolute scriptURL path
         // in statusLine.command. Relying on the real home directory here
@@ -32,7 +36,7 @@ final class StatuslineHookInstallerTests: XCTestCase {
         installer = StatuslineHookInstaller(
             settingsURL: settingsURL,
             installedScriptURL: scriptURL,
-            cacheURL: cacheURL,
+            cacheDirectoryURL: cacheDirectoryURL,
             homeDirectory: URL(fileURLWithPath: "/nonexistent-home-for-tests")
         )
     }
@@ -225,7 +229,7 @@ final class StatuslineHookInstallerTests: XCTestCase {
         let symlinkedInstaller = StatuslineHookInstaller(
             settingsURL: symlinkURL,
             installedScriptURL: scriptURL,
-            cacheURL: cacheURL,
+            cacheDirectoryURL: cacheDirectoryURL,
             homeDirectory: URL(fileURLWithPath: "/nonexistent-home-for-tests")
         )
         let state = try symlinkedInstaller.install(bundledScript: bundledScript)
@@ -420,7 +424,7 @@ final class StatuslineHookInstallerTests: XCTestCase {
         let installerUnderHome = StatuslineHookInstaller(
             settingsURL: settingsURL,
             installedScriptURL: scriptURL,
-            cacheURL: cacheURL,
+            cacheDirectoryURL: cacheDirectoryURL,
             homeDirectory: directory
         )
         let state = try installerUnderHome.install(bundledScript: bundledScript)
@@ -525,21 +529,45 @@ final class StatuslineHookInstallerTests: XCTestCase {
     /// Without this, `StatuslineCacheReader` would keep serving the last real
     /// capture as `.official` for up to its staleness threshold after the
     /// hook that used to refresh it is gone.
-    func testUninstallDeletesTheStatuslineCacheFile() throws {
-        try Data(#"{"rate_limits": {"five_hour": {"used_percentage": 10}}}"#.utf8).write(to: cacheURL)
+    func testUninstallDeletesTheStatuslineCache() throws {
+        try writeCachedSession()
         _ = try installer.install(bundledScript: bundledScript)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: cacheURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: sessionCacheURL.path))
 
         try installer.uninstall()
-        XCTAssertFalse(FileManager.default.fileExists(atPath: cacheURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: sessionCacheURL.path))
     }
 
-    func testUninstallIsNoOpOnTheCacheFileWhenNotInstalled() throws {
+    func testUninstallIsNoOpOnTheCacheWhenNotInstalled() throws {
         try write(#"{"statusLine": {"type": "command", "command": "bash \"$HOME/.claude/mine.sh\""}}"#)
-        try Data(#"{"rate_limits": {"five_hour": {"used_percentage": 10}}}"#.utf8).write(to: cacheURL)
+        try writeCachedSession()
         try installer.uninstall()
 
-        XCTAssertTrue(FileManager.default.fileExists(atPath: cacheURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: sessionCacheURL.path))
+    }
+
+    /// Every session's file goes, not just one — the cache is a directory, and
+    /// a regression that removed a single hardcoded name would leave the other.
+    func testUninstallDeletesEverySessionsCacheFileNotJustOne() throws {
+        try writeCachedSession()
+        try writeCachedSession(named: "session-b.json")
+        _ = try installer.install(bundledScript: bundledScript)
+
+        try installer.uninstall()
+
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: sessionCacheURL.deletingLastPathComponent().path))
+    }
+
+    /// Stands in for a status line render having happened: one session's cache
+    /// file, where the reader looks for it. `named` picks a second session's
+    /// file in the same directory.
+    private func writeCachedSession(named name: String? = nil) throws {
+        let sessionDirectory = sessionCacheURL.deletingLastPathComponent()
+        let url: URL = name.map { sessionDirectory.appendingPathComponent($0) } ?? sessionCacheURL
+        try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
+        try Data(#"{"rate_limits": {"five_hour": {"used_percentage": 10}}}"#.utf8)
+            .write(to: url)
     }
 
     func testUninstallNoOpWhenNoSettingsFileAtAll() throws {
