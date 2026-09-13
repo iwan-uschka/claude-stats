@@ -3,13 +3,13 @@
 ## [Unreleased]
 
 ### Added
-- An "Est. cost" chart: 30 days of estimated daily spend as a single line,
+- An "Estimated cost" chart: 30 days of estimated daily spend as a single line,
   above today's exact figure.
 - Quota readings are now grouped per Anthropic account, with other accounts'
   readings shown below the current one.
 
 ### Changed
-- "Est. cost today" is now an "Est. cost" section with the daily chart over a
+- "Est. cost today" is now an "Estimated cost" section with the daily chart over a
   `Today` row; the estimate caveat moved to the section title, where it covers
   the chart as well.
 - The popover's "This Mac" table is now a "Tokens by source" chart: 30 days of

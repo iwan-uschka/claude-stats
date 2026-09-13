@@ -359,7 +359,7 @@ Two independent tiers, deliberately decoupled:
      point, never a gap, or a line chart connects across it and draws usage
      that never happened — and the window is **shortened, never zero-padded**,
      when the corpus is younger than it was asked for.
-   - A cell carries **tokens and cost**, which is why "Est. cost" could be
+   - A cell carries **tokens and cost**, which is why "Estimated cost" could be
      added as a pure UI change: the spend was already in the buckets. Keep it
      that way — a second accumulation for a second chart would mean a second
      pass over the corpus.
@@ -636,7 +636,7 @@ By model (fixed 24h window)
                                     whole-percent share of it. The one place
                                     that explanation still appears.
 
-Est. cost
+Estimated cost
 $6 ┤
 $4 ┤  ╱╲  ╱╲╱╲  ╱╲  ╱╲╱╲  ╱╲  ╱╲╱╲
 $0 ┼──┬───────┬───────┬───────┬────
@@ -669,8 +669,10 @@ Today                              $3.05
                                     Decimals survive below `$10`, where `$2` and
                                     `$2.50` are different readings.
 
-                                    "Est." moved from the row to the section
-                                    title, where it qualifies the chart too: a
+                                    "Estimated" moved from the row to the
+                                    section title, where it qualifies the chart
+                                    too, and is spelled out rather than `Est.`
+                                    because it is the word doing the work: a
                                     curve invites reading the area under it as a
                                     monthly bill, and this is a local estimate
                                     from published per-token prices — on a

@@ -266,7 +266,7 @@ final class DisplayFormatTests: XCTestCase {
 
     // MARK: - compactCost
     //
-    // The "Est. cost" chart's y-axis. Ticks land on round numbers, so the cases
+    // The "Estimated cost" chart's y-axis. Ticks land on round numbers, so the cases
     // that matter are the round ones — `$50.00` is what this exists to avoid.
 
     func testCompactCostDropsDecimalsAtAndAboveTenDollars() {

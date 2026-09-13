@@ -252,7 +252,7 @@ public struct MockUsageStore: UsageStoring {
 
     public func estimatedCostToday() throws -> Double { costToday }
 
-    /// Today's spend, taken from the same generator that draws the "Est. cost"
+    /// Today's spend, taken from the same generator that draws the "Estimated cost"
     /// chart, so the curve's last point and the `Today` row under it cannot
     /// disagree — the invariant the real store gets for free, both of its
     /// numbers being events since the same local midnight.

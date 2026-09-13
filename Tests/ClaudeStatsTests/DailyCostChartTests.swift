@@ -3,7 +3,7 @@ import XCTest
 @testable import ClaudeStats
 @testable import ClaudeStatsCore
 
-/// Coverage for the "Est. cost" chart — its accessibility descriptor, and the
+/// Coverage for the "Estimated cost" chart — its accessibility descriptor, and the
 /// x-axis it has to share with the "Tokens by source" chart above it.
 final class DailyCostChartTests: XCTestCase {
 

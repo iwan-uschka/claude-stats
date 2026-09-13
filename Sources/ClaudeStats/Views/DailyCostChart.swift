@@ -45,7 +45,7 @@ struct DailyCostChart: View {
         Chart(records) { record in
             LineMark(
                 x: .value("Day", record.day, unit: .day),
-                y: .value("Est. cost", record.cost)
+                y: .value("Estimated cost", record.cost)
             )
             .interpolationMethod(.monotone)
             .lineStyle(StrokeStyle(lineWidth: PopoverMetrics.chartLineWidth, lineJoin: .round))

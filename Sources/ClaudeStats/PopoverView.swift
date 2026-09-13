@@ -584,21 +584,24 @@ struct PopoverView: View {
         }
     }
 
-    // MARK: - Est. cost
+    // MARK: - Estimated cost
 
     /// Thirty days of spend over today's exact figure.
     ///
-    /// "Est." sits in the section title rather than on the row, where it now
-    /// qualifies the chart too. It has to: a curve invites reading the area
+    /// "Estimated" sits in the section title rather than on the row, where it
+    /// now qualifies the chart too. It has to: a curve invites reading the area
     /// under it as a monthly bill, and this is a local estimate from published
     /// per-token prices — on a subscription, spend that was never charged.
+    ///
+    /// Spelled out, not `Est.`: it is the word doing the qualifying, and an
+    /// abbreviation is the first thing an eye skims past.
     ///
     /// The chart and the row can't disagree. Both count from local midnight on
     /// the same calendar, and today is always inside the retention window, so
     /// the curve's last point is the row's number.
     private var costSection: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Est. cost")
+            Text("Estimated cost")
                 .font(PopoverMetrics.sectionTitleFont)
 
             if !model.dailyHistory.isEmpty {
