@@ -82,6 +82,37 @@ final class ClaudeStatsCoreTests: XCTestCase {
         XCTAssertNil(decoded.scopedWeekly[1].severity)
     }
 
+    /// Both windows are optional on the wire too: a payload that says nothing
+    /// about a window decodes as `nil`, not as a zeroed window, and a `nil`
+    /// window survives a round trip.
+    func testQuotaSnapshotDecodesMissingWindowKeysAsNil() throws {
+        let json = """
+        { "confidence": "official",
+          "capturedAt": 776543210 }
+        """
+
+        let decoded = try JSONDecoder().decode(QuotaSnapshot.self, from: Data(json.utf8))
+
+        XCTAssertNil(decoded.fiveHour)
+        XCTAssertNil(decoded.sevenDay)
+        XCTAssertEqual(decoded.confidence, .official)
+    }
+
+    func testQuotaSnapshotRoundTripsAnUnreportedWindow() throws {
+        let snapshot = QuotaSnapshot(
+            fiveHour: nil,
+            sevenDay: QuotaWindow(percentUsed: 97),
+            confidence: .official,
+            capturedAt: Date(timeIntervalSince1970: 1_787_935_500)
+        )
+
+        let decoded = try roundTripped(snapshot)
+
+        XCTAssertEqual(decoded, snapshot)
+        XCTAssertNil(decoded.fiveHour)
+        XCTAssertEqual(decoded.sevenDay?.percentUsed, 97)
+    }
+
     /// A snapshot encoded before ``QuotaSnapshot/scopedWeekly`` existed has no
     /// such key — it must decode to the empty default, not fail.
     func testQuotaSnapshotDecodesJSONWithoutScopedWeeklyKey() throws {
@@ -94,7 +125,7 @@ final class ClaudeStatsCoreTests: XCTestCase {
 
         let decoded = try JSONDecoder().decode(QuotaSnapshot.self, from: Data(json.utf8))
 
-        XCTAssertEqual(decoded.fiveHour.percentUsed, 62)
+        XCTAssertEqual(decoded.fiveHour?.percentUsed, 62)
         XCTAssertEqual(decoded.confidence, .official)
         XCTAssertEqual(decoded.scopedWeekly, [])
     }
@@ -162,8 +193,8 @@ final class ClaudeStatsCoreTests: XCTestCase {
     /// ``QuotaSnapshot/apply(_:)``.
     func testApplyingAReadingReplacesBothCreditsAndReason() {
         var snapshot = QuotaSnapshot(
-            fiveHour: .empty,
-            sevenDay: .empty,
+            fiveHour: nil,
+            sevenDay: nil,
             confidence: .cachedOfficial,
             capturedAt: Date(timeIntervalSince1970: 1_787_935_500),
             usageCredits: MockQuotaProvider.sampleUsageCredits()

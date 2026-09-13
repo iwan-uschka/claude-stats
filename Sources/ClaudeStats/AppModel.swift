@@ -389,10 +389,12 @@ extension AppModel {
         // data yet" fixture can't be mistaken for or reused as a real
         // placeholder elsewhere. `confidence` has no non-official case to
         // express "not real data" — this fixture is never rendered as-is;
-        // it only backstops the mock provider when `snapshot` is nil.
+        // it only backstops the mock provider when `snapshot` is nil. Both
+        // windows are `nil`, which is the honest shape of "nothing reported
+        // anything": the rows read as no reading, not as 0%.
         let previewPlaceholder = QuotaSnapshot(
-            fiveHour: .empty,
-            sevenDay: .empty,
+            fiveHour: nil,
+            sevenDay: nil,
             confidence: .official,
             capturedAt: Date()
         )

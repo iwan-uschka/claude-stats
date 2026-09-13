@@ -35,9 +35,15 @@ import Foundation
 /// ago would restamp its own stale numbers as captured "now", and last writer
 /// won. Worse, Claude Code drops a window from the payload entirely once its
 /// `resets_at` has passed — so the stale writer's file carried only
-/// `seven_day`, the missing `five_hour` read back as `.empty`, and the bars
-/// showed a confident 0%. One file per session plus the merge below is what
-/// makes a quiet session unable to overwrite a busy one.
+/// `seven_day`, the missing `five_hour` was read back as a zeroed window, and
+/// the bars showed a confident 0%. One file per session plus the merge below is
+/// what makes a quiet session unable to overwrite a busy one.
+///
+/// A window no file claims stays absent: the snapshot's ``QuotaSnapshot/fiveHour``
+/// / ``QuotaSnapshot/sevenDay`` is `nil`, which the UI shows as no reading. That
+/// is the normal state right after a window rolls over and before the session's
+/// next API call — the payload simply has nothing to say about it yet, and
+/// saying "0%" on its behalf is the same wrong answer in a subtler place.
 ///
 /// The legacy single file is still read, as one more input, so a machine whose
 /// hook script hasn't been reinstalled yet keeps working.
@@ -186,10 +192,11 @@ public struct StatuslineCacheReader: QuotaProviding {
         let sevenDay = choose(readings.compactMap { $0.candidate(\.sevenDay) }, asOf: asOf)
 
         // Each window can be independently absent; require at least one — the
-        // same rule ``QuotaJSON/windows(in:)`` applies within one file. With
-        // neither, every file we have is either pre-first-API-response or
+        // same rule ``CachedUtilizationReader`` applies to its single payload.
+        // With neither, every file we have is either pre-first-API-response or
         // describing windows that have already rolled over: no data, not a
-        // fault.
+        // fault. One of the two surviving is a snapshot with a `nil` window,
+        // not a snapshot with a zeroed one.
         guard let capturedAt = [fiveHour?.capturedAt, sevenDay?.capturedAt].compactMap({ $0 }).max() else {
             throw ClaudeStatsError.noQuotaSourceAvailable
         }
@@ -201,8 +208,8 @@ public struct StatuslineCacheReader: QuotaProviding {
         let credits = utilization.map(QuotaJSON.usageCredits(in:)) ?? .unavailable
 
         let snapshot = QuotaSnapshot(
-            fiveHour: fiveHour?.window ?? .empty,
-            sevenDay: sevenDay?.window ?? .empty,
+            fiveHour: fiveHour?.window,
+            sevenDay: sevenDay?.window,
             confidence: .official,
             capturedAt: capturedAt,
             scopedWeekly: utilization.map(QuotaJSON.scopedLimits(in:)) ?? [],

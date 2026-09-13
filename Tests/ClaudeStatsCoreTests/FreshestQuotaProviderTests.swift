@@ -95,7 +95,7 @@ final class FreshestQuotaProviderTests: XCTestCase {
         let result = try await provider.currentSnapshot()
 
         XCTAssertEqual(result.confidence, .official)
-        XCTAssertEqual(result.fiveHour.percentUsed, 62)
+        XCTAssertEqual(result.fiveHour?.percentUsed, 62)
     }
 
     /// The priority flip in one test: this used to be a freshness compare, so
@@ -112,7 +112,7 @@ final class FreshestQuotaProviderTests: XCTestCase {
         let result = try await provider.currentSnapshot()
 
         XCTAssertEqual(result.confidence, .official)
-        XCTAssertEqual(result.fiveHour.percentUsed, 62)
+        XCTAssertEqual(result.fiveHour?.percentUsed, 62)
     }
 
     /// A hook reading that carries its own `utilization` copy is complete:
@@ -192,7 +192,7 @@ final class FreshestQuotaProviderTests: XCTestCase {
         let result = try await provider.currentSnapshot()
 
         XCTAssertEqual(result.confidence, .official)
-        XCTAssertEqual(result.fiveHour.percentUsed, 62)
+        XCTAssertEqual(result.fiveHour?.percentUsed, 62)
         XCTAssertEqual(result.scopedWeekly, scoped)
         XCTAssertEqual(result.usageCredits, credits)
     }
@@ -256,6 +256,25 @@ final class FreshestQuotaProviderTests: XCTestCase {
         XCTAssertNil(result.usageCredits)
     }
 
+    /// The hook wins outright, windows included: a `nil` window is a reading
+    /// ("nobody reported it"), so it must not be filled in from `cachedState`,
+    /// which would mix two capture times into one bar.
+    func testHookNilFiveHourIsNotBackfilledFromCachedState() async throws {
+        var hook = snapshot(.official, percent: 62, capturedAgo: 30)
+        hook.fiveHour = nil
+
+        let provider = FreshestQuotaProvider(
+            statusline: StubProvider(.success(hook)),
+            cachedState: StubProvider(.success(snapshot(.cachedOfficial, percent: 97, capturedAgo: 900)))
+        )
+
+        let result = try await provider.currentSnapshot()
+
+        XCTAssertEqual(result.confidence, .official)
+        XCTAssertNil(result.fiveHour)
+        XCTAssertEqual(result.sevenDay?.percentUsed, 62)
+    }
+
     // MARK: - One source down
 
     /// The hook not being installed is the case the backup exists for, and it
@@ -274,7 +293,7 @@ final class FreshestQuotaProviderTests: XCTestCase {
         let result = try await provider.currentSnapshot()
 
         XCTAssertEqual(result.confidence, .cachedOfficial)
-        XCTAssertEqual(result.fiveHour.percentUsed, 97)
+        XCTAssertEqual(result.fiveHour?.percentUsed, 97)
         XCTAssertEqual(result.scopedWeekly, scoped)
         XCTAssertEqual(result.usageCredits, credits)
     }
@@ -349,7 +368,7 @@ final class FreshestQuotaProviderTests: XCTestCase {
             try await provider.currentSnapshot()
         }
         XCTAssertEqual(carried?.confidence, .cachedOfficial)
-        XCTAssertEqual(carried?.fiveHour.percentUsed, 97)
+        XCTAssertEqual(carried?.fiveHour?.percentUsed, 97)
     }
 
     /// The freshest of the two stale snapshots already carries a

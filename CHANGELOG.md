@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Changed
+- The 5-hour and 7-day rows now show `—` and **no reading** instead of 0% when
+  no quota source currently reports that window — the normal state just after a
+  window rolls over and before the next API call, since Claude Code drops a
+  window from its payloads once it has reset. The matching bar in the menu bar
+  glyph is drawn empty and its accessibility text says the window is unknown
+  rather than 0%, and the popover row's own bar is hidden from VoiceOver for
+  the same case so it doesn't announce a "0%" nobody reported.
+
 ### Fixed
 - The quota bars no longer show another session's stale numbers — or a
   confident 0% — when several Claude Code sessions are open. Every running

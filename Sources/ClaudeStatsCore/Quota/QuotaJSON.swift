@@ -298,11 +298,13 @@ enum QuotaJSON {
     /// `seven_day` either directly or nested under a wrapper key, **keeping an
     /// absent window absent**.
     ///
-    /// The distinction matters to any caller that reads more than one payload:
-    /// Claude Code drops a window from the statusline payload once its
-    /// `resets_at` has passed, and reading that back as 0% used is a
-    /// confidently wrong number rather than a missing one. See
-    /// ``StatuslineCacheReader``, which ranks the readings it has instead.
+    /// The distinction matters to every caller: Claude Code drops a window from
+    /// its payloads once its `resets_at` has passed, and reading that back as
+    /// 0% used is a confidently wrong number rather than a missing one. So this
+    /// is the only windows accessor there is — ``StatuslineCacheReader`` ranks
+    /// the readings it has and ``CachedUtilizationReader`` hands both optionals
+    /// to the snapshot unchanged, each applying its own "at least one window or
+    /// no reading at all" guard.
     static func optionalWindows(in root: [String: Any]) -> (fiveHour: QuotaWindow?, sevenDay: QuotaWindow?) {
         // Prefer the root's own keys; fall back to a wrapper only for whichever
         // window the root didn't have, so a root that already carries real
@@ -313,16 +315,5 @@ enum QuotaJSON {
         let sevenDay = window(root["seven_day"]) ?? window(root["sevenDay"])
             ?? wrapper.flatMap { window($0["seven_day"]) ?? window($0["sevenDay"]) }
         return (fiveHour, sevenDay)
-    }
-
-    /// Both windows out of a single payload, for a caller that has only that
-    /// one to go on.
-    ///
-    /// - Returns: `nil` when neither window is present at all.
-    static func windows(in root: [String: Any]) -> (fiveHour: QuotaWindow, sevenDay: QuotaWindow)? {
-        let found = optionalWindows(in: root)
-        // Each window can be independently absent; require at least one.
-        guard found.fiveHour != nil || found.sevenDay != nil else { return nil }
-        return (found.fiveHour ?? .empty, found.sevenDay ?? .empty)
     }
 }

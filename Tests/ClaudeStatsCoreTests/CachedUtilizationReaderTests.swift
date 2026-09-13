@@ -89,8 +89,8 @@ final class CachedUtilizationReaderTests: XCTestCase {
 
         XCTAssertEqual(snapshot.confidence, .cachedOfficial)
         XCTAssertEqual(snapshot.confidence.displayLabel, "official (cached)")
-        XCTAssertEqual(snapshot.fiveHour.percentUsed, 11)
-        XCTAssertEqual(snapshot.sevenDay.percentUsed, 97)
+        XCTAssertEqual(snapshot.fiveHour?.percentUsed, 11)
+        XCTAssertEqual(snapshot.sevenDay?.percentUsed, 97)
         // `fetchedAtMs` is epoch milliseconds.
         XCTAssertEqual(snapshot.capturedAt.timeIntervalSince1970,
                        fetchedAt.timeIntervalSince1970, accuracy: 0.001)
@@ -128,17 +128,18 @@ final class CachedUtilizationReaderTests: XCTestCase {
 
         let snapshot = try await makeReader().currentSnapshot()
 
-        let fiveHourReset = try XCTUnwrap(snapshot.fiveHour.resetsAt)
-        let sevenDayReset = try XCTUnwrap(snapshot.sevenDay.resetsAt)
+        let fiveHourReset = try XCTUnwrap(snapshot.fiveHour?.resetsAt)
+        let sevenDayReset = try XCTUnwrap(snapshot.sevenDay?.resetsAt)
         XCTAssertEqual(fiveHourReset.timeIntervalSince1970, fiveHourResetEpoch, accuracy: 0.001)
         XCTAssertEqual(sevenDayReset.timeIntervalSince1970, sevenDayResetEpoch, accuracy: 0.001)
         // Fractional seconds survive, so a countdown can't be a second off.
-        XCTAssertEqual(snapshot.fiveHour.timeUntilReset(from: now) ?? 0, 300, accuracy: 1)
+        XCTAssertEqual(snapshot.fiveHour?.timeUntilReset(from: now) ?? 0, 300, accuracy: 1)
     }
 
-    /// `windows(in:)`'s documented contract: each window is independently
-    /// optional, and the missing one becomes `.empty` rather than failing.
-    func testSevenDayOnlyYieldsEmptyFiveHourNotFailure() async throws {
+    /// `optionalWindows(in:)`'s documented contract: each window is
+    /// independently optional, and the missing one stays absent — `nil`, not a
+    /// zeroed window claiming 0% — rather than failing the whole read.
+    func testSevenDayOnlyYieldsNilFiveHourNotFailure() async throws {
         try write("""
         {
           "cachedUsageUtilization": {
@@ -153,8 +154,8 @@ final class CachedUtilizationReaderTests: XCTestCase {
 
         let snapshot = try await makeReader().currentSnapshot()
 
-        XCTAssertEqual(snapshot.sevenDay.percentUsed, 42)
-        XCTAssertEqual(snapshot.fiveHour, .empty)
+        XCTAssertEqual(snapshot.sevenDay?.percentUsed, 42)
+        XCTAssertNil(snapshot.fiveHour)
     }
 
     // MARK: - Scoped weekly limits
@@ -233,8 +234,8 @@ final class CachedUtilizationReaderTests: XCTestCase {
 
         let snapshot = try await makeReader().currentSnapshot()
 
-        XCTAssertEqual(snapshot.fiveHour.percentUsed, 11)
-        XCTAssertEqual(snapshot.sevenDay.percentUsed, 97)
+        XCTAssertEqual(snapshot.fiveHour?.percentUsed, 11)
+        XCTAssertEqual(snapshot.sevenDay?.percentUsed, 97)
         XCTAssertEqual(snapshot.scopedWeekly, [])
     }
 
@@ -478,7 +479,7 @@ final class CachedUtilizationReaderTests: XCTestCase {
         XCTAssertNil(snapshot.usageCredits)
         XCTAssertNil(snapshot.usageCreditsDisabledReason)
         // The rest of the reading is untouched by the absence.
-        XCTAssertEqual(snapshot.fiveHour.percentUsed, 11)
+        XCTAssertEqual(snapshot.fiveHour?.percentUsed, 11)
     }
 
     func testDisabledSpendYieldsNoUsageCredits() async throws {
@@ -791,7 +792,7 @@ final class CachedUtilizationReaderTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: stateFileURL), before)
         // Still reads, because nothing was cleared.
         let snapshot = try await reader.currentSnapshot()
-        XCTAssertEqual(snapshot.fiveHour.percentUsed, 11)
+        XCTAssertEqual(snapshot.fiveHour?.percentUsed, 11)
     }
 
     // MARK: - Default candidates

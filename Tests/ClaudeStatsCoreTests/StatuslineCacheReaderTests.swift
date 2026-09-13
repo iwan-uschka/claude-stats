@@ -164,8 +164,8 @@ final class StatuslineCacheReaderTests: XCTestCase {
         let snapshot = try await makeReader().currentSnapshot()
 
         XCTAssertEqual(snapshot.confidence, .official)
-        XCTAssertEqual(snapshot.fiveHour.percentUsed, 23.5, accuracy: 0.001)
-        XCTAssertEqual(snapshot.sevenDay.percentUsed, 41.2, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(snapshot.fiveHour).percentUsed, 23.5, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(snapshot.sevenDay).percentUsed, 41.2, accuracy: 0.001)
         XCTAssertEqual(snapshot.capturedAt.timeIntervalSince1970,
                        capturedAt.timeIntervalSince1970, accuracy: 1)
         XCTAssertFalse(snapshot.isStale(asOf: now))
@@ -176,9 +176,9 @@ final class StatuslineCacheReaderTests: XCTestCase {
         XCTAssertNil(snapshot.usageCredits)
         XCTAssertNil(snapshot.usageCreditsDisabledReason)
         // resets_at is epoch seconds in the statusline payload.
-        XCTAssertEqual(snapshot.fiveHour.resetsAt?.timeIntervalSince1970,
+        XCTAssertEqual(snapshot.fiveHour?.resetsAt?.timeIntervalSince1970,
                        capturedAt.timeIntervalSince1970 + 3600)
-        XCTAssertEqual(snapshot.sevenDay.timeUntilReset(from: now) ?? 0, 86_370, accuracy: 2)
+        XCTAssertEqual(snapshot.sevenDay?.timeUntilReset(from: now) ?? 0, 86_370, accuracy: 2)
     }
 
     /// The no-`jq` fallback: raw statusline payload, no `captured_at`, capture
@@ -201,15 +201,16 @@ final class StatuslineCacheReaderTests: XCTestCase {
         let snapshot = try await makeReader().currentSnapshot()
 
         XCTAssertEqual(snapshot.confidence, .official)
-        XCTAssertEqual(snapshot.fiveHour.percentUsed, 62)
-        XCTAssertEqual(snapshot.sevenDay.percentUsed, 31)
-        XCTAssertNil(snapshot.sevenDay.resetsAt)
+        XCTAssertEqual(snapshot.fiveHour?.percentUsed, 62)
+        XCTAssertEqual(snapshot.sevenDay?.percentUsed, 31)
+        XCTAssertNil(snapshot.sevenDay?.resetsAt)
         XCTAssertEqual(snapshot.capturedAt.timeIntervalSince1970,
                        modified.timeIntervalSince1970, accuracy: 1)
     }
 
-    /// Docs say each window may be independently absent.
-    func testMissingSevenDayWindowYieldsEmptyWindowNotFailure() async throws {
+    /// Docs say each window may be independently absent — and absent means
+    /// absent: the snapshot carries `nil`, not a window reading 0%.
+    func testMissingSevenDayWindowYieldsNilWindowNotFailure() async throws {
         try write("""
         {
           "captured_at": \(Int(now.timeIntervalSince1970) - 5),
@@ -219,8 +220,8 @@ final class StatuslineCacheReaderTests: XCTestCase {
 
         let snapshot = try await makeReader().currentSnapshot()
 
-        XCTAssertEqual(snapshot.fiveHour.percentUsed, 10)
-        XCTAssertEqual(snapshot.sevenDay, .empty)
+        XCTAssertEqual(snapshot.fiveHour?.percentUsed, 10)
+        XCTAssertNil(snapshot.sevenDay)
     }
 
     // MARK: - Merging across sessions
@@ -243,8 +244,8 @@ final class StatuslineCacheReaderTests: XCTestCase {
 
         let snapshot = try await makeReader().currentSnapshot()
 
-        XCTAssertEqual(snapshot.fiveHour.percentUsed, 68)
-        XCTAssertEqual(snapshot.sevenDay.percentUsed, 44)
+        XCTAssertEqual(snapshot.fiveHour?.percentUsed, 68)
+        XCTAssertEqual(snapshot.sevenDay?.percentUsed, 44)
         // Only the busy session contributed, so its capture time is the one the
         // freshness line has any business showing.
         XCTAssertEqual(snapshot.capturedAt.timeIntervalSince1970,
@@ -267,8 +268,8 @@ final class StatuslineCacheReaderTests: XCTestCase {
 
         let snapshot = try await makeReader().currentSnapshot()
 
-        XCTAssertEqual(snapshot.fiveHour.percentUsed, 68)
-        XCTAssertEqual(snapshot.sevenDay.percentUsed, 44)
+        XCTAssertEqual(snapshot.fiveHour?.percentUsed, 68)
+        XCTAssertEqual(snapshot.sevenDay?.percentUsed, 44)
     }
 
     /// The same thing one step earlier: the idle session still carries the
@@ -285,7 +286,32 @@ final class StatuslineCacheReaderTests: XCTestCase {
 
         let snapshot = try await makeReader().currentSnapshot()
 
-        XCTAssertEqual(snapshot.fiveHour.percentUsed, 68)
+        XCTAssertEqual(snapshot.fiveHour?.percentUsed, 68)
+    }
+
+    /// The rollover boundary: every file's `five_hour` has already reset while
+    /// their `seven_day` is still live, so nothing on disk says anything about
+    /// the 5-hour window. That is a `nil` window — "no reading" on screen —
+    /// and the 7-day one is unaffected.
+    func testWindowExpiredInEveryFileIsNilWhileTheOtherStillReads() async throws {
+        try write(session: "busy", cache(
+            capturedAt: now.addingTimeInterval(-200),
+            windowJSON("five_hour", percent: 68, resetsAt: now.addingTimeInterval(-120)),
+            windowJSON("seven_day", percent: 44, resetsAt: now.addingTimeInterval(86_400))
+        ))
+        try write(session: "idle", cache(
+            capturedAt: now.addingTimeInterval(-10),
+            windowJSON("five_hour", percent: 25, resetsAt: now.addingTimeInterval(-600)),
+            windowJSON("seven_day", percent: 20, resetsAt: now.addingTimeInterval(86_400))
+        ))
+
+        let snapshot = try await makeReader().currentSnapshot()
+
+        XCTAssertNil(snapshot.fiveHour)
+        XCTAssertEqual(snapshot.sevenDay?.percentUsed, 44)
+        // Only the file that contributed the surviving window sets the stamp.
+        XCTAssertEqual(snapshot.capturedAt.timeIntervalSince1970,
+                       now.timeIntervalSince1970 - 200, accuracy: 1)
     }
 
     /// Every reading of a window has expired: that is "no data", not 0%.
@@ -315,8 +341,8 @@ final class StatuslineCacheReaderTests: XCTestCase {
 
         let snapshot = try await makeReader().currentSnapshot()
 
-        XCTAssertEqual(snapshot.fiveHour.percentUsed, 5)
-        XCTAssertEqual(snapshot.fiveHour.resetsAt, now.addingTimeInterval(18_000))
+        XCTAssertEqual(snapshot.fiveHour?.percentUsed, 5)
+        XCTAssertEqual(snapshot.fiveHour?.resetsAt, now.addingTimeInterval(18_000))
     }
 
     /// A reading with no `resets_at` can't be ranked against one that has it,
@@ -339,8 +365,8 @@ final class StatuslineCacheReaderTests: XCTestCase {
 
         let snapshot = try await makeReader().currentSnapshot()
 
-        XCTAssertEqual(snapshot.fiveHour.percentUsed, 68)
-        XCTAssertEqual(snapshot.sevenDay.percentUsed, 31)
+        XCTAssertEqual(snapshot.fiveHour?.percentUsed, 68)
+        XCTAssertEqual(snapshot.sevenDay?.percentUsed, 31)
     }
 
     /// A machine whose hook script hasn't been reinstalled yet still has a
@@ -358,8 +384,8 @@ final class StatuslineCacheReaderTests: XCTestCase {
 
         let snapshot = try await makeReader().currentSnapshot()
 
-        XCTAssertEqual(snapshot.fiveHour.percentUsed, 68)
-        XCTAssertEqual(snapshot.sevenDay.percentUsed, 44)
+        XCTAssertEqual(snapshot.fiveHour?.percentUsed, 68)
+        XCTAssertEqual(snapshot.sevenDay?.percentUsed, 44)
         // Newest of the two contributors.
         XCTAssertEqual(snapshot.capturedAt.timeIntervalSince1970,
                        now.timeIntervalSince1970 - 60, accuracy: 1)
@@ -372,7 +398,7 @@ final class StatuslineCacheReaderTests: XCTestCase {
 
         let snapshot = try await makeReader().currentSnapshot()
 
-        XCTAssertEqual(snapshot.fiveHour.percentUsed, 23.5, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(snapshot.fiveHour).percentUsed, 23.5, accuracy: 0.001)
     }
 
     /// Whichever file supplied a chosen window dates the snapshot — and the
@@ -410,8 +436,8 @@ final class StatuslineCacheReaderTests: XCTestCase {
             try await self.makeReader().currentSnapshot()
         }
         let carried = try XCTUnwrap(carriedOrNil)
-        XCTAssertEqual(carried.fiveHour.percentUsed, 68)
-        XCTAssertEqual(carried.sevenDay.percentUsed, 44)
+        XCTAssertEqual(carried.fiveHour?.percentUsed, 68)
+        XCTAssertEqual(carried.sevenDay?.percentUsed, 44)
     }
 
     // MARK: - The copied `utilization` object
@@ -426,7 +452,7 @@ final class StatuslineCacheReaderTests: XCTestCase {
         XCTAssertEqual(snapshot.confidence, .official)
         // The account-wide windows still come from `rate_limits`, not from the
         // copy — the copy deliberately carries no `five_hour` / `seven_day`.
-        XCTAssertEqual(snapshot.fiveHour.percentUsed, 23.5, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(snapshot.fiveHour).percentUsed, 23.5, accuracy: 0.001)
         // Sorted by percent descending, same as out of `~/.claude.json`.
         XCTAssertEqual(snapshot.scopedWeekly.map(\.label), ["Sonnet", "Fable"])
         XCTAssertEqual(snapshot.scopedWeekly.map(\.percentUsed), [42, 0])
@@ -458,7 +484,7 @@ final class StatuslineCacheReaderTests: XCTestCase {
         let snapshot = try await makeReader().currentSnapshot()
 
         // The window still comes from the higher (i.e. newer) reading…
-        XCTAssertEqual(snapshot.fiveHour.percentUsed, 68)
+        XCTAssertEqual(snapshot.fiveHour?.percentUsed, 68)
         // …but the copied object comes from the newest file that has one.
         XCTAssertEqual(snapshot.scopedWeekly.map(\.label), ["Opus"])
         XCTAssertNil(snapshot.usageCredits)
@@ -481,7 +507,7 @@ final class StatuslineCacheReaderTests: XCTestCase {
 
         let snapshot = try await makeReader().currentSnapshot()
 
-        XCTAssertEqual(snapshot.fiveHour.percentUsed, 70)
+        XCTAssertEqual(snapshot.fiveHour?.percentUsed, 70)
         XCTAssertEqual(snapshot.scopedWeekly.map(\.label), ["Sonnet", "Fable"])
         XCTAssertEqual(snapshot.usageCredits?.limit.amountMinor, 3_300)
     }
@@ -533,7 +559,7 @@ final class StatuslineCacheReaderTests: XCTestCase {
 
         let snapshot = try await makeReader().currentSnapshot()
 
-        XCTAssertEqual(snapshot.fiveHour.percentUsed, 23.5, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(snapshot.fiveHour).percentUsed, 23.5, accuracy: 0.001)
         XCTAssertEqual(snapshot.scopedWeekly, [])
         XCTAssertNil(snapshot.usageCredits)
     }
@@ -629,7 +655,7 @@ final class StatuslineCacheReaderTests: XCTestCase {
         }
         let carried = try XCTUnwrap(carriedOrNil)
         XCTAssertEqual(carried.confidence, .official)
-        XCTAssertEqual(carried.fiveHour.percentUsed, 23.5, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(carried.fiveHour).percentUsed, 23.5, accuracy: 0.001)
     }
 
     func testCacheJustInsideThresholdIsAccepted() async throws {
@@ -649,7 +675,7 @@ final class StatuslineCacheReaderTests: XCTestCase {
         }
         let carried = try XCTUnwrap(carriedOrNil)
         XCTAssertEqual(carried.confidence, .official)
-        XCTAssertEqual(carried.fiveHour.percentUsed, 23.5, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(carried.fiveHour).percentUsed, 23.5, accuracy: 0.001)
     }
 
     // MARK: - Failure modes
@@ -695,7 +721,7 @@ final class StatuslineCacheReaderTests: XCTestCase {
 
         let snapshot = try await makeReader().currentSnapshot()
 
-        XCTAssertEqual(snapshot.fiveHour.percentUsed, 23.5, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(snapshot.fiveHour).percentUsed, 23.5, accuracy: 0.001)
     }
 
     /// Nothing on disk is JSON at all: that is a fault worth naming, unlike
@@ -718,7 +744,7 @@ final class StatuslineCacheReaderTests: XCTestCase {
 
         let snapshot = try await makeReader().currentSnapshot()
 
-        XCTAssertEqual(snapshot.fiveHour.percentUsed, 23.5, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(snapshot.fiveHour).percentUsed, 23.5, accuracy: 0.001)
     }
 
     func testWindowWithoutPercentageIsNotReadAsZero() async throws {
@@ -751,7 +777,7 @@ final class StatuslineCacheReaderTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: ancient.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: fresh.path))
         // …and the pruned file's reading is gone with it.
-        XCTAssertEqual(snapshot.sevenDay.percentUsed, 41.2, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(snapshot.sevenDay).percentUsed, 41.2, accuracy: 0.001)
     }
 
     /// Pruning falls back to the file's modification time, so a session file

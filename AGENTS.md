@@ -144,6 +144,17 @@ Two independent tiers, deliberately decoupled:
          Mapping the absent one to an empty window is how the 0% above got on
          screen; `QuotaJSON.optionalWindows(in:)` keeps absence absent and the
          reader ranks only the readings that exist.
+         - **The absence survives all the way to the UI.**
+           `QuotaSnapshot.fiveHour` / `.sevenDay` are **optional**, and `nil`
+           means *no source made a claim about this window* — the normal state
+           between a rollover and that session's next API call, when no file
+           mentions the window at all. The popover renders it as `—` /
+           `no reading` and the glyph bar draws empty with VoiceOver saying
+           unknown; nothing anywhere substitutes 0%. Both readers apply the
+           same guard — at least one window, or `noQuotaSourceAvailable` —
+           and neither grafts a window from the other source: a hook snapshot
+           with a `nil` window stays `nil`. (`QuotaWindow` has no zeroed
+           `.empty` placeholder any more; `nil` is the placeholder.)
        - **Merge rule, per window, independently.** Ignore any reading whose
          `resets_at` has passed; take the latest `resets_at` (a later reset is
          a later window); on a tie — i.e. the same window — take the *highest*
@@ -263,7 +274,11 @@ Two independent tiers, deliberately decoupled:
   scoped weekly limit (the popover lists them all). Minimal total width,
   matching Stats' CPU/GPU/RAM glyph but thinner. Those three are always drawn:
   with no scoped-limit reading (or no snapshot at all), the third bar is simply
-  empty — there is no narrower, two-bar state.
+  empty — there is no narrower, two-bar state. A 5h/7d window no source
+  currently reports draws empty the same way (there is no third rendering of an
+  empty 3 pt bar to invent), but the accessibility description says
+  `five-hour unknown` / `seven-day unknown` instead of `0% five-hour` — the one
+  place that can tell an unknown window from a zero one.
   - A **fourth, hatched bar** is drawn *only* when the payload reports usage
     credits, so the glyph is three bars wide normally and four wide while
     credits exist (the width is a function of the bar count —
@@ -281,6 +296,15 @@ Click opens a popover:
 ```
 5-hour window     ▓▓▓▓▓▓░░ 62%     resets in 2h 14m
 7-day window       ▓▓▓░░░░░ 31%     resets in 4d 6h
+5-hour window     ░░░░░░░░  —       no reading
+                                  ← how either of the two rows above renders
+                                    while no quota source reports that window
+                                    (`QuotaSnapshot.fiveHour == nil`) — after
+                                    it rolled over and before the next API
+                                    call, and for the no-snapshot-at-all state.
+                                    Empty track, em dash, "no reading": never
+                                    0%, which would be a number nobody
+                                    reported.
 +50% weekly limits promo through Aug 31 · clau.de/cc-50-promo
                                   ← Claude Code's own promo notice for this
                                     bar, read from `~/.claude.json`; the bare

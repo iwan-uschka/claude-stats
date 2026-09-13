@@ -76,6 +76,59 @@ final class DisplayFormatTests: XCTestCase {
         )
     }
 
+    // MARK: - unreported windows
+
+    /// No source reported the window at all: an em dash, not 0% — the whole
+    /// point of ``QuotaSnapshot``'s optional windows.
+    func testWindowColumnsForAnUnreportedWindow() {
+        XCTAssertEqual(DisplayFormat.windowPercent(nil), "—")
+        XCTAssertEqual(DisplayFormat.windowCountdown(nil, from: Date()), "no reading")
+        // Even the row that suppresses the "reset pending" placeholder still
+        // says "no reading": the absence of the window outranks the absence of
+        // its reset stamp.
+        XCTAssertEqual(
+            DisplayFormat.windowCountdown(nil, from: Date(), showsPendingResetPlaceholder: false),
+            "no reading"
+        )
+    }
+
+    func testWindowColumnsForAReportedWindow() {
+        let now = Date()
+        let window = QuotaWindow(
+            percentUsed: 62.4,
+            resetsAt: now.addingTimeInterval(2 * 3600 + 14 * 60)
+        )
+
+        XCTAssertEqual(DisplayFormat.windowPercent(window), "62%")
+        XCTAssertEqual(DisplayFormat.windowCountdown(window, from: now), "resets in 2h 14m")
+    }
+
+    /// A window that exists but reports no reset: "pending" for the two
+    /// account-wide bars, an empty column for a scoped row whose missing
+    /// `resets_at` means "not reported" — see ``QuotaScopedLimit``.
+    func testWindowCountdownWithoutAResetStamp() {
+        let now = Date()
+        let window = QuotaWindow(percentUsed: 0)
+
+        XCTAssertEqual(DisplayFormat.windowCountdown(window, from: now), "reset pending")
+        XCTAssertEqual(
+            DisplayFormat.windowCountdown(window, from: now, showsPendingResetPlaceholder: false),
+            ""
+        )
+        // An elapsed deadline is the same case as no deadline.
+        let elapsed = QuotaWindow(percentUsed: 0, resetsAt: now.addingTimeInterval(-5))
+        XCTAssertEqual(DisplayFormat.windowCountdown(elapsed, from: now), "reset pending")
+        XCTAssertEqual(
+            DisplayFormat.windowCountdown(elapsed, from: now, showsPendingResetPlaceholder: false),
+            ""
+        )
+    }
+
+    /// 0% is a reading and must not borrow the unknown row's rendering.
+    func testZeroPercentWindowIsNotRenderedAsUnknown() {
+        XCTAssertEqual(DisplayFormat.windowPercent(QuotaWindow(percentUsed: 0)), "0%")
+    }
+
     // MARK: - age
 
     func testAgeWording() {

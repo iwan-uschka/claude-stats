@@ -98,7 +98,12 @@ public struct CachedUtilizationReader: QuotaProviding {
     public func currentSnapshot() async throws -> QuotaSnapshot {
         let (cached, utilization) = try loadUtilization()
 
-        guard let windows = QuotaJSON.windows(in: utilization) else {
+        // Each window can be independently absent — Claude Code stops reporting
+        // one once it has rolled over — and an absent one stays absent on the
+        // snapshot rather than becoming 0%. Only *both* missing means this
+        // source has nothing to say.
+        let windows = QuotaJSON.optionalWindows(in: utilization)
+        guard windows.fiveHour != nil || windows.sevenDay != nil else {
             throw ClaudeStatsError.noQuotaSourceAvailable
         }
 

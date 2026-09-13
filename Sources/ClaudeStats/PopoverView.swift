@@ -80,8 +80,8 @@ struct PopoverView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             } else {
-                quotaWindowRow(.fiveHour, window: .empty)
-                quotaWindowRow(.sevenDay, window: .empty)
+                quotaWindowRow(.fiveHour, window: nil)
+                quotaWindowRow(.sevenDay, window: nil)
                 // The cleared-cache notice wins over both fallbacks: it names a
                 // state the user just caused on purpose, so it explains the empty
                 // bars better than "none yet" or a staleness warning would.
@@ -103,7 +103,11 @@ struct PopoverView: View {
     /// The notice's own vertical padding (see ``promoNoticeLine(_:)``) sets
     /// the breathing room around it; this VStack's 2 pt only closes the
     /// remaining gap to the bar above.
-    private func quotaWindowRow(_ bar: QuotaWindowKind, window: QuotaWindow) -> some View {
+    ///
+    /// A `nil` `window` — no snapshot at all, or a snapshot on which no source
+    /// reported this window — renders the row as no reading rather than 0%; see
+    /// ``WindowBarView``.
+    private func quotaWindowRow(_ bar: QuotaWindowKind, window: QuotaWindow?) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             WindowBarView(title: bar.title, window: window, now: now)
             if let notice = model.promoNotice(for: bar) {

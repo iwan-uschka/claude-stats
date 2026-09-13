@@ -26,9 +26,6 @@ public struct QuotaWindow: Sendable, Hashable, Codable {
         let remaining = resetsAt.timeIntervalSince(now)
         return remaining > 0 ? remaining : nil
     }
-
-    /// Zeroed window, for placeholders and "no data yet" states.
-    public static let empty = QuotaWindow(percentUsed: 0, resetsAt: nil)
 }
 
 /// Which of the two rate-limit windows something refers to.
@@ -145,9 +142,21 @@ public struct QuotaScopedLimit: Sendable, Hashable, Codable, Identifiable {
 }
 
 /// A point-in-time reading of both rate-limit windows.
+///
+/// Either window can be `nil`, and that is a reading in its own right: **no
+/// source made a claim about that window**. Claude Code drops a window from its
+/// payloads entirely once the window's `resets_at` has passed, so between a
+/// rollover and the next API call nothing on disk says anything about it.
+/// Mapping that absence to a zeroed window would ship a confident 0% — the
+/// defect ``StatuslineCacheReader`` was split per session to fix — so the
+/// absence is carried all the way to the UI, which renders it as no reading
+/// (`—` / "no reading" in the popover, an empty menu bar bar whose VoiceOver
+/// text says "unknown") rather than as 0%.
 public struct QuotaSnapshot: Sendable, Hashable, Codable {
-    public var fiveHour: QuotaWindow
-    public var sevenDay: QuotaWindow
+    /// The 5-hour window, or `nil` when no source currently reports one.
+    public var fiveHour: QuotaWindow?
+    /// The 7-day window, or `nil` when no source currently reports one.
+    public var sevenDay: QuotaWindow?
     public var confidence: QuotaConfidence
     public var capturedAt: Date
     /// Per-model weekly sub-limits, highest percentage first. Empty for any
@@ -169,8 +178,8 @@ public struct QuotaSnapshot: Sendable, Hashable, Codable {
     public var usageCreditsDisabledReason: String?
 
     public init(
-        fiveHour: QuotaWindow,
-        sevenDay: QuotaWindow,
+        fiveHour: QuotaWindow?,
+        sevenDay: QuotaWindow?,
         confidence: QuotaConfidence,
         capturedAt: Date,
         scopedWeekly: [QuotaScopedLimit] = [],
@@ -200,11 +209,12 @@ public struct QuotaSnapshot: Sendable, Hashable, Codable {
     /// Hand-written so a payload encoded before ``scopedWeekly`` or
     /// ``usageCredits`` existed still decodes: Swift's synthesized
     /// `init(from:)` ignores property defaults and would fail on the missing
-    /// keys.
+    /// keys. The two windows are decoded the same forgiving way — a missing
+    /// window key decodes as `nil`, which is exactly what it means.
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        fiveHour = try container.decode(QuotaWindow.self, forKey: .fiveHour)
-        sevenDay = try container.decode(QuotaWindow.self, forKey: .sevenDay)
+        fiveHour = try container.decodeIfPresent(QuotaWindow.self, forKey: .fiveHour)
+        sevenDay = try container.decodeIfPresent(QuotaWindow.self, forKey: .sevenDay)
         confidence = try container.decode(QuotaConfidence.self, forKey: .confidence)
         capturedAt = try container.decode(Date.self, forKey: .capturedAt)
         scopedWeekly = try container.decodeIfPresent([QuotaScopedLimit].self, forKey: .scopedWeekly) ?? []

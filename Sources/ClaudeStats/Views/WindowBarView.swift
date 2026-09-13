@@ -2,9 +2,16 @@ import ClaudeStatsCore
 import SwiftUI
 
 /// One rate-limit window row: `5-hour window  ▓▓▓▓▓▓░░ 62%  resets in 2h 14m`.
+///
+/// A `nil` ``window`` is the "no reading" row — `—  no reading` over an empty
+/// track. That is not 0%: it means no quota source currently reports the
+/// window at all, which is the normal state right after one rolls over. Scoped
+/// weekly and usage-credits rows always have a window and pass a non-`nil` one.
 struct WindowBarView: View {
     var title: String
-    var window: QuotaWindow
+    /// The window to render, or `nil` when nothing reported one — see the type
+    /// note.
+    var window: QuotaWindow?
     /// Passed in rather than read from the clock so the countdown ticks with the
     /// popover's timer and previews stay deterministic.
     var now: Date
@@ -30,16 +37,21 @@ struct WindowBarView: View {
                 .truncationMode(.tail)
                 .frame(width: PopoverMetrics.labelColumnWidth, alignment: .leading)
 
-            UsageBar(fraction: window.fractionUsed)
+            // An unknown window draws the empty track — the same pixels as 0%,
+            // but the two text columns say which of the two it is. The bar's own
+            // "0%" accessibility value would put back the number nobody
+            // reported, so it's hidden from the row's combined announcement.
+            UsageBar(fraction: window?.fractionUsed ?? 0)
                 .frame(minWidth: 48)
+                .accessibilityHidden(window == nil)
 
-            Text(DisplayFormat.percent(percentValue: window.percentUsed))
+            Text(DisplayFormat.windowPercent(window))
                 .font(PopoverMetrics.valueFont)
                 .frame(width: PopoverMetrics.percentColumnWidth, alignment: .trailing)
 
-            Text(window.timeUntilReset(from: now) == nil && !showsPendingResetPlaceholder
-                ? ""
-                : DisplayFormat.resetCountdown(window.timeUntilReset(from: now)))
+            Text(DisplayFormat.windowCountdown(
+                window, from: now, showsPendingResetPlaceholder: showsPendingResetPlaceholder
+            ))
                 .font(PopoverMetrics.captionFont)
                 .foregroundStyle(.secondary)
                 .frame(width: PopoverMetrics.countdownColumnWidth, alignment: .trailing)
@@ -76,6 +88,12 @@ struct WindowBarView: View {
         WindowBarView(
             title: "over budget",
             window: QuotaWindow(percentUsed: 118, resetsAt: now.addingTimeInterval(45)),
+            now: now
+        )
+        // No source reports this window at all — empty track, no percentage.
+        WindowBarView(
+            title: "unknown",
+            window: nil,
             now: now
         )
     }

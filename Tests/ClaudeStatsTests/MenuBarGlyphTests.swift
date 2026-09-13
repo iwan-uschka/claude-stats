@@ -111,10 +111,66 @@ final class MenuBarGlyphTests: XCTestCase {
                       "unexpected description: \(description)")
     }
 
-    func testAccessibilityDescriptionForANilSnapshotIsAllZero() throws {
+    /// No snapshot means no reading for either account-wide window, and the
+    /// description says so — "0%" would be a claim nothing made.
+    func testAccessibilityDescriptionForANilSnapshotSaysUnknownNotZero() throws {
         let description = try XCTUnwrap(MenuBarGlyph.image(for: nil).accessibilityDescription)
-        XCTAssertTrue(description.hasSuffix("0% five-hour, 0% seven-day, 0% weekly usage"),
-                      "unexpected description: \(description)")
+        XCTAssertTrue(
+            description.hasSuffix("five-hour unknown, seven-day unknown, 0% weekly usage"),
+            "unexpected description: \(description)"
+        )
+    }
+
+    /// The two windows are independent: one can be unreported while the other
+    /// reads normally — the state right after the 5-hour window rolls over.
+    func testAccessibilityDescriptionNamesOnlyTheUnreportedWindowAsUnknown() throws {
+        let image = MenuBarGlyph.image(for: QuotaSnapshot(
+            fiveHour: nil,
+            sevenDay: QuotaWindow(percentUsed: 31),
+            confidence: .official,
+            capturedAt: capturedAt
+        ))
+
+        let description = try XCTUnwrap(image.accessibilityDescription)
+        XCTAssertTrue(
+            description.hasSuffix("five-hour unknown, 31% seven-day, 0% weekly usage"),
+            "unexpected description: \(description)"
+        )
+    }
+
+    /// The mirror case: the five-hour window reads normally while the
+    /// seven-day one is unreported — the independent `sevenDayText` branch
+    /// gets its own coverage instead of only ever running alongside the
+    /// five-hour branch.
+    func testAccessibilityDescriptionNamesOnlyTheOtherUnreportedWindowAsUnknown() throws {
+        let image = MenuBarGlyph.image(for: QuotaSnapshot(
+            fiveHour: QuotaWindow(percentUsed: 62),
+            sevenDay: nil,
+            confidence: .official,
+            capturedAt: capturedAt
+        ))
+
+        let description = try XCTUnwrap(image.accessibilityDescription)
+        XCTAssertTrue(
+            description.hasSuffix("62% five-hour, seven-day unknown, 0% weekly usage"),
+            "unexpected description: \(description)"
+        )
+    }
+
+    /// An unknown window draws the same empty track a 0% one does — the glyph
+    /// keeps its three bars and its width; only the VoiceOver text differs.
+    func testImageSizeDoesNotDependOnAWindowBeingUnreported() {
+        let unknown = MenuBarGlyph.image(for: QuotaSnapshot(
+            fiveHour: nil,
+            sevenDay: nil,
+            confidence: .official,
+            capturedAt: capturedAt
+        ))
+        let known = MenuBarGlyph.image(for: snapshot(scopedWeekly: []))
+
+        XCTAssertEqual(unknown.size.width, known.size.width, accuracy: 0.001)
+        XCTAssertEqual(unknown.size.width, MenuBarGlyph.width(barCount: 3), accuracy: 0.001)
+        XCTAssertEqual(unknown.size.height, MenuBarGlyph.height, accuracy: 0.001)
     }
 
     // MARK: - Usage credits bar
