@@ -38,9 +38,12 @@ struct WindowBarView: View {
                 .frame(width: PopoverMetrics.labelColumnWidth, alignment: .leading)
 
             // An unknown window draws the empty track — the same pixels as 0%,
-            // but the two text columns say which of the two it is.
+            // but the two text columns say which of the two it is. The bar's own
+            // "0%" accessibility value would put back the number nobody
+            // reported, so it's hidden from the row's combined announcement.
             UsageBar(fraction: window?.fractionUsed ?? 0)
                 .frame(minWidth: 48)
+                .accessibilityHidden(window == nil)
 
             Text(DisplayFormat.windowPercent(window))
                 .font(PopoverMetrics.valueFont)

@@ -138,6 +138,25 @@ final class MenuBarGlyphTests: XCTestCase {
         )
     }
 
+    /// The mirror case: the five-hour window reads normally while the
+    /// seven-day one is unreported — the independent `sevenDayText` branch
+    /// gets its own coverage instead of only ever running alongside the
+    /// five-hour branch.
+    func testAccessibilityDescriptionNamesOnlyTheOtherUnreportedWindowAsUnknown() throws {
+        let image = MenuBarGlyph.image(for: QuotaSnapshot(
+            fiveHour: QuotaWindow(percentUsed: 62),
+            sevenDay: nil,
+            confidence: .official,
+            capturedAt: capturedAt
+        ))
+
+        let description = try XCTUnwrap(image.accessibilityDescription)
+        XCTAssertTrue(
+            description.hasSuffix("62% five-hour, seven-day unknown, 0% weekly usage"),
+            "unexpected description: \(description)"
+        )
+    }
+
     /// An unknown window draws the same empty track a 0% one does — the glyph
     /// keeps its three bars and its width; only the VoiceOver text differs.
     func testImageSizeDoesNotDependOnAWindowBeingUnreported() {
