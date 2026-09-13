@@ -208,6 +208,44 @@ public enum DisplayFormat {
         percent(fraction: percentValue / 100)
     }
 
+    /// Placeholder shown in the percent column of a window nothing reported.
+    ///
+    /// An em dash, not `0%`: a window absent from every payload has no reading,
+    /// and a number there would be a claim no source made.
+    public static let unknownWindowPercent = "—"
+
+    /// Placeholder shown in the countdown column of a window nothing reported.
+    ///
+    /// Not "reset pending" — that says the window exists and its reset is due.
+    /// This says we have no reading at all, which is the normal state between a
+    /// rollover and the session's next API call.
+    public static let unknownWindowCountdown = "no reading"
+
+    /// Percent column for a possibly-absent quota window: the percentage, or
+    /// ``unknownWindowPercent`` when no source reported the window.
+    public static func windowPercent(_ window: QuotaWindow?) -> String {
+        guard let window else { return unknownWindowPercent }
+        return percent(percentValue: window.percentUsed)
+    }
+
+    /// Countdown column for a possibly-absent quota window.
+    ///
+    /// Three outcomes, in order: no window at all →
+    /// ``unknownWindowCountdown``; a window whose reset is unknown or already
+    /// past → `reset pending`, or the empty string when the caller says this
+    /// row's missing `resets_at` means "not reported" rather than "pending"
+    /// (see ``QuotaScopedLimit``); otherwise the countdown itself.
+    public static func windowCountdown(
+        _ window: QuotaWindow?,
+        from now: Date,
+        showsPendingResetPlaceholder: Bool = true
+    ) -> String {
+        guard let window else { return unknownWindowCountdown }
+        let remaining = window.timeUntilReset(from: now)
+        if remaining == nil && !showsPendingResetPlaceholder { return "" }
+        return resetCountdown(remaining)
+    }
+
     private static func scaled(_ value: Double) -> String {
         let rounded = (value * 10).rounded() / 10
         if rounded == rounded.rounded() {

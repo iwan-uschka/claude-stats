@@ -4,8 +4,8 @@ import XCTest
 final class QuotaProvidingTests: XCTestCase {
     private func staleSnapshot(_ confidence: QuotaConfidence) -> QuotaSnapshot {
         QuotaSnapshot(
-            fiveHour: .empty,
-            sevenDay: .empty,
+            fiveHour: nil,
+            sevenDay: nil,
             confidence: confidence,
             capturedAt: Date(timeIntervalSince1970: 1_787_935_500)
         )

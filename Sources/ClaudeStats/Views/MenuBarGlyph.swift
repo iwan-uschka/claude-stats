@@ -7,8 +7,10 @@ import SwiftUI
 /// hatched usage-credits bar when the account has any.
 ///
 /// The first three are always drawn: with no scoped-limit reading, the third
-/// bar is simply empty (0% fill), exactly like an absent snapshot draws the
-/// first two as empty tracks rather than omitting them. The fourth is the
+/// bar is simply empty (0% fill), exactly like an absent snapshot — or one on
+/// which no source reported a window — draws the first two as empty tracks
+/// rather than omitting them. An unknown window is drawn with the same pixels
+/// as 0%; only the accessibility description tells the two apart. The fourth is the
 /// exception — usage credits are transient, and an always-drawn empty bar would
 /// imply a monthly spend cap the account may not have. So the glyph is three
 /// bars wide normally and four wide while credits are reported; the width is a
@@ -68,26 +70,33 @@ enum MenuBarGlyph {
 
     /// Template image for the given window fills (each 0...1, clamped).
     ///
-    /// `scopedWeeklyFraction` defaults to 0 (an empty third bar) when there is
-    /// no scoped reading, same as the other two fractions default to 0 for an
-    /// absent snapshot in ``image(for:)``. `scopedWeeklyLabel` only names the
-    /// bar for VoiceOver when there is one; neither says what the scoped
-    /// percentage is a share of — see ``QuotaScopedLimit``.
+    /// `fiveHourFraction` / `sevenDayFraction` are `nil` when no quota source
+    /// reports that window — after a rollover, say, or with no snapshot at all.
+    /// Such a bar is drawn exactly like a 0% one (there is no third rendering
+    /// of an empty 3 pt bar to invent), but the accessibility description says
+    /// `five-hour unknown` instead of `0% five-hour`, so the one place that can
+    /// express the difference does.
     ///
-    /// `usageCreditsFraction` is the one *optional* bar: `nil` (the common
+    /// `scopedWeeklyFraction` defaults to 0 (an empty third bar) when there is
+    /// no scoped reading. `scopedWeeklyLabel` only names the bar for VoiceOver
+    /// when there is one; neither says what the scoped percentage is a share
+    /// of — see ``QuotaScopedLimit``.
+    ///
+    /// `usageCreditsFraction` is the one *optional bar*: `nil` (the common
     /// case) draws the familiar three-bar glyph, and a value draws a fourth,
     /// hatched bar. Not "0 means absent" — 0% of a real spend cap is a
-    /// meaningful reading and gets drawn.
+    /// meaningful reading and gets drawn. The two optional *window* fractions
+    /// above never change the bar count.
     static func image(
-        fiveHourFraction: Double,
-        sevenDayFraction: Double,
+        fiveHourFraction: Double?,
+        sevenDayFraction: Double?,
         scopedWeeklyFraction: Double = 0,
         scopedWeeklyLabel: String? = nil,
         usageCreditsFraction: Double? = nil
     ) -> NSImage {
         var bars: [(fraction: Double, hatched: Bool)] = [
-            (DisplayFormat.clamped01(fiveHourFraction), false),
-            (DisplayFormat.clamped01(sevenDayFraction), false),
+            (DisplayFormat.clamped01(fiveHourFraction ?? 0), false),
+            (DisplayFormat.clamped01(sevenDayFraction ?? 0), false),
             (DisplayFormat.clamped01(scopedWeeklyFraction), false),
         ]
         if let usageCreditsFraction {
@@ -105,8 +114,14 @@ enum MenuBarGlyph {
         image.isTemplate = true
         let devSuffix = BuildEnvironment.isDevelopmentBuild ? BuildEnvironment.devBuildSuffix : ""
         let scope = scopedWeeklyLabel.map { "\($0) " } ?? ""
-        var description = "Claude Stats\(devSuffix): \(Int(bars[0].fraction * 100))% five-hour, "
-            + "\(Int(bars[1].fraction * 100))% seven-day, \(Int(bars[2].fraction * 100))% \(scope)weekly usage"
+        let fiveHourText = fiveHourFraction == nil
+            ? "five-hour unknown"
+            : "\(Int(bars[0].fraction * 100))% five-hour"
+        let sevenDayText = sevenDayFraction == nil
+            ? "seven-day unknown"
+            : "\(Int(bars[1].fraction * 100))% seven-day"
+        var description = "Claude Stats\(devSuffix): \(fiveHourText), \(sevenDayText), "
+            + "\(Int(bars[2].fraction * 100))% \(scope)weekly usage"
         if let usageCreditsFraction {
             description += ", \(Int(DisplayFormat.clamped01(usageCreditsFraction) * 100))% usage credits"
         }
@@ -120,14 +135,16 @@ enum MenuBarGlyph {
     /// The scoped bar takes the highest-percentage entry —
     /// ``QuotaSnapshot/scopedWeekly`` is already sorted descending, so `first`
     /// is that one, and it stays the same entry across polls. No entry at all
-    /// (nil snapshot, or a snapshot with none) draws the third bar at 0%,
-    /// same as the first two draw at 0% with no snapshot. The fourth bar is
-    /// drawn only when the snapshot actually carries usage credits.
+    /// (nil snapshot, or a snapshot with none) draws the third bar at 0%.
+    /// The first two bars draw empty for an absent snapshot and for a window no
+    /// source reported, and both of those pass `nil` through, so VoiceOver
+    /// calls them unknown rather than 0%. The fourth bar is drawn only when the
+    /// snapshot actually carries usage credits.
     static func image(for snapshot: QuotaSnapshot?) -> NSImage {
         let scoped = snapshot?.scopedWeekly.first
         return image(
-            fiveHourFraction: snapshot?.fiveHour.fractionUsed ?? 0,
-            sevenDayFraction: snapshot?.sevenDay.fractionUsed ?? 0,
+            fiveHourFraction: snapshot?.fiveHour?.fractionUsed,
+            sevenDayFraction: snapshot?.sevenDay?.fractionUsed,
             scopedWeeklyFraction: scoped?.window.fractionUsed ?? 0,
             scopedWeeklyLabel: scoped?.label,
             usageCreditsFraction: snapshot?.usageCredits?.window.fractionUsed
@@ -236,10 +253,13 @@ enum MenuBarGlyph {
     // The last four are the ones to look at for this feature: whether the
     // hatched fourth bar reads as textured rather than as a lighter solid at
     // 3 pt wide, in both appearances.
-    let samples: [(String, Double, Double, Double, Double?)] = [
+    let samples: [(String, Double?, Double?, Double, Double?)] = [
         // Third bar always draws, same as the first two — empty here since
         // there's no scoped reading.
         ("empty", 0, 0, 0, nil),
+        // No reading for the 5-hour window: same pixels as 0%, different
+        // VoiceOver text.
+        ("5h unknown", nil, 0.31, 0, nil),
         ("mock", 0.62, 0.31, 0, nil),
         ("high", 0.94, 0.71, 0, nil),
         ("full", 1, 1, 0, nil),

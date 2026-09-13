@@ -95,7 +95,7 @@ final class FreshestQuotaProviderTests: XCTestCase {
         let result = try await provider.currentSnapshot()
 
         XCTAssertEqual(result.confidence, .official)
-        XCTAssertEqual(result.fiveHour.percentUsed, 62)
+        XCTAssertEqual(result.fiveHour?.percentUsed, 62)
     }
 
     /// The priority flip in one test: this used to be a freshness compare, so
@@ -112,7 +112,7 @@ final class FreshestQuotaProviderTests: XCTestCase {
         let result = try await provider.currentSnapshot()
 
         XCTAssertEqual(result.confidence, .official)
-        XCTAssertEqual(result.fiveHour.percentUsed, 62)
+        XCTAssertEqual(result.fiveHour?.percentUsed, 62)
     }
 
     /// A hook reading that carries its own `utilization` copy is complete:
@@ -192,7 +192,7 @@ final class FreshestQuotaProviderTests: XCTestCase {
         let result = try await provider.currentSnapshot()
 
         XCTAssertEqual(result.confidence, .official)
-        XCTAssertEqual(result.fiveHour.percentUsed, 62)
+        XCTAssertEqual(result.fiveHour?.percentUsed, 62)
         XCTAssertEqual(result.scopedWeekly, scoped)
         XCTAssertEqual(result.usageCredits, credits)
     }
@@ -274,7 +274,7 @@ final class FreshestQuotaProviderTests: XCTestCase {
         let result = try await provider.currentSnapshot()
 
         XCTAssertEqual(result.confidence, .cachedOfficial)
-        XCTAssertEqual(result.fiveHour.percentUsed, 97)
+        XCTAssertEqual(result.fiveHour?.percentUsed, 97)
         XCTAssertEqual(result.scopedWeekly, scoped)
         XCTAssertEqual(result.usageCredits, credits)
     }
@@ -349,7 +349,7 @@ final class FreshestQuotaProviderTests: XCTestCase {
             try await provider.currentSnapshot()
         }
         XCTAssertEqual(carried?.confidence, .cachedOfficial)
-        XCTAssertEqual(carried?.fiveHour.percentUsed, 97)
+        XCTAssertEqual(carried?.fiveHour?.percentUsed, 97)
     }
 
     /// The freshest of the two stale snapshots already carries a

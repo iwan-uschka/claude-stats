@@ -108,7 +108,7 @@ final class AppModelTests: XCTestCase {
     /// on, so "which snapshot ended up on screen" is never ambiguous.
     private static let staleReading = QuotaSnapshot(
         fiveHour: QuotaWindow(percentUsed: 42),
-        sevenDay: .empty,
+        sevenDay: nil,
         confidence: .cachedOfficial,
         capturedAt: Date(timeIntervalSince1970: 1_787_935_500)
     )
