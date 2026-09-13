@@ -20,6 +20,22 @@
 # ClaudeStats is a menu bar app, not a shell command, so it can't be. This script
 # is the hook; it writes the payload to a cache file that the app reads.
 #
+# ONE FILE PER SESSION
+# --------------------
+# Every running Claude Code process runs this script, and each pipes in the rate
+# limits *its own* last API response carried — an idle session re-renders its
+# status line on timers alone and hands over numbers that may be hours old.
+# Writing one shared file therefore meant last writer wins, with the quiet
+# session's stale numbers stamped as captured "now". Worse, Claude Code drops a
+# window from the payload entirely once its `resets_at` has passed, so the quiet
+# writer's payload can carry `seven_day` alone and the app read the missing
+# `five_hour` back as 0%.
+#
+# So the payload's own top-level `session_id` names the file: one file per
+# session, in a directory, and the app merges them (latest `resets_at` wins;
+# same window, higher percentage wins; expired windows are ignored). A session
+# can now only ever overwrite its own numbers.
+#
 # It is not only the freshest source, it is the *resilient* one. Everything
 # beyond those four numbers — the per-model `weekly_scoped` rows and the org's
 # extra-usage `spend` (the app's third and fourth bars) — exists only inside
@@ -29,8 +45,9 @@
 # it between 2026-08-27 and 2026-08-28), and it refreshes on Claude Code's own
 # schedule — measured unmoved for 3.7+ hours during active sessions. So this
 # script snapshots those two objects *itself*, on every status line render,
-# into the same cache file as the rate limits. The result is one file, written
-# by us, at one known age, carrying everything the app draws.
+# into the same cache file as the rate limits. The result is a file per session,
+# written by us, each at one known age, together carrying everything the app
+# draws.
 #
 # The app still reads `cachedUsageUtilization` directly as a backup
 # (`CachedUtilizationReader`) for machines where this hook was never installed,
@@ -79,11 +96,21 @@
 #     }
 #   }
 #
-# Verify with:  cat "$HOME/Library/Application Support/ClaudeStats/statusline-cache.json"
+# Verify with:
+#   ls -l "$HOME/Library/Application Support/ClaudeStats/statusline-cache/"
+#   cat  "$HOME/Library/Application Support/ClaudeStats/statusline-cache/"*.json
 #
 # CACHE FORMAT
 # ------------
-# With `jq` installed, three top-level keys are written:
+# One file per session, `statusline-cache/<session_id>.json` inside the cache
+# directory — `session_id` straight from the payload, stripped to
+# `[A-Za-z0-9._-]` so it can't escape that directory, and
+# `unknown-session.json` when the payload names no session or `jq` isn't there
+# to read it out. Older copies of this script wrote a single
+# `statusline-cache.json` beside the directory; that file is no longer written,
+# and the app still reads it if it's there.
+#
+# With `jq` installed, three top-level keys are written per file:
 #
 #   {"captured_at":1738425600,
 #    "rate_limits":{"five_hour":{"used_percentage":23.5,"resets_at":1738425600},
@@ -110,6 +137,10 @@
 # (trimmed, tilde-expanded) `/.claude.json` when that variable is set to
 # something non-blank, else $HOME/.claude.json; first one that opens wins.
 #
+# The `utilization` copy is shared, not per-session: it comes from a file every
+# session sees identically, so the app takes it from the most recently captured
+# cache file rather than merging it.
+#
 # STATE-FILE READ COST
 # ---------------------
 # `~/.claude.json` is Claude Code's own scratch state (measured ~145 KB, and
@@ -118,7 +149,8 @@
 # fingerprint gate to skip re-parsing an unchanged file). This script fires on
 # every status line render, which is far more often than that reader's
 # throttled poll, so it carries the same gate here: a sidecar file
-# (`statusline-utilization-cache.json`, next to the main cache) remembers the
+# (`statusline-utilization-cache.json`, one for the machine rather than one per
+# session, in the cache directory itself) remembers the
 # state file's mtime+size+inode alongside the last-extracted `utilization`
 # payload, and `extract_utilization` skips the `jq` parse of the (much
 # larger) state file entirely when the fingerprint still matches — including
@@ -130,21 +162,30 @@
 # not a correctness bug — the reader already tolerates an absent
 # `utilization` key.
 #
-# Without `jq`, the raw payload is written verbatim, the app uses the file's
-# modification time as the capture time, and no `utilization` key is produced —
-# hand-parsing JSON with `grep` is not worth the wrong answers it would give.
-# Both shapes are accepted by the reader.
+# Without `jq`, the raw payload is written verbatim to
+# `statusline-cache/unknown-session.json`, the app uses the file's modification
+# time as the capture time, and no `utilization` key is produced —
+# hand-parsing JSON with `grep` is not worth the wrong answers it would give,
+# and that includes digging the `session_id` out, so every session on such a
+# machine shares that one file. Both shapes are accepted by the reader.
 #
 # Override the cache directory with $CLAUDE_STATS_CACHE_DIR — useful for
-# manually exercising this script against a scratch directory. (No automated
-# test harness exercises this script yet; that claim was previously here but
-# wasn't true — the repo has no shell test runner.)
+# exercising this script against a scratch directory. That is exactly what
+# `Tests/ClaudeStatsCoreTests/StatuslineCacheScriptTests.swift` does: it runs
+# this file under `bash` with a scratch $CLAUDE_STATS_CACHE_DIR and $HOME and
+# checks what lands on disk, so `swift test` covers the file layout the app
+# depends on. There is still no shell test runner in the repo — the harness is
+# an XCTest case driving `Process`.
 
 set -uo pipefail
 
 cache_dir="${CLAUDE_STATS_CACHE_DIR:-${HOME:-/tmp}/Library/Application Support/ClaudeStats}"
-cache_file="$cache_dir/statusline-cache.json"
+# One file per Claude Code session lives in here — see ONE FILE PER SESSION.
+session_cache_dir="$cache_dir/statusline-cache"
+# Used when the payload names no session, or when there's no `jq` to read it.
+fallback_session_name="unknown-session"
 # Sidecar for the state-file fingerprint gate — see STATE-FILE READ COST above.
+# Machine-wide, not per-session: it caches a file every session reads alike.
 utilization_cache_file="$cache_dir/statusline-utilization-cache.json"
 
 # Claude Code hands the payload over on stdin.
@@ -245,11 +286,29 @@ extract_utilization() {
 }
 
 # --- write the cache -------------------------------------------------------
+# Names this session's cache file. `session_id` is a documented, stable-per-
+# session top-level field of the payload; everything outside `[A-Za-z0-9._-]`
+# is stripped, so no `/` survives and the name can only ever land inside
+# `$session_cache_dir`. An empty result — no `session_id`, or nothing left of
+# it — falls back to the shared name, as does the no-`jq` path: hand-parsing
+# JSON to find the id would cost more wrong answers than it saves files.
+session_cache_file() {
+  local id=""
+  if command -v jq >/dev/null 2>&1; then
+    id=$(printf '%s' "$input" \
+      | jq -r 'if (.session_id | type) == "string" then .session_id else empty end' 2>/dev/null)
+    id=$(printf '%s' "$id" | LC_ALL=C tr -cd 'A-Za-z0-9._-')
+  fi
+  [ -n "$id" ] || id="$fallback_session_name"
+  printf '%s/%s.json' "$session_cache_dir" "$id"
+}
+
 # Never let a cache-write failure break the user's status line: everything here
 # is best-effort, and the delegate runs regardless.
 write_cache() {
-  mkdir -p "$cache_dir" || return 1
-  local tmp
+  mkdir -p "$session_cache_dir" || return 1
+  local cache_file tmp
+  cache_file=$(session_cache_file)
   tmp=$(mktemp "${cache_file}.XXXXXX") || return 1
   # No EXIT trap here: `tmp` is `local` to this function, but a trap installed
   # inside it runs at the *script's* exit, by which point the function has

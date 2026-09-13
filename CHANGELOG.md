@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+### Fixed
+- The quota bars no longer show another session's stale numbers — or a
+  confident 0% — when several Claude Code sessions are open. Every running
+  session feeds the statusline hook the rate limits *its own* last API response
+  carried, and an idle session re-renders its status line on timers alone, so
+  the single shared cache file meant last writer wins: hours-old percentages,
+  stamped as captured just now. Worse, Claude Code drops a window from the
+  payload once that window has reset, and the missing one was read back as 0%
+  used (observed: 0% / 25% on screen against a real 68% / 44%). The hook now
+  writes one file per session, and the app merges them per window — readings
+  whose reset has passed are ignored, the latest window wins, and within one
+  window the highest percentage wins, since usage inside a window never goes
+  down. Session files nobody has written in a week are cleaned up as the app
+  reads.
+  - **Existing installs keep running the old script until it is updated:**
+    Settings → Quota source will offer **Update Script** (or re-run **Set Up
+    Automatically**). Until then the app reads the old single file, which it
+    still accepts, so nothing breaks in the meantime.
+
 ## [0.9.8] - 2026-09-11
 
 ### Fixed

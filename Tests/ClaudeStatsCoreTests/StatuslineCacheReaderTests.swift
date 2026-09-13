@@ -1,19 +1,26 @@
 import XCTest
 @testable import ClaudeStatsCore
 
-/// Every test here writes its fixture into a per-test temp directory and injects
-/// that path — the real `~/Library/Application Support/ClaudeStats` is never
-/// touched, read or written.
+/// Every test here writes its fixtures into a per-test temp directory standing
+/// in for `~/Library/Application Support/ClaudeStats`, and injects that path —
+/// the real one is never touched, read or written.
 final class StatuslineCacheReaderTests: XCTestCase {
+    /// Stands in for the `ClaudeStats` Application Support directory.
     private var directory: URL!
-    private var cacheURL: URL!
+    /// `…/statusline-cache/`, where the hook writes one file per session.
+    private var sessionDirectory: URL!
+    /// `…/statusline-cache.json`, what older copies of the hook wrote.
+    private var legacyURL: URL!
 
     override func setUpWithError() throws {
         try super.setUpWithError()
         directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("StatuslineCacheReaderTests-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        cacheURL = directory.appendingPathComponent("statusline-cache.json")
+        sessionDirectory = directory.appendingPathComponent(
+            StatuslineCacheReader.sessionCacheDirectoryName, isDirectory: true)
+        legacyURL = directory.appendingPathComponent(
+            StatuslineCacheReader.legacyCacheFileName, isDirectory: false)
+        try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
     }
 
     override func tearDownWithError() throws {
@@ -38,8 +45,32 @@ final class StatuslineCacheReaderTests: XCTestCase {
 
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
-    private func write(_ json: String) throws {
-        try Data(json.utf8).write(to: cacheURL)
+    /// Writes one session's cache file. Most tests only need one session, so
+    /// the name has a default; the merge tests pass their own.
+    ///
+    /// The modification date is pinned relative to this suite's fake `now` —
+    /// otherwise a fixture the reader has to date from mtime (a payload with
+    /// no `captured_at`, or one that isn't JSON at all) would look years old
+    /// against that clock and be pruned before the test got to it.
+    @discardableResult
+    private func write(session: String = "session-a", _ json: String) throws -> URL {
+        let url = sessionDirectory.appendingPathComponent("\(session).json")
+        try Data(json.utf8).write(to: url)
+        try setModificationDate(now.addingTimeInterval(-30), of: url)
+        return url
+    }
+
+    /// Writes the single pre-per-session cache file, which the reader still
+    /// accepts as one more input.
+    @discardableResult
+    private func writeLegacy(_ json: String) throws -> URL {
+        try Data(json.utf8).write(to: legacyURL)
+        try setModificationDate(now.addingTimeInterval(-30), of: legacyURL)
+        return legacyURL
+    }
+
+    private func setModificationDate(_ date: Date, of url: URL) throws {
+        try FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: url.path)
     }
 
     private func makeReader(
@@ -48,7 +79,7 @@ final class StatuslineCacheReaderTests: XCTestCase {
     ) -> StatuslineCacheReader {
         let fixedNow = now
         return StatuslineCacheReader(
-            cacheURL: cacheURL,
+            cacheDirectoryURL: directory,
             stalenessThreshold: stalenessThreshold,
             fileManager: fileManager,
             now: { fixedNow }
@@ -74,6 +105,26 @@ final class StatuslineCacheReaderTests: XCTestCase {
             "five_hour": { "used_percentage": 23.5, "resets_at": \(epoch + 3600) },
             "seven_day": { "used_percentage": 41.2, "resets_at": \(epoch + 86_400) }
           }\(extra)
+        }
+        """
+    }
+
+    /// One window object, for the merge fixtures — each of which cares about a
+    /// different combination of percentage, reset time and presence.
+    private func windowJSON(_ key: String, percent: Double, resetsAt: Date?) -> String {
+        let reset = resetsAt.map { ", \"resets_at\": \(Int($0.timeIntervalSince1970))" } ?? ""
+        return "\"\(key)\": { \"used_percentage\": \(percent)\(reset) }"
+    }
+
+    /// A cache file carrying exactly the windows given — Claude Code omits a
+    /// window from the payload once it has rolled over, so "carrying only one"
+    /// is a shape that really occurs.
+    private func cache(capturedAt: Date, _ windows: String..., utilization: String? = nil) -> String {
+        let extra = utilization.map { ",\n  \"utilization\": \($0)" } ?? ""
+        return """
+        {
+          "captured_at": \(Int(capturedAt.timeIntervalSince1970)),
+          "rate_limits": { \(windows.joined(separator: ", ")) }\(extra)
         }
         """
     }
@@ -133,7 +184,7 @@ final class StatuslineCacheReaderTests: XCTestCase {
     /// The no-`jq` fallback: raw statusline payload, no `captured_at`, capture
     /// time taken from the file's modification date.
     func testRawPayloadWithoutCapturedAtFallsBackToFileModificationDate() async throws {
-        try write("""
+        let url = try write("""
         {
           "session_id": "abc",
           "model": { "display_name": "Opus 5" },
@@ -145,7 +196,7 @@ final class StatuslineCacheReaderTests: XCTestCase {
         }
         """)
         let modified = now.addingTimeInterval(-120)
-        try FileManager.default.setAttributes([.modificationDate: modified], ofItemAtPath: cacheURL.path)
+        try setModificationDate(modified, of: url)
 
         let snapshot = try await makeReader().currentSnapshot()
 
@@ -172,6 +223,197 @@ final class StatuslineCacheReaderTests: XCTestCase {
         XCTAssertEqual(snapshot.sevenDay, .empty)
     }
 
+    // MARK: - Merging across sessions
+
+    /// Two sessions, same window, different readings. Utilization within one
+    /// window never decreases, so the higher number is the newer one — whatever
+    /// the files' own capture stamps say. (Which is the whole point: a quiet
+    /// session restamps hours-old numbers as captured "now".)
+    func testSameWindowPrefersTheHigherPercentageWhateverTheCaptureTime() async throws {
+        try write(session: "busy", cache(
+            capturedAt: now.addingTimeInterval(-300),
+            windowJSON("five_hour", percent: 68, resetsAt: now.addingTimeInterval(3600)),
+            windowJSON("seven_day", percent: 44, resetsAt: now.addingTimeInterval(86_400))
+        ))
+        try write(session: "idle", cache(
+            capturedAt: now.addingTimeInterval(-10),
+            windowJSON("five_hour", percent: 25, resetsAt: now.addingTimeInterval(3600)),
+            windowJSON("seven_day", percent: 20, resetsAt: now.addingTimeInterval(86_400))
+        ))
+
+        let snapshot = try await makeReader().currentSnapshot()
+
+        XCTAssertEqual(snapshot.fiveHour.percentUsed, 68)
+        XCTAssertEqual(snapshot.sevenDay.percentUsed, 44)
+        // Only the busy session contributed, so its capture time is the one the
+        // freshness line has any business showing.
+        XCTAssertEqual(snapshot.capturedAt.timeIntervalSince1970,
+                       now.timeIntervalSince1970 - 300, accuracy: 1)
+    }
+
+    /// The reported symptom: an idle session's payload had dropped `five_hour`
+    /// entirely (Claude Code omits a rolled-over window), was written last, and
+    /// the missing window read back as a confident 0%.
+    func testWindowMissingFromTheNewestFileComesFromAnotherSessionNotZero() async throws {
+        try write(session: "busy", cache(
+            capturedAt: now.addingTimeInterval(-200),
+            windowJSON("five_hour", percent: 68, resetsAt: now.addingTimeInterval(1800)),
+            windowJSON("seven_day", percent: 44, resetsAt: now.addingTimeInterval(86_400))
+        ))
+        try write(session: "idle", cache(
+            capturedAt: now.addingTimeInterval(-10),
+            windowJSON("seven_day", percent: 25, resetsAt: now.addingTimeInterval(86_400))
+        ))
+
+        let snapshot = try await makeReader().currentSnapshot()
+
+        XCTAssertEqual(snapshot.fiveHour.percentUsed, 68)
+        XCTAssertEqual(snapshot.sevenDay.percentUsed, 44)
+    }
+
+    /// The same thing one step earlier: the idle session still carries the
+    /// window, but its reset has already passed. Expired, not 0%.
+    func testExpiredWindowIsIgnoredRatherThanReadAsAReading() async throws {
+        try write(session: "busy", cache(
+            capturedAt: now.addingTimeInterval(-200),
+            windowJSON("five_hour", percent: 68, resetsAt: now.addingTimeInterval(1800))
+        ))
+        try write(session: "idle", cache(
+            capturedAt: now.addingTimeInterval(-10),
+            windowJSON("five_hour", percent: 3, resetsAt: now.addingTimeInterval(-60))
+        ))
+
+        let snapshot = try await makeReader().currentSnapshot()
+
+        XCTAssertEqual(snapshot.fiveHour.percentUsed, 68)
+    }
+
+    /// Every reading of a window has expired: that is "no data", not 0%.
+    func testAllWindowsExpiredThrowsNoQuotaSourceAvailable() async throws {
+        try write(cache(
+            capturedAt: now.addingTimeInterval(-60),
+            windowJSON("five_hour", percent: 68, resetsAt: now.addingTimeInterval(-30)),
+            windowJSON("seven_day", percent: 44, resetsAt: now.addingTimeInterval(-10))
+        ))
+
+        await assertThrows(.noQuotaSourceAvailable) {
+            try await self.makeReader().currentSnapshot()
+        }
+    }
+
+    /// A later reset is a later window, and a fresh window legitimately starts
+    /// near zero — so `resets_at` outranks the percentage.
+    func testLaterResetsAtBeatsAHigherPercentage() async throws {
+        try write(session: "old-window", cache(
+            capturedAt: now.addingTimeInterval(-30),
+            windowJSON("five_hour", percent: 90, resetsAt: now.addingTimeInterval(60))
+        ))
+        try write(session: "new-window", cache(
+            capturedAt: now.addingTimeInterval(-20),
+            windowJSON("five_hour", percent: 5, resetsAt: now.addingTimeInterval(18_000))
+        ))
+
+        let snapshot = try await makeReader().currentSnapshot()
+
+        XCTAssertEqual(snapshot.fiveHour.percentUsed, 5)
+        XCTAssertEqual(snapshot.fiveHour.resetsAt, now.addingTimeInterval(18_000))
+    }
+
+    /// A reading with no `resets_at` can't be ranked against one that has it,
+    /// so it only ever wins when nothing dated survives — and then the newest
+    /// capture is all there is to go on.
+    func testUndatedReadingLosesToADatedOneAndWinsOnlyAmongItsOwnKind() async throws {
+        try write(session: "dated", cache(
+            capturedAt: now.addingTimeInterval(-300),
+            windowJSON("five_hour", percent: 68, resetsAt: now.addingTimeInterval(1800))
+        ))
+        try write(session: "undated-old", cache(
+            capturedAt: now.addingTimeInterval(-200),
+            windowJSON("five_hour", percent: 12, resetsAt: nil),
+            windowJSON("seven_day", percent: 30, resetsAt: nil)
+        ))
+        try write(session: "undated-new", cache(
+            capturedAt: now.addingTimeInterval(-100),
+            windowJSON("seven_day", percent: 31, resetsAt: nil)
+        ))
+
+        let snapshot = try await makeReader().currentSnapshot()
+
+        XCTAssertEqual(snapshot.fiveHour.percentUsed, 68)
+        XCTAssertEqual(snapshot.sevenDay.percentUsed, 31)
+    }
+
+    /// A machine whose hook script hasn't been reinstalled yet still has a
+    /// single `statusline-cache.json`, and it takes part in the merge like any
+    /// session file.
+    func testLegacySingleCacheFileIsStillReadAndMerged() async throws {
+        try writeLegacy(cache(
+            capturedAt: now.addingTimeInterval(-120),
+            windowJSON("five_hour", percent: 68, resetsAt: now.addingTimeInterval(1800))
+        ))
+        try write(session: "new-style", cache(
+            capturedAt: now.addingTimeInterval(-60),
+            windowJSON("seven_day", percent: 44, resetsAt: now.addingTimeInterval(86_400))
+        ))
+
+        let snapshot = try await makeReader().currentSnapshot()
+
+        XCTAssertEqual(snapshot.fiveHour.percentUsed, 68)
+        XCTAssertEqual(snapshot.sevenDay.percentUsed, 44)
+        // Newest of the two contributors.
+        XCTAssertEqual(snapshot.capturedAt.timeIntervalSince1970,
+                       now.timeIntervalSince1970 - 60, accuracy: 1)
+    }
+
+    /// The legacy file on its own still works — the pre-upgrade state, until
+    /// the next status line render writes a session file.
+    func testLegacySingleCacheFileAloneIsEnough() async throws {
+        try writeLegacy(filteredCache(capturedAt: now.addingTimeInterval(-30)))
+
+        let snapshot = try await makeReader().currentSnapshot()
+
+        XCTAssertEqual(snapshot.fiveHour.percentUsed, 23.5, accuracy: 0.001)
+    }
+
+    /// Whichever file supplied a chosen window dates the snapshot — and the
+    /// staleness gate is applied to that, not to the oldest file lying around.
+    func testCapturedAtIsTheNewestContributingFile() async throws {
+        try write(session: "old", cache(
+            capturedAt: now.addingTimeInterval(-700),
+            windowJSON("five_hour", percent: 68, resetsAt: now.addingTimeInterval(1800))
+        ))
+        try write(session: "new", cache(
+            capturedAt: now.addingTimeInterval(-100),
+            windowJSON("seven_day", percent: 44, resetsAt: now.addingTimeInterval(86_400))
+        ))
+
+        let snapshot = try await makeReader().currentSnapshot()
+
+        XCTAssertEqual(snapshot.capturedAt.timeIntervalSince1970,
+                       now.timeIntervalSince1970 - 100, accuracy: 1)
+        XCTAssertFalse(snapshot.isStale(asOf: now))
+    }
+
+    /// …and when every contributor is old, the merged snapshot is stale as a
+    /// whole, aged from the newest of them.
+    func testMergedSnapshotGoesStaleOnItsNewestContributor() async throws {
+        try write(session: "old", cache(
+            capturedAt: now.addingTimeInterval(-900),
+            windowJSON("five_hour", percent: 68, resetsAt: now.addingTimeInterval(1800))
+        ))
+        try write(session: "less-old", cache(
+            capturedAt: now.addingTimeInterval(-650),
+            windowJSON("seven_day", percent: 44, resetsAt: now.addingTimeInterval(86_400))
+        ))
+
+        let carriedOrNil = await assertThrowsStale(age: 650) {
+            try await self.makeReader().currentSnapshot()
+        }
+        let carried = try XCTUnwrap(carriedOrNil)
+        XCTAssertEqual(carried.fiveHour.percentUsed, 68)
+        XCTAssertEqual(carried.sevenDay.percentUsed, 44)
+    }
+
     // MARK: - The copied `utilization` object
 
     /// The whole point of the copy: a hook-only reading now carries all four
@@ -193,6 +435,55 @@ final class StatuslineCacheReaderTests: XCTestCase {
         XCTAssertEqual(credits.limit, MoneyAmount(amountMinor: 3_300, currency: "EUR", exponent: 2))
         XCTAssertEqual(credits.percentUsed, 0)
         XCTAssertNil(snapshot.usageCreditsDisabledReason)
+    }
+
+    /// Every session copies the same `~/.claude.json`, so this object isn't
+    /// merged window-style — the most recent copy simply wins, even when the
+    /// session that wrote it contributed no window at all.
+    func testUtilizationComesFromTheNewestFileCarryingOne() async throws {
+        try write(session: "older", cache(
+            capturedAt: now.addingTimeInterval(-300),
+            windowJSON("five_hour", percent: 68, resetsAt: now.addingTimeInterval(1800)),
+            utilization: copiedUtilization
+        ))
+        try write(session: "newer", cache(
+            capturedAt: now.addingTimeInterval(-30),
+            windowJSON("five_hour", percent: 10, resetsAt: now.addingTimeInterval(1800)),
+            utilization: """
+                { "limits": [ { "kind": "weekly_scoped", "percent": 51,
+                                "scope": { "model": { "display_name": "Opus" } } } ] }
+                """
+        ))
+
+        let snapshot = try await makeReader().currentSnapshot()
+
+        // The window still comes from the higher (i.e. newer) reading…
+        XCTAssertEqual(snapshot.fiveHour.percentUsed, 68)
+        // …but the copied object comes from the newest file that has one.
+        XCTAssertEqual(snapshot.scopedWeekly.map(\.label), ["Opus"])
+        XCTAssertNil(snapshot.usageCredits)
+    }
+
+    /// The newest file having no copy is the normal mixed state on a machine
+    /// where one session runs without `jq` or lost the state file for a render:
+    /// fall back to the newest file that does carry one rather than dropping
+    /// the two bars.
+    func testUtilizationFallsBackToAnOlderFileWhenTheNewestHasNone() async throws {
+        try write(session: "older", cache(
+            capturedAt: now.addingTimeInterval(-300),
+            windowJSON("five_hour", percent: 68, resetsAt: now.addingTimeInterval(1800)),
+            utilization: copiedUtilization
+        ))
+        try write(session: "newer", cache(
+            capturedAt: now.addingTimeInterval(-30),
+            windowJSON("five_hour", percent: 70, resetsAt: now.addingTimeInterval(1800))
+        ))
+
+        let snapshot = try await makeReader().currentSnapshot()
+
+        XCTAssertEqual(snapshot.fiveHour.percentUsed, 70)
+        XCTAssertEqual(snapshot.scopedWeekly.map(\.label), ["Sonnet", "Fable"])
+        XCTAssertEqual(snapshot.usageCredits?.limit.amountMinor, 3_300)
     }
 
     /// `extra_usage` is copied across too, not just `spend` — without it the
@@ -275,6 +566,24 @@ final class StatuslineCacheReaderTests: XCTestCase {
         XCTAssertEqual(reading.credits?.limit.amountMinor, 3_300)
     }
 
+    /// Same "newest copy wins" rule as in the snapshot, on the bypass path.
+    func testBypassAccessorsAlsoTakeTheNewestUtilization() async throws {
+        try write(session: "older", filteredCache(
+            capturedAt: now.addingTimeInterval(-900), utilization: copiedUtilization))
+        try write(session: "newer", filteredCache(
+            capturedAt: now.addingTimeInterval(-700), utilization: """
+                { "limits": [ { "kind": "weekly_scoped", "percent": 51,
+                                "scope": { "model": { "display_name": "Opus" } } } ] }
+                """))
+
+        let reader = makeReader()
+        let scopedWeekly = try await reader.currentScopedWeekly()
+        let reading = try await reader.currentUsageCredits()
+
+        XCTAssertEqual(scopedWeekly.map(\.label), ["Opus"])
+        XCTAssertEqual(reading, .unavailable)
+    }
+
     /// No `utilization` to bypass to is a normal state, not a fault — an old
     /// cache file must not turn `FreshestQuotaProvider`'s best-effort backfill
     /// into an error it has to swallow.
@@ -289,11 +598,10 @@ final class StatuslineCacheReaderTests: XCTestCase {
         XCTAssertEqual(reading, .unavailable)
     }
 
-    /// The file-level faults still throw, though — "the cache isn't there" and
-    /// "the cache isn't JSON" are the same two errors for these accessors as
-    /// for ``StatuslineCacheReader/currentSnapshot()``.
+    /// The whole-source faults still throw, though — "no cache at all" and "no
+    /// cache file that is even JSON" are the same two errors for these
+    /// accessors as for ``StatuslineCacheReader/currentSnapshot()``.
     func testBypassAccessorsStillThrowOnFileLevelFaults() async throws {
-        XCTAssertFalse(FileManager.default.fileExists(atPath: cacheURL.path))
         await assertThrows(.noQuotaSourceAvailable) {
             try await self.makeReader().currentScopedWeekly()
         }
@@ -346,8 +654,17 @@ final class StatuslineCacheReaderTests: XCTestCase {
 
     // MARK: - Failure modes
 
-    func testMissingCacheFileThrowsNoQuotaSourceAvailable() async throws {
-        XCTAssertFalse(FileManager.default.fileExists(atPath: cacheURL.path))
+    func testEmptyCacheDirectoryThrowsNoQuotaSourceAvailable() async throws {
+        XCTAssertFalse(FileManager.default.fileExists(atPath: legacyURL.path))
+        await assertThrows(.noQuotaSourceAvailable) {
+            try await self.makeReader().currentSnapshot()
+        }
+    }
+
+    /// Nothing has ever been written — not even the directory exists, which is
+    /// the state on a machine where the hook was never installed.
+    func testMissingCacheDirectoryThrowsNoQuotaSourceAvailable() async throws {
+        try FileManager.default.removeItem(at: sessionDirectory)
         await assertThrows(.noQuotaSourceAvailable) {
             try await self.makeReader().currentSnapshot()
         }
@@ -364,9 +681,44 @@ final class StatuslineCacheReaderTests: XCTestCase {
 
     func testMalformedJSONThrowsUnexpectedQuotaResponse() async throws {
         try write("{ this is not json")
+        let message = await assertThrowsUnexpectedQuotaResponse {
+            try await self.makeReader().currentSnapshot()
+        }
+        XCTAssertEqual(message?.contains("session-a.json"), true, message ?? "")
+    }
+
+    /// One session writing garbage must not take down the bars every other
+    /// session is still feeding.
+    func testMalformedFileAmongGoodOnesIsSkipped() async throws {
+        try write(session: "broken", "{ this is not json")
+        try write(session: "good", filteredCache(capturedAt: now.addingTimeInterval(-30)))
+
+        let snapshot = try await makeReader().currentSnapshot()
+
+        XCTAssertEqual(snapshot.fiveHour.percentUsed, 23.5, accuracy: 0.001)
+    }
+
+    /// Nothing on disk is JSON at all: that is a fault worth naming, unlike
+    /// "nothing is installed".
+    func testAllFilesMalformedThrowsUnexpectedQuotaResponse() async throws {
+        try write(session: "broken-a", "{ this is not json")
+        try write(session: "broken-b", "]]]")
+        try writeLegacy("nope")
+
         await assertThrowsUnexpectedQuotaResponse {
             try await self.makeReader().currentSnapshot()
         }
+    }
+
+    /// Files that aren't ours don't take part — the directory is ours, but a
+    /// stray `.txt` in it shouldn't become a parse failure.
+    func testNonJSONFilesInTheDirectoryAreIgnored() async throws {
+        try Data("garbage".utf8).write(to: sessionDirectory.appendingPathComponent("notes.txt"))
+        try write(filteredCache(capturedAt: now.addingTimeInterval(-30)))
+
+        let snapshot = try await makeReader().currentSnapshot()
+
+        XCTAssertEqual(snapshot.fiveHour.percentUsed, 23.5, accuracy: 0.001)
     }
 
     func testWindowWithoutPercentageIsNotReadAsZero() async throws {
@@ -382,24 +734,74 @@ final class StatuslineCacheReaderTests: XCTestCase {
         }
     }
 
+    // MARK: - Pruning
+
+    /// A session file nobody has written in a week has nothing to contribute —
+    /// even the 7-day window it last saw has rolled over — so reading cleans it
+    /// up rather than letting one file per session accumulate forever.
+    func testReadingPrunesSessionFilesOlderThanTheRetentionWindow() async throws {
+        let ancient = try write(session: "gone", cache(
+            capturedAt: now.addingTimeInterval(-StatuslineCacheReader.sessionRetention - 60),
+            windowJSON("seven_day", percent: 44, resetsAt: now.addingTimeInterval(86_400))
+        ))
+        let fresh = try write(session: "kept", filteredCache(capturedAt: now.addingTimeInterval(-30)))
+
+        let snapshot = try await makeReader().currentSnapshot()
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: ancient.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fresh.path))
+        // …and the pruned file's reading is gone with it.
+        XCTAssertEqual(snapshot.sevenDay.percentUsed, 41.2, accuracy: 0.001)
+    }
+
+    /// Pruning falls back to the file's modification time, so a session file
+    /// that is both ancient and unparseable still goes away.
+    func testPruningUsesModificationTimeWhenThePayloadHasNoCapturedAt() async throws {
+        let ancient = try write(session: "gone", "{ this is not json")
+        try setModificationDate(
+            now.addingTimeInterval(-StatuslineCacheReader.sessionRetention - 60), of: ancient)
+        try write(session: "kept", filteredCache(capturedAt: now.addingTimeInterval(-30)))
+
+        _ = try await makeReader().currentSnapshot()
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: ancient.path))
+    }
+
+    /// The legacy file isn't pruned: it is the only reading a machine whose
+    /// hook hasn't been reinstalled has, and deleting it would be a migration
+    /// this reader has no business performing.
+    func testPruningLeavesTheLegacyFileAlone() async throws {
+        try writeLegacy(cache(
+            capturedAt: now.addingTimeInterval(-StatuslineCacheReader.sessionRetention - 60),
+            windowJSON("seven_day", percent: 44, resetsAt: now.addingTimeInterval(86_400))
+        ))
+        try write(filteredCache(capturedAt: now.addingTimeInterval(-30)))
+
+        _ = try await makeReader().currentSnapshot()
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: legacyURL.path))
+    }
+
     // MARK: - Clearing
 
-    func testClearCacheRemovesTheCacheFile() async throws {
+    func testClearCacheRemovesTheSessionDirectoryAndTheLegacyFile() async throws {
         try write(filteredCache(capturedAt: now.addingTimeInterval(-30)))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: cacheURL.path))
+        try writeLegacy(filteredCache(capturedAt: now.addingTimeInterval(-30)))
 
         let reader = makeReader()
         try reader.clearCache()
 
-        XCTAssertFalse(FileManager.default.fileExists(atPath: cacheURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: sessionDirectory.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: legacyURL.path))
         // Nothing has written a fresh cache yet — the expected post-clear state.
         await assertThrows(.noQuotaSourceAvailable) {
             try await reader.currentSnapshot()
         }
     }
 
-    func testClearCacheWithNoCacheFileDoesNotThrow() throws {
-        XCTAssertFalse(FileManager.default.fileExists(atPath: cacheURL.path))
+    func testClearCacheWithNothingCachedDoesNotThrow() throws {
+        try FileManager.default.removeItem(at: sessionDirectory)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: legacyURL.path))
         XCTAssertNoThrow(try makeReader().clearCache())
     }
 
@@ -414,9 +816,15 @@ final class StatuslineCacheReaderTests: XCTestCase {
 
     // MARK: - Default path
 
-    func testDefaultCacheURLPointsAtApplicationSupport() {
-        let path = StatuslineCacheReader.defaultCacheURL.path
-        XCTAssertTrue(path.hasSuffix("/ClaudeStats/statusline-cache.json"), path)
-        XCTAssertTrue(path.contains("Application Support"), path)
+    func testDefaultCacheDirectoryURLPointsAtApplicationSupport() {
+        let reader = StatuslineCacheReader()
+        XCTAssertTrue(reader.cacheDirectoryURL.path.hasSuffix("/ClaudeStats"),
+                      reader.cacheDirectoryURL.path)
+        XCTAssertTrue(reader.cacheDirectoryURL.path.contains("Application Support"),
+                      reader.cacheDirectoryURL.path)
+        XCTAssertTrue(reader.sessionCacheDirectoryURL.path.hasSuffix("/ClaudeStats/statusline-cache"),
+                      reader.sessionCacheDirectoryURL.path)
+        XCTAssertTrue(reader.legacyCacheURL.path.hasSuffix("/ClaudeStats/statusline-cache.json"),
+                      reader.legacyCacheURL.path)
     }
 }

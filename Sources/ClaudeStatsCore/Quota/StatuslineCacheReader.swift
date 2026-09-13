@@ -15,15 +15,54 @@ import Foundation
 ///
 /// This app is a menu bar app, not a shell command, so it can't be the hook. The
 /// split is therefore: a tiny shell script is the hook and writes the payload to
-/// a cache file; this type reads that file. Installing that script into the
+/// a cache file; this type reads those files. Installing that script into the
 /// user's real `~/.claude/settings.json` is deliberately **not** done
 /// automatically — see `Sources/ClaudeStats/Resources/claude-stats-statusline-cache.sh`
 /// for the script (bundled into the app; revealed from Settings) and the wiring
 /// instructions in its header comment.
 ///
-/// ## Cache file
+/// ## One file per session, not one file
 ///
-/// Default location: `~/Library/Application Support/ClaudeStats/statusline-cache.json`.
+/// Default location: `~/Library/Application Support/ClaudeStats/statusline-cache/`,
+/// holding one `<session_id>.json` per Claude Code session (the statusline
+/// payload's own top-level `session_id`, sanitized into a file name).
+///
+/// It used to be a single `statusline-cache.json` that every session
+/// overwrote, and with more than one Claude Code window open that was wrong in
+/// a way that showed: each process pipes in the rate limits *its* last API
+/// response carried, and an idle session re-renders its status line on
+/// time-based triggers alone. So a session that last talked to the API hours
+/// ago would restamp its own stale numbers as captured "now", and last writer
+/// won. Worse, Claude Code drops a window from the payload entirely once its
+/// `resets_at` has passed — so the stale writer's file carried only
+/// `seven_day`, the missing `five_hour` read back as `.empty`, and the bars
+/// showed a confident 0%. One file per session plus the merge below is what
+/// makes a quiet session unable to overwrite a busy one.
+///
+/// The legacy single file is still read, as one more input, so a machine whose
+/// hook script hasn't been reinstalled yet keeps working.
+///
+/// ## Merging
+///
+/// Each window is chosen independently across all files, and `captured_at` is
+/// deliberately *not* the deciding field — it says when we wrote the file, not
+/// how old the numbers in it are. In order:
+///
+/// 1. A reading whose `resets_at` has already passed is ignored: Claude Code
+///    itself stops reporting such a window, so a file still carrying one is by
+///    definition showing a window that has since rolled over.
+/// 2. The latest `resets_at` wins — a later reset is a later window.
+/// 3. Same `resets_at` (i.e. the same window) breaks toward the **highest**
+///    percentage: utilization within one window never decreases, so a lower
+///    reading is the older one.
+/// 4. A reading with no `resets_at` at all ranks below any reading that has
+///    one; among themselves, the most recently captured wins.
+///
+/// The snapshot's ``QuotaSnapshot/capturedAt`` is the newest `captured_at`
+/// among the files that actually contributed a window, and the staleness gate
+/// applies to that.
+///
+/// ## Cache file
 ///
 /// Preferred shape (what the helper script writes when `jq` is available):
 ///
@@ -47,9 +86,11 @@ import Foundation
 /// fires, nested and named exactly as they appear there — which is why the
 /// parsing below is ``CachedUtilizationReader``'s parsing, reused verbatim
 /// rather than reimplemented. Carrying them here is what makes a hook-only
-/// reading complete: all four bars at one known age, out of one file this app
-/// wrote, instead of three from here and one from a private key that refreshes
-/// on somebody else's schedule.
+/// reading complete: all four bars out of files this app wrote, instead of
+/// three from here and one from a private key that refreshes on somebody
+/// else's schedule. They come from `~/.claude.json` and are therefore identical
+/// across sessions, so they are taken from the most recently captured file that
+/// has them rather than merged window-style.
 ///
 /// `utilization` is **optional in every direction**. A cache written before this
 /// key existed, one written with no `jq` installed, and one written while
@@ -79,27 +120,43 @@ import Foundation
 public struct StatuslineCacheReader: QuotaProviding {
     /// Directory name used under Application Support.
     public static let cacheDirectoryName = "ClaudeStats"
-    /// File name of the cache within that directory.
-    public static let cacheFileName = "statusline-cache.json"
+    /// Sub-directory holding one cache file per Claude Code session.
+    public static let sessionCacheDirectoryName = "statusline-cache"
+    /// The single file older copies of the helper script wrote. No longer
+    /// written, still read — see "One file per session, not one file".
+    public static let legacyCacheFileName = "statusline-cache.json"
+    /// Session files not written within this long are deleted as we read.
+    /// A session that quiet has nothing to contribute anyway: even the 7-day
+    /// window it last saw has rolled over by now.
+    public static let sessionRetention: TimeInterval = 7 * 24 * 60 * 60
     /// Top-level key holding the copy of `cachedUsageUtilization.utilization`.
     /// Same spelling as ``CachedUtilizationReader/utilizationKey`` on purpose:
     /// the object under it is the same object, so the same parsers read it.
     static let utilizationKey = "utilization"
 
-    /// `~/Library/Application Support/ClaudeStats/statusline-cache.json`.
+    /// `~/Library/Application Support/ClaudeStats`.
     ///
     /// Falls back to an explicit path construction if Application Support can't
     /// be resolved, so this is never optional at the call site.
-    public static var defaultCacheURL: URL {
+    public static var defaultCacheDirectoryURL: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.homeDirectoryForCurrentUser
                 .appendingPathComponent("Library/Application Support", isDirectory: true)
-        return base
-            .appendingPathComponent(cacheDirectoryName, isDirectory: true)
-            .appendingPathComponent(cacheFileName, isDirectory: false)
+        return base.appendingPathComponent(cacheDirectoryName, isDirectory: true)
     }
 
-    public let cacheURL: URL
+    /// The directory both cache locations are derived from — everything this
+    /// type touches lives inside it, so one injected path is enough to point a
+    /// test (or a `$CLAUDE_STATS_CACHE_DIR` run of the script) somewhere else.
+    public let cacheDirectoryURL: URL
+    /// `…/ClaudeStats/statusline-cache/`, one `<session_id>.json` per session.
+    public var sessionCacheDirectoryURL: URL {
+        cacheDirectoryURL.appendingPathComponent(Self.sessionCacheDirectoryName, isDirectory: true)
+    }
+    /// `…/ClaudeStats/statusline-cache.json`, written by older script copies.
+    public var legacyCacheURL: URL {
+        cacheDirectoryURL.appendingPathComponent(Self.legacyCacheFileName, isDirectory: false)
+    }
     public let stalenessThreshold: TimeInterval
     /// `FileManager` isn't marked `Sendable`, but `.default` and other instances
     /// are documented thread-safe (Apple: "the methods of the shared FileManager
@@ -108,44 +165,42 @@ public struct StatuslineCacheReader: QuotaProviding {
     private let now: @Sendable () -> Date
 
     public init(
-        cacheURL: URL = StatuslineCacheReader.defaultCacheURL,
+        cacheDirectoryURL: URL = StatuslineCacheReader.defaultCacheDirectoryURL,
         stalenessThreshold: TimeInterval = QuotaSnapshot.defaultStalenessThreshold,
         fileManager: FileManager = .default,
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
-        self.cacheURL = cacheURL
+        self.cacheDirectoryURL = cacheDirectoryURL
         self.stalenessThreshold = stalenessThreshold
         self.fileManager = fileManager
         self.now = now
     }
 
     public func currentSnapshot() async throws -> QuotaSnapshot {
-        let (root, mtime) = try loadRoot()
+        let readings = try loadReadings()
+        let asOf = now()
 
-        // A payload captured before the account's first API response has no
-        // `rate_limits` at all (and Pro/Max only). That's "no data", not
-        // "broken" — fall through quietly.
-        guard let windows = QuotaJSON.windows(in: root) else {
-            throw ClaudeStatsError.noQuotaSourceAvailable
-        }
+        let fiveHour = choose(readings.compactMap { $0.candidate(\.fiveHour) }, asOf: asOf)
+        let sevenDay = choose(readings.compactMap { $0.candidate(\.sevenDay) }, asOf: asOf)
 
-        // No fallback to `now()`: if neither the payload nor the file itself
-        // can tell us when this was captured, treat the age as unknown rather
-        // than silently trusting it as freshly captured.
-        guard let capturedAt = QuotaJSON.capturedAtKeys.lazy.compactMap({ QuotaJSON.date(root[$0]) }).first ?? mtime
-        else {
+        // Each window can be independently absent; require at least one — the
+        // same rule ``QuotaJSON/windows(in:)`` applies within one file. With
+        // neither, every file we have is either pre-first-API-response or
+        // describing windows that have already rolled over: no data, not a
+        // fault.
+        guard let capturedAt = [fiveHour?.capturedAt, sevenDay?.capturedAt].compactMap({ $0 }).max() else {
             throw ClaudeStatsError.noQuotaSourceAvailable
         }
 
         // Absent on every cache the helper script wrote before it learned to
         // copy this across, and on every one written without `jq` — hence
         // empty/`nil` rather than a throw. See the type's "Cache file" note.
-        let utilization = QuotaJSON.object(root[Self.utilizationKey])
+        let utilization = newestUtilization(in: readings)
         let credits = utilization.map(QuotaJSON.usageCredits(in:)) ?? .unavailable
 
         let snapshot = QuotaSnapshot(
-            fiveHour: windows.fiveHour,
-            sevenDay: windows.sevenDay,
+            fiveHour: fiveHour?.window ?? .empty,
+            sevenDay: sevenDay?.window ?? .empty,
             confidence: .official,
             capturedAt: capturedAt,
             scopedWeekly: utilization.map(QuotaJSON.scopedLimits(in:)) ?? [],
@@ -153,8 +208,8 @@ public struct StatuslineCacheReader: QuotaProviding {
             usageCreditsDisabledReason: credits.disabledReason
         )
 
-        guard !snapshot.isStale(asOf: now(), threshold: stalenessThreshold) else {
-            throw ClaudeStatsError.staleQuotaSource(snapshot: snapshot, age: snapshot.age(asOf: now()))
+        guard !snapshot.isStale(asOf: asOf, threshold: stalenessThreshold) else {
+            throw ClaudeStatsError.staleQuotaSource(snapshot: snapshot, age: snapshot.age(asOf: asOf))
         }
         return snapshot
     }
@@ -170,7 +225,7 @@ public struct StatuslineCacheReader: QuotaProviding {
     /// copy of `weekly_scoped` on disk — and unlike the windows they carry no
     /// freshness claim of their own (see ``QuotaScopedLimit``).
     public func currentScopedWeekly() async throws -> [QuotaScopedLimit] {
-        guard let utilization = try loadUtilization() else { return [] }
+        guard let utilization = newestUtilization(in: try loadReadings()) else { return [] }
         return QuotaJSON.scopedLimits(in: utilization)
     }
 
@@ -179,63 +234,141 @@ public struct StatuslineCacheReader: QuotaProviding {
     /// month-to-date spend total does not stop being right because the rate
     /// limits captured beside it have aged out.
     public func currentUsageCredits() async throws -> UsageCreditsReading {
-        guard let utilization = try loadUtilization() else { return .unavailable }
+        guard let utilization = newestUtilization(in: try loadReadings()) else { return .unavailable }
         return QuotaJSON.usageCredits(in: utilization)
     }
 
-    /// Deletes the cache file, so the next hook write starts from nothing.
+    /// Deletes the whole session cache directory and the legacy single file, so
+    /// the next hook write starts from nothing.
     ///
-    /// The escape hatch for a reading that looks stuck or wrong: the cache is a
-    /// single global path shared by every concurrently-running Claude Code
-    /// session, so any one of them can overwrite it with its own last-known
-    /// numbers. Removing the file makes the next statusline render the sole
-    /// source of what's on screen. Until one happens, ``currentSnapshot()``
-    /// throws ``ClaudeStatsError/noQuotaSourceAvailable`` — expected, not a
-    /// failure. Best-effort: a missing file is not an error.
+    /// The escape hatch for a reading that looks stuck or wrong: per-session
+    /// files stop one quiet session from overwriting a busy one, but they can't
+    /// help if every file on disk is somehow wrong. Removing them makes the next
+    /// statusline render the sole source of what's on screen. Until one happens,
+    /// ``currentSnapshot()`` throws
+    /// ``ClaudeStatsError/noQuotaSourceAvailable`` — expected, not a failure.
+    /// Best-effort on absence: a missing directory or file is not an error,
+    /// anything else is and reaches the caller.
     public func clearCache() throws {
-        do {
-            try fileManager.removeItem(at: cacheURL)
-        } catch let error as CocoaError where error.code == .fileNoSuchFile {
-            // already gone — nothing to do
+        var failure: Swift.Error?
+        for url in [sessionCacheDirectoryURL, legacyCacheURL] {
+            do {
+                try fileManager.removeItem(at: url)
+            } catch let error as CocoaError where error.code == .fileNoSuchFile {
+                // already gone — nothing to do
+            } catch {
+                failure = failure ?? error
+            }
+        }
+        if let failure { throw failure }
+    }
+
+    // MARK: - Reading the files
+
+    /// One parsed cache file: the two windows as they actually appeared (either
+    /// may be absent — see the 0% pitfall in "One file per session"), when we
+    /// wrote it, and the `utilization` copy if it carried one.
+    private struct Reading {
+        let capturedAt: Date
+        let fiveHour: QuotaWindow?
+        let sevenDay: QuotaWindow?
+        let utilization: [String: Any]?
+
+        /// This file's claim about one window, ready to rank — `nil` when it
+        /// made none.
+        func candidate(_ window: KeyPath<Reading, QuotaWindow?>) -> Candidate? {
+            self[keyPath: window].map { Candidate(window: $0, capturedAt: capturedAt) }
         }
     }
 
-    /// Parses the cache file into its root object, common to
-    /// ``currentSnapshot()`` and ``loadUtilization()``.
+    /// One file's reading of one window, in the merge.
+    private struct Candidate {
+        let window: QuotaWindow
+        let capturedAt: Date
+    }
+
+    /// Every readable cache file, parsed, pruning expired session files as it
+    /// goes.
     ///
-    /// Only the two file-level faults throw here — nothing on disk at all, and
-    /// something on disk that isn't JSON — because those are the two the
+    /// Only the two whole-source faults throw — nothing on disk at all, and
+    /// nothing on disk that is JSON — because those are the two the
     /// staleness-bypassing readers care about just as much as
-    /// ``currentSnapshot()`` does. Everything the root does or doesn't contain
-    /// is each caller's own business.
-    private func loadRoot() throws -> (root: [String: Any], mtime: Date?) {
-        guard let (data, mtime) = readCacheFileWithModificationDate() else {
-            // No hook installed, or it has never fired.
-            throw ClaudeStatsError.noQuotaSourceAvailable
-        }
-        guard let root = QuotaJSON.object(try? JSONSerialization.jsonObject(with: data)) else {
-            throw ClaudeStatsError.unexpectedQuotaResponse(
-                "statusline cache at \(cacheURL.lastPathComponent) is not a JSON object"
+    /// ``currentSnapshot()`` does. A single unparseable file among good ones is
+    /// skipped: one session writing garbage must not take down the bars that
+    /// every other session is still feeding.
+    private func loadReadings() throws -> [Reading] {
+        let cutoff = now().addingTimeInterval(-Self.sessionRetention)
+        var readings: [Reading] = []
+        var malformed: URL?
+
+        for (url, isSessionFile) in cacheFileURLs() {
+            guard let (data, mtime) = readFileWithModificationDate(at: url) else { continue }
+            let root = QuotaJSON.object(try? JSONSerialization.jsonObject(with: data))
+            // No fallback to `now()`: if neither the payload nor the file
+            // itself can tell us when this was captured, treat the age as
+            // unknown rather than silently trusting it as freshly captured.
+            let capturedAt = root.flatMap { root in
+                QuotaJSON.capturedAtKeys.lazy.compactMap { QuotaJSON.date(root[$0]) }.first
+            } ?? mtime
+
+            // Best-effort, and deliberately ahead of the parse check so a
+            // session file that is both ancient and garbage still goes away.
+            if isSessionFile, let capturedAt, capturedAt < cutoff {
+                try? fileManager.removeItem(at: url)
+                continue
+            }
+
+            guard let root else {
+                malformed = malformed ?? url
+                continue
+            }
+            guard let capturedAt else { continue }
+
+            let windows = QuotaJSON.optionalWindows(in: root)
+            readings.append(
+                Reading(
+                    capturedAt: capturedAt,
+                    fiveHour: windows.fiveHour,
+                    sevenDay: windows.sevenDay,
+                    utilization: QuotaJSON.object(root[Self.utilizationKey])
+                )
             )
         }
-        return (root, mtime)
+
+        guard readings.isEmpty else { return readings }
+        if let malformed {
+            throw ClaudeStatsError.unexpectedQuotaResponse(
+                "statusline cache at \(malformed.lastPathComponent) is not a JSON object"
+            )
+        }
+        // No hook installed, or it has never fired.
+        throw ClaudeStatsError.noQuotaSourceAvailable
     }
 
-    /// The `utilization` object, or `nil` when this cache carries none — which
-    /// is a normal state, not a fault, so it is `nil` rather than a throw. The
-    /// file itself being absent or unparseable still throws, via ``loadRoot()``.
-    private func loadUtilization() throws -> [String: Any]? {
-        QuotaJSON.object(try loadRoot().root[Self.utilizationKey])
+    /// Every candidate cache file, flagged with whether pruning applies to it.
+    /// Sorted by name so a tie the merge can't break resolves the same way on
+    /// every poll rather than following directory order.
+    private func cacheFileURLs() -> [(url: URL, isSessionFile: Bool)] {
+        let sessionFiles = (try? fileManager.contentsOfDirectory(
+            at: sessionCacheDirectoryURL,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        )) ?? []
+        return sessionFiles
+            .filter { $0.pathExtension.lowercased() == "json" }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+            .map { ($0, true) }
+            + [(legacyCacheURL, false)]
     }
 
-    /// Reads the cache file's bytes and modification time from a single open
+    /// Reads one cache file's bytes and modification time from a single open
     /// descriptor, so they always describe the same file state — two separate
     /// syscalls (as `FileManager.contents(atPath:)` followed by
     /// `attributesOfItem(atPath:)`) could otherwise straddle the helper
     /// script's atomic `mktemp` + `mv` rewrite and pair old bytes with a new
     /// mtime (or vice versa).
-    private func readCacheFileWithModificationDate() -> (data: Data, mtime: Date?)? {
-        let fd = open(cacheURL.path, O_RDONLY)
+    private func readFileWithModificationDate(at url: URL) -> (data: Data, mtime: Date?)? {
+        let fd = open(url.path, O_RDONLY)
         guard fd >= 0 else { return nil }
         defer { close(fd) }
 
@@ -245,5 +378,46 @@ public struct StatuslineCacheReader: QuotaProviding {
         let data = FileHandle(fileDescriptor: fd, closeOnDealloc: false).readDataToEndOfFile()
         let mtime = Date(timeIntervalSince1970: Double(info.st_mtimespec.tv_sec))
         return (data, mtime)
+    }
+
+    // MARK: - Merging
+
+    /// Picks one window out of every file's claim about it, by the four rules
+    /// in "Merging" above. `nil` when no file made a claim that survives them.
+    private func choose(_ candidates: [Candidate], asOf now: Date) -> Candidate? {
+        // Rule 1: a window whose reset has passed is one Claude Code has
+        // already stopped reporting. Expired, not 0%.
+        let live = candidates.filter { $0.window.resetsAt.map { $0 >= now } ?? true }
+
+        // Rules 2 and 3, on the readings that date themselves.
+        let dated = live.compactMap { candidate in
+            candidate.window.resetsAt.map { (resetsAt: $0, candidate: candidate) }
+        }
+        if !dated.isEmpty {
+            return dated.max { lhs, rhs in
+                if lhs.resetsAt != rhs.resetsAt { return lhs.resetsAt < rhs.resetsAt }
+                if lhs.candidate.window.percentUsed != rhs.candidate.window.percentUsed {
+                    return lhs.candidate.window.percentUsed < rhs.candidate.window.percentUsed
+                }
+                return lhs.candidate.capturedAt < rhs.candidate.capturedAt
+            }?.candidate
+        }
+
+        // Rule 4: undated readings only ever win when nothing dated survived,
+        // and then the newest capture is all there is to go on.
+        return live.max { $0.capturedAt < $1.capturedAt }
+    }
+
+    /// The `utilization` object from the most recently captured file that
+    /// carries one, or `nil` when none does — a normal state, not a fault.
+    ///
+    /// Not merged window-style: this object is copied out of `~/.claude.json`,
+    /// which every session sees identically, so the newest copy is simply the
+    /// best one.
+    private func newestUtilization(in readings: [Reading]) -> [String: Any]? {
+        readings
+            .filter { $0.utilization != nil }
+            .max { $0.capturedAt < $1.capturedAt }?
+            .utilization
     }
 }
