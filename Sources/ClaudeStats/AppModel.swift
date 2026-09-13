@@ -10,6 +10,15 @@ import Foundation
 @MainActor
 final class AppModel: ObservableObject {
     @Published private(set) var snapshot: QuotaSnapshot?
+    /// The other Anthropic accounts this Mac has readings for, newest first —
+    /// the user switches the global login between two accounts, and the cache
+    /// keeps the previous one's files until they age out.
+    ///
+    /// Decoration below the active account's rows: never an error source, never
+    /// part of the glyph (which shows the account the bars are about), and
+    /// empty on a one-account machine. See
+    /// ``QuotaProviding/otherAccountSnapshots()``.
+    @Published private(set) var otherAccountSnapshots: [QuotaSnapshot] = []
     @Published private(set) var planTier: PlanTier?
     /// Trailing-hour consumption, split by token kind so the popover can both
     /// show the rate and explain how much of it is replayed cache reads.
@@ -176,9 +185,15 @@ final class AppModel: ObservableObject {
     /// with a red error banner for the same expected condition.
     private func runQuotaPoll() -> Task<Void, Never> {
         Task { [quotaProvider] in
+            // Read before the snapshot and applied on every outcome: these rows
+            // come from other accounts' cache files, so whether *this* account's
+            // reading succeeded, went stale or failed says nothing about them.
+            // The call can't throw — see `QuotaProviding.otherAccountSnapshots()`.
+            let otherAccounts = await quotaProvider.otherAccountSnapshots()
             do {
                 let snapshot = try await quotaProvider.currentSnapshot()
                 guard !Task.isCancelled else { return }
+                self.otherAccountSnapshots = otherAccounts
                 self.snapshot = snapshot
                 self.quotaError = nil
                 self.quotaWarning = nil
@@ -202,6 +217,7 @@ final class AppModel: ObservableObject {
                 // had real numbers in hand. Fall back to the rejected reading
                 // the error carries: a stale number beats no number, the same
                 // principle `FreshestQuotaProvider` already applies internally.
+                self.otherAccountSnapshots = otherAccounts
                 self.quotaWarning = error.localizedDescription
                 if case .staleQuotaSource(let snapshot, _) = error,
                    self.snapshot == nil || self.snapshot!.capturedAt < snapshot.capturedAt {
@@ -215,6 +231,7 @@ final class AppModel: ObservableObject {
                 // fresh cache yet. `quotaCacheClearedNotice` already says so, so
                 // no error banner — that would read as a fault the user has to
                 // fix rather than a state that resolves itself. Left set.
+                self.otherAccountSnapshots = otherAccounts
                 self.quotaError = nil
                 self.quotaWarning = nil
             } catch {
@@ -226,6 +243,7 @@ final class AppModel: ObservableObject {
                 // pending "cache cleared" notice no longer applies either —
                 // this is a real, different failure.
                 self.snapshot = nil
+                self.otherAccountSnapshots = otherAccounts
                 self.quotaError = error.localizedDescription
                 self.quotaWarning = nil
                 self.quotaCacheClearedNotice = nil
@@ -272,7 +290,11 @@ final class AppModel: ObservableObject {
             return
         }
 
+        // The other accounts' rows come from the same files this just deleted,
+        // so they go with the active account's reading rather than lingering as
+        // the only numbers on screen.
         snapshot = nil
+        otherAccountSnapshots = []
         quotaError = nil
         quotaWarning = nil
         quotaCacheClearedNotice = "Statusline cache cleared — the bars fall back to Claude Code's own cached reading until the next statusline render."
@@ -305,6 +327,17 @@ final class AppModel: ObservableObject {
                 if self.quotaError == nil, self.snapshot?.confidence == .official { return }
             }
         }
+    }
+
+    /// What the popover calls the account a snapshot describes.
+    ///
+    /// An unstamped reading is genuinely "we don't know whose this is" — a
+    /// cache file written before the hook script learned to stamp one — so it
+    /// says so rather than leaving a blank label or borrowing a name from the
+    /// account next to it. Lives here rather than in the view so both branches
+    /// are testable.
+    func accountLabel(for snapshot: QuotaSnapshot) -> String {
+        snapshot.account?.displayName ?? "Unknown account"
     }
 
     /// The promo notice for one bar, or `nil` when there is none.
@@ -382,7 +415,8 @@ extension AppModel {
         snapshot: QuotaSnapshot? = MockQuotaProvider.sampleSnapshot(),
         error: String? = nil,
         warning: String? = nil,
-        promoNotices: [RateLimitPromoNotice] = []
+        promoNotices: [RateLimitPromoNotice] = [],
+        otherAccounts: [QuotaSnapshot] = []
     ) -> AppModel {
         let store = MockUsageStore()
         // Inlined here (not a public Core factory) so a preview-only "no
@@ -399,7 +433,10 @@ extension AppModel {
             capturedAt: Date()
         )
         let model = AppModel(
-            quotaProvider: MockQuotaProvider(snapshot: snapshot ?? previewPlaceholder),
+            quotaProvider: MockQuotaProvider(
+                snapshot: snapshot ?? previewPlaceholder,
+                otherAccounts: otherAccounts
+            ),
             usageStore: store,
             promoNoticeProvider: MockPromoNoticeProvider(notices: promoNotices)
         )
@@ -408,6 +445,7 @@ extension AppModel {
         // to be filled in explicitly — one reload covers all three windows.
         model.reloadBreakdown()
         model.snapshot = snapshot
+        model.otherAccountSnapshots = otherAccounts
         model.promoNotices = promoNotices
         model.planTier = try? store.detectedPlanTier()
         model.burnRateUsage = try? store.burnRateUsagePerHour()
@@ -464,6 +502,17 @@ extension AppModel {
         preview(
             snapshot: MockQuotaProvider.sampleShowcaseSnapshot(now: now),
             promoNotices: [MockPromoNoticeProvider.sampleNotice()]
+        )
+    }
+
+    /// Two accounts: the one Claude Code is logged in as now, labelled, with
+    /// the account the user switched away from listed under it.
+    static func previewTwoAccounts(now: Date = Date()) -> AppModel {
+        var active = MockQuotaProvider.sampleSnapshot(now: now)
+        active.account = MockQuotaProvider.sampleAccount()
+        return preview(
+            snapshot: active,
+            otherAccounts: [MockQuotaProvider.sampleOtherAccountSnapshot(now: now)]
         )
     }
 

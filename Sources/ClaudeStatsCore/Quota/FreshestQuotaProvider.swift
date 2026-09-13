@@ -66,16 +66,48 @@ import Foundation
 ///
 /// That ordering is untouched by the priority flip: it ranks *errors*, and only
 /// runs once neither source produced a reading to rank them against.
+///
+/// ## Accounts
+///
+/// Both sources are per-account now (see ``QuotaAccount``), and both resolve
+/// "the account" the same way: whichever one `oauthAccount` in Claude Code's own
+/// state file names. ``StatuslineCacheReader`` serves that account's group of
+/// cache files, and ``CachedUtilizationReader``'s blob belongs to the current
+/// login by construction — so primary and backup describe the same account, or
+/// the backup says which other one it describes and the popover labels it.
+///
+/// One case the primary/backup ladder can't express on its own: the state file
+/// names an account, the cache holds files for *other* accounts only, and the
+/// backup has nothing either. Throwing "no quota source" there would be wrong —
+/// there are readings, they just aren't this account's — and serving another
+/// account's group would be the very bug this is all for. So the answer is an
+/// empty reading for the active account: both windows `nil`, which the popover
+/// renders as "no reading". With nothing on disk for *any* account the old
+/// ``ClaudeStatsError/noQuotaSourceAvailable`` still stands, because then
+/// "Claude Code has never cached a reading on this Mac" is the accurate advice.
+///
+/// No third-party account switcher is consulted anywhere in this path — see
+/// ``ActiveAccountReader``.
 public struct FreshestQuotaProvider: QuotaProviding {
     private let statusline: any QuotaProviding
     private let cachedState: any QuotaProviding
+    private let activeAccount: any ActiveAccountProviding
+    private let now: @Sendable () -> Date
 
+    /// `statusline` is built here rather than defaulted in the signature so it
+    /// can share the one ``ActiveAccountProviding`` instance: two readers would
+    /// mean two fingerprint caches and two parses of the same 145 KB file per
+    /// change.
     public init(
-        statusline: any QuotaProviding = StatuslineCacheReader(),
-        cachedState: any QuotaProviding = CachedUtilizationReader()
+        statusline: (any QuotaProviding)? = nil,
+        cachedState: any QuotaProviding = CachedUtilizationReader(),
+        activeAccount: any ActiveAccountProviding = ActiveAccountReader(),
+        now: @escaping @Sendable () -> Date = { Date() }
     ) {
-        self.statusline = statusline
+        self.statusline = statusline ?? StatuslineCacheReader(activeAccount: activeAccount)
         self.cachedState = cachedState
+        self.activeAccount = activeAccount
+        self.now = now
     }
 
     public func currentSnapshot() async throws -> QuotaSnapshot {
@@ -116,9 +148,42 @@ public struct FreshestQuotaProvider: QuotaProviding {
                     }
                     error = .staleQuotaSource(snapshot: snapshot, age: age)
                 }
+                if case .noQuotaSourceAvailable = error,
+                    let empty = await emptyActiveAccountReading() {
+                    // Readings exist, none of them this account's — see the
+                    // type's "Accounts" note. "No reading" beats both an error
+                    // and somebody else's numbers.
+                    return empty
+                }
                 throw error
             }
         }
+    }
+
+    /// The active account's "nothing to report" snapshot, or `nil` when that
+    /// isn't the situation — no other account has a reading either, or the
+    /// state file doesn't name an account to report nothing *for*.
+    ///
+    /// `capturedAt` is now: what was observed now is the *absence*, and dating
+    /// it from another account's file would put that file's age on this
+    /// account's freshness tag.
+    private func emptyActiveAccountReading() async -> QuotaSnapshot? {
+        guard !(await statusline.otherAccountSnapshots()).isEmpty else { return nil }
+        guard let account = activeAccount.readActiveAccount().account else { return nil }
+        return QuotaSnapshot(
+            fiveHour: nil,
+            sevenDay: nil,
+            confidence: .official,
+            capturedAt: now(),
+            account: account
+        )
+    }
+
+    /// Straight through from the statusline cache — it is the only source that
+    /// can see more than one account, since ``CachedUtilizationReader`` reads a
+    /// file that only ever describes the current login.
+    public func otherAccountSnapshots() async -> [QuotaSnapshot] {
+        await statusline.otherAccountSnapshots()
     }
 
     /// Fills the two fields a hook reading can legitimately arrive without —

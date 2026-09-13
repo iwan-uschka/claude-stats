@@ -24,6 +24,23 @@ final class QuotaProvidingTests: XCTestCase {
         XCTAssertEqual(error.errorDescription, "Quota data is stale (hasn't reported in \(DisplayFormat.duration(601))). Claude Code hasn't refreshed its own usage cache yet — this isn't triggered by having a terminal open, and can take a while.")
     }
 
+    /// A source that can't tell accounts apart reports none — the default, so
+    /// that a conformer which knows nothing about accounts (and the tests'
+    /// stubs) can't be mistaken for one reporting a machine with a single
+    /// account's worth of readings.
+    func testDefaultOtherAccountSnapshotsIsEmpty() async {
+        struct MinimalProvider: QuotaProviding {
+            func currentSnapshot() async throws -> QuotaSnapshot {
+                MockQuotaProvider.sampleSnapshot()
+            }
+            func clearCache() throws {}
+        }
+
+        let others = await MinimalProvider().otherAccountSnapshots()
+
+        XCTAssertEqual(others, [])
+    }
+
     /// `currentUsageCredits()`'s default implementation just reads the
     /// snapshot's credits fields off ``QuotaProviding/currentSnapshot()`` — the
     /// path every conformer without its own staleness gate to bypass takes.

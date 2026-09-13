@@ -2,9 +2,28 @@
 
 ## [Unreleased]
 
+### Added
+- Quota readings are now per Anthropic account. The bars show the account
+  Claude Code is currently logged in as, labelled by name, and any other
+  account this Mac has readings for is listed below with its own rows and
+  freshness tag.
+
 ### Changed
 - Quota percentages from 99% up to 100% show one decimal place (`99.4%`), so
   "almost done" no longer reads as "done".
+
+### Fixed
+- Switching the global login between two Anthropic accounts no longer mixes
+  their numbers: an idle session of the *previous* account could keep feeding
+  the statusline hook, and its later-resetting 7-day window won the merge (seen
+  as 56% on the bar while the account in use was at 0%). The hook now stamps
+  each cache file with the account it was written under, readings are merged per
+  account, and a reading whose 7-day reset disagrees with the one Claude Code
+  has cached for that account is discarded.
+  - **Existing installs keep running the old script until it is updated:**
+    Settings → Quota source will offer **Update Script** (or re-run **Set Up
+    Automatically**). Until then the readings count as "unknown account" and the
+    bars come from Claude Code's own cached reading.
 
 ## [0.9.9] - 2026-09-13
 

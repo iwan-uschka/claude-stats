@@ -48,11 +48,60 @@ import Foundation
 /// The legacy single file is still read, as one more input, so a machine whose
 /// hook script hasn't been reinstalled yet keeps working.
 ///
+/// ## One group per account
+///
+/// The merge runs **inside one account's files only**. The user can swap the
+/// global login between two Anthropic accounts, and nothing in the statusline
+/// payload says which account it describes (see ``QuotaAccount``), so a cache
+/// left behind by the previous login is indistinguishable from a current one —
+/// and since a merge picks the latest `resets_at`, the *other* account's 7-day
+/// window won outright whenever its reset happened to be later. Observed: after
+/// switching from account A (7-day reset 23:00Z, 56%) to account B (03:00Z,
+/// 0%), one idle session kept re-rendering A's payload and the bar showed A's
+/// 56% as the machine's 7-day usage.
+///
+/// So the helper script stamps each cache file with the `oauthAccount` of
+/// Claude Code's own state file at the moment it writes, this reader groups the
+/// files by that stamp's uuid, and the rules below apply within a group and
+/// never across groups. Files with no stamp form one "unknown" group — a cache
+/// written by a script copy from before the stamp existed, or one written
+/// without `jq`. The legacy single `statusline-cache.json` is unstamped by
+/// definition and lands there too.
+///
+/// ``currentSnapshot()`` serves the **active** account's group: the one whose
+/// uuid matches `oauthAccount` in the state file (see ``ActiveAccountReader``).
+/// With no group for that account it reports
+/// ``ClaudeStatsError/noQuotaSourceAvailable`` — not another account's numbers
+/// and not the unstamped group's, which is how a machine still running the old
+/// script falls through to the backup source until its next render restamps.
+/// When the active account itself is unknown, the most recently captured group
+/// serves, which is exactly the pre-account behaviour on a one-account machine.
+/// Every other group is available to the popover through
+/// ``otherAccountSnapshots()``.
+///
+/// ### The mislabel guard
+///
+/// One heuristic, and only this one. An idle Claude Code session re-renders its
+/// status line on timers alone, handing the hook the rate limits *its own* last
+/// API response carried. Right after a login switch such a render pipes the old
+/// account's numbers while `~/.claude.json` already names the new account — so
+/// the file gets stamped with the new account and carries the old one's
+/// percentages, and no amount of grouping catches it.
+///
+/// It is catchable against one fact the state file has already updated: the
+/// 7-day reset of the cached reading for that same account. A stamped reading
+/// whose `seven_day.resets_at` differs from it by more than
+/// ``ActiveAccountReference/tolerance`` describes a different 7-day window than
+/// the account is actually in, so the whole reading is dropped from that
+/// account's merge. Readings with no `seven_day` window at all are not subject
+/// to it (nothing to compare), and with no cached reference everything is
+/// accepted.
+///
 /// ## Merging
 ///
-/// Each window is chosen independently across all files, and `captured_at` is
-/// deliberately *not* the deciding field — it says when we wrote the file, not
-/// how old the numbers in it are. In order:
+/// Within one account group, each window is chosen independently across that
+/// group's files, and `captured_at` is deliberately *not* the deciding field —
+/// it says when we wrote the file, not how old the numbers in it are. In order:
 ///
 /// 1. A reading whose `resets_at` has already passed is ignored: Claude Code
 ///    itself stops reporting such a window, so a file still carrying one is by
@@ -84,6 +133,10 @@ import Foundation
 ///   "utilization": {
 ///     "limits": [ { "kind": "weekly_scoped", … } ],
 ///     "spend": { … }, "extra_usage": { … }
+///   },
+///   "account": {
+///     "uuid": "…", "email": "…",
+///     "organization_name": "…", "organization_uuid": "…"
 ///   }
 /// }
 /// ```
@@ -97,12 +150,18 @@ import Foundation
 /// reading complete: all four bars out of files this app wrote, instead of
 /// three from here and one from a private key that refreshes on somebody
 /// else's schedule. They come from `~/.claude.json` and are therefore identical
-/// across sessions, so they are taken from the most recently captured file that
-/// has them rather than merged window-style.
+/// across the sessions of one login, so they are taken from the most recently
+/// captured file *in the chosen account's group* that has them, rather than
+/// merged window-style — the file is per-login, so a file stamped with another
+/// account describes another account's scoped rows and spend.
 ///
-/// `utilization` is **optional in every direction**. A cache written before this
-/// key existed, one written with no `jq` installed, and one written while
-/// `~/.claude.json` was unreadable are all indistinguishable and all fine: the
+/// `account` comes from the same read of that file — `oauthAccount`, copied
+/// key by key — and is what "One group per account" above groups by.
+///
+/// `utilization` and `account` are **optional in every direction**. A cache
+/// written before those keys existed, one written with no `jq` installed, and
+/// one written while `~/.claude.json` was unreadable are all indistinguishable
+/// and all fine: the account is unknown (see "One group per account"), the
 /// scoped rows come back empty and the credits `nil`, which is exactly what
 /// this reader reported before the key existed, and ``FreshestQuotaProvider``
 /// backfills both from ``CachedUtilizationReader``.
@@ -141,6 +200,9 @@ public struct StatuslineCacheReader: QuotaProviding {
     /// Same spelling as ``CachedUtilizationReader/utilizationKey`` on purpose:
     /// the object under it is the same object, so the same parsers read it.
     static let utilizationKey = "utilization"
+    /// Top-level key holding the copy of the state file's `oauthAccount` — the
+    /// stamp everything in "One group per account" turns on.
+    static let accountKey = "account"
 
     /// `~/Library/Application Support/ClaudeStats`.
     ///
@@ -171,16 +233,27 @@ public struct StatuslineCacheReader: QuotaProviding {
     /// object can be called from multiple threads safely").
     nonisolated(unsafe) private let fileManager: FileManager
     private let now: @Sendable () -> Date
+    /// Who Claude Code is logged in as, so the files can be scoped to that
+    /// account — see "One group per account".
+    ///
+    /// Defaults to ``UnknownAccountReader`` rather than the real
+    /// ``ActiveAccountReader``: this type is constructed all over the test
+    /// suite, and a default that read `~/.claude.json` would point every one of
+    /// those constructions at the developer's own state file.
+    /// ``FreshestQuotaProvider`` wires the real reader in.
+    private let activeAccount: any ActiveAccountProviding
 
     public init(
         cacheDirectoryURL: URL = StatuslineCacheReader.defaultCacheDirectoryURL,
         stalenessThreshold: TimeInterval = QuotaSnapshot.defaultStalenessThreshold,
         fileManager: FileManager = .default,
+        activeAccount: any ActiveAccountProviding = UnknownAccountReader(),
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.cacheDirectoryURL = cacheDirectoryURL
         self.stalenessThreshold = stalenessThreshold
         self.fileManager = fileManager
+        self.activeAccount = activeAccount
         self.now = now
     }
 
@@ -188,39 +261,36 @@ public struct StatuslineCacheReader: QuotaProviding {
         let readings = try loadReadings()
         let asOf = now()
 
-        let fiveHour = choose(readings.compactMap { $0.candidate(\.fiveHour) }, asOf: asOf)
-        let sevenDay = choose(readings.compactMap { $0.candidate(\.sevenDay) }, asOf: asOf)
-
-        // Each window can be independently absent; require at least one — the
-        // same rule ``CachedUtilizationReader`` applies to its single payload.
-        // With neither, every file we have is either pre-first-API-response or
-        // describing windows that have already rolled over: no data, not a
-        // fault. One of the two surviving is a snapshot with a `nil` window,
-        // not a snapshot with a zeroed one.
-        guard let capturedAt = [fiveHour?.capturedAt, sevenDay?.capturedAt].compactMap({ $0 }).max() else {
+        // Nothing for the active account is "no reading from this source", not
+        // an error of its own: `FreshestQuotaProvider` then falls through to
+        // `cachedUsageUtilization`, which belongs to the active login by
+        // construction. Another account's files are never substituted.
+        guard let group = chosenGroup(in: readings),
+            let snapshot = snapshot(for: group, asOf: asOf)
+        else {
             throw ClaudeStatsError.noQuotaSourceAvailable
         }
-
-        // Absent on every cache the helper script wrote before it learned to
-        // copy this across, and on every one written without `jq` — hence
-        // empty/`nil` rather than a throw. See the type's "Cache file" note.
-        let utilization = newestUtilization(in: readings)
-        let credits = utilization.map(QuotaJSON.usageCredits(in:)) ?? .unavailable
-
-        let snapshot = QuotaSnapshot(
-            fiveHour: fiveHour?.window,
-            sevenDay: sevenDay?.window,
-            confidence: .official,
-            capturedAt: capturedAt,
-            scopedWeekly: utilization.map(QuotaJSON.scopedLimits(in:)) ?? [],
-            usageCredits: credits.credits,
-            usageCreditsDisabledReason: credits.disabledReason
-        )
 
         guard !snapshot.isStale(asOf: asOf, threshold: stalenessThreshold) else {
             throw ClaudeStatsError.staleQuotaSource(snapshot: snapshot, age: snapshot.age(asOf: asOf))
         }
         return snapshot
+    }
+
+    /// Every account group except the one ``currentSnapshot()`` serves — see
+    /// ``QuotaProviding/otherAccountSnapshots()``.
+    ///
+    /// Never throws and never applies the staleness gate: these rows are
+    /// decoration carrying their own freshness tag, and a file-level fault here
+    /// has already been reported by the snapshot path.
+    public func otherAccountSnapshots() async -> [QuotaSnapshot] {
+        guard let readings = try? loadReadings() else { return [] }
+        let asOf = now()
+        let groups = groups(in: readings)
+        let chosen = chosen(among: groups)
+        return groups
+            .filter { group in chosen.map { group.key != $0.key } ?? true }
+            .compactMap { snapshot(for: $0, asOf: asOf) }
     }
 
     /// Same payload as ``currentSnapshot()``, but never gated on staleness —
@@ -234,7 +304,7 @@ public struct StatuslineCacheReader: QuotaProviding {
     /// copy of `weekly_scoped` on disk — and unlike the windows they carry no
     /// freshness claim of their own (see ``QuotaScopedLimit``).
     public func currentScopedWeekly() async throws -> [QuotaScopedLimit] {
-        guard let utilization = newestUtilization(in: try loadReadings()) else { return [] }
+        guard let utilization = newestUtilization(in: try chosenReadings()) else { return [] }
         return QuotaJSON.scopedLimits(in: utilization)
     }
 
@@ -243,8 +313,21 @@ public struct StatuslineCacheReader: QuotaProviding {
     /// month-to-date spend total does not stop being right because the rate
     /// limits captured beside it have aged out.
     public func currentUsageCredits() async throws -> UsageCreditsReading {
-        guard let utilization = newestUtilization(in: try loadReadings()) else { return .unavailable }
+        guard let utilization = newestUtilization(in: try chosenReadings()) else { return .unavailable }
         return QuotaJSON.usageCredits(in: utilization)
+    }
+
+    /// The chosen account group's files, for the two staleness-bypassing
+    /// accessors — scoped the same way ``currentSnapshot()`` is, since the
+    /// `utilization` copy is per-login too: another account's file carries
+    /// another account's scoped rows and spend.
+    ///
+    /// Empty rather than throwing when there is no group for the active
+    /// account: the file-level faults have already been raised by
+    /// ``loadReadings()``, and "nothing for this account" is the same non-fault
+    /// here as it is in ``currentSnapshot()``.
+    private func chosenReadings() throws -> [Reading] {
+        chosenGroup(in: try loadReadings())?.readings ?? []
     }
 
     /// Deletes the whole session cache directory and the legacy single file, so
@@ -276,12 +359,16 @@ public struct StatuslineCacheReader: QuotaProviding {
 
     /// One parsed cache file: the two windows as they actually appeared (either
     /// may be absent — see the 0% pitfall in "One file per session"), when we
-    /// wrote it, and the `utilization` copy if it carried one.
+    /// wrote it, the account it was stamped with, and the `utilization` copy if
+    /// it carried one.
     private struct Reading {
         let capturedAt: Date
         let fiveHour: QuotaWindow?
         let sevenDay: QuotaWindow?
         let utilization: [String: Any]?
+        /// `nil` for an unstamped file — a script copy from before the stamp,
+        /// one running without `jq`, or the legacy single file.
+        let account: QuotaAccount?
 
         /// This file's claim about one window, ready to rank — `nil` when it
         /// made none.
@@ -339,7 +426,9 @@ public struct StatuslineCacheReader: QuotaProviding {
                     capturedAt: capturedAt,
                     fiveHour: windows.fiveHour,
                     sevenDay: windows.sevenDay,
-                    utilization: QuotaJSON.object(root[Self.utilizationKey])
+                    utilization: QuotaJSON.object(root[Self.utilizationKey]),
+                    account: QuotaJSON.object(root[Self.accountKey])
+                        .flatMap(QuotaAccount.init(json:))
                 )
             )
         }
@@ -389,6 +478,118 @@ public struct StatuslineCacheReader: QuotaProviding {
         return (data, mtime)
     }
 
+    // MARK: - Grouping by account
+
+    /// One account's files. `key` is the grouping identity — the stamp's uuid,
+    /// or `nil` for the unstamped group.
+    private struct Group {
+        let account: QuotaAccount?
+        let readings: [Reading]
+
+        var key: String? { account?.uuid }
+        /// Newest file in the group, used only to order the groups.
+        var newestCapture: Date { readings.map(\.capturedAt).max() ?? .distantPast }
+    }
+
+    /// Splits the files into one group per account, newest group first, after
+    /// dropping the readings the mislabel guard rejects.
+    ///
+    /// ## The mislabel guard, in code
+    ///
+    /// A reading is dropped when it is stamped with the account the state file's
+    /// cached reading describes, carries a `seven_day` window, and that window's
+    /// reset is more than ``ActiveAccountReference/tolerance`` away from the
+    /// cached one's. Reason: an idle session re-renders its status line from its
+    /// *last* API payload, so immediately after a login switch a render can pipe
+    /// the previous account's numbers while `~/.claude.json` already names the
+    /// new one — the file is then stamped with the new account and carries the
+    /// old account's percentages, which grouping alone cannot catch. The 7-day
+    /// reset is the one field the two sources both report and that differs
+    /// between accounts, and the tolerance absorbs their different spellings of
+    /// the same instant (epoch seconds vs ISO-8601 with fractional seconds).
+    ///
+    /// Readings with no `seven_day` window are never dropped — there is nothing
+    /// to compare — and with no reference at all nothing is dropped either.
+    private func groups(in readings: [Reading]) -> [Group] {
+        let reference = activeAccount.readActiveAccount().reference
+        var order: [String?] = []
+        var byKey: [String?: (account: QuotaAccount?, readings: [Reading])] = [:]
+
+        for reading in readings where !isForeign(reading, reference: reference) {
+            let key = reading.account?.uuid
+            if byKey[key] == nil {
+                order.append(key)
+                byKey[key] = (reading.account, [])
+            }
+            byKey[key]?.readings.append(reading)
+        }
+
+        return order
+            .compactMap { key in byKey[key].map { Group(account: $0.account, readings: $0.readings) } }
+            .sorted { $0.newestCapture > $1.newestCapture }
+    }
+
+    /// The mislabel guard's verdict on one file — see ``groups(in:)``.
+    private func isForeign(_ reading: Reading, reference: ActiveAccountReference?) -> Bool {
+        guard let reference, reading.account?.uuid == reference.accountUuid,
+            let resetsAt = reading.sevenDay?.resetsAt
+        else { return false }
+        return abs(resetsAt.timeIntervalSince(reference.sevenDayResetsAt))
+            > ActiveAccountReference.tolerance
+    }
+
+    /// The group ``currentSnapshot()`` serves: the active account's, or — when
+    /// the state file doesn't name one — the most recently captured.
+    ///
+    /// `nil` when the state file names an account no file on disk is stamped
+    /// with. That is deliberately *not* a fall-through to another group: the
+    /// whole point is that the bars describe the account the user is logged in
+    /// as, and the backup source reads that same login's cached blob.
+    private func chosen(among groups: [Group]) -> Group? {
+        guard let uuid = activeAccount.readActiveAccount().account?.uuid else {
+            return groups.first
+        }
+        return groups.first { $0.key == uuid }
+    }
+
+    private func chosenGroup(in readings: [Reading]) -> Group? {
+        chosen(among: groups(in: readings))
+    }
+
+    /// Merges one group's files into that account's snapshot, or `nil` when
+    /// none of them still claims a live window.
+    private func snapshot(for group: Group, asOf now: Date) -> QuotaSnapshot? {
+        let fiveHour = choose(group.readings.compactMap { $0.candidate(\.fiveHour) }, asOf: now)
+        let sevenDay = choose(group.readings.compactMap { $0.candidate(\.sevenDay) }, asOf: now)
+
+        // Each window can be independently absent; require at least one — the
+        // same rule ``CachedUtilizationReader`` applies to its single payload.
+        // With neither, every file in this group is either
+        // pre-first-API-response or describing windows that have already rolled
+        // over: no data, not a fault. One of the two surviving is a snapshot
+        // with a `nil` window, not a snapshot with a zeroed one.
+        guard let capturedAt = [fiveHour?.capturedAt, sevenDay?.capturedAt].compactMap({ $0 }).max() else {
+            return nil
+        }
+
+        // Absent on every cache the helper script wrote before it learned to
+        // copy this across, and on every one written without `jq` — hence
+        // empty/`nil` rather than a throw. See the type's "Cache file" note.
+        let utilization = newestUtilization(in: group.readings)
+        let credits = utilization.map(QuotaJSON.usageCredits(in:)) ?? .unavailable
+
+        return QuotaSnapshot(
+            fiveHour: fiveHour?.window,
+            sevenDay: sevenDay?.window,
+            confidence: .official,
+            capturedAt: capturedAt,
+            scopedWeekly: utilization.map(QuotaJSON.scopedLimits(in:)) ?? [],
+            usageCredits: credits.credits,
+            usageCreditsDisabledReason: credits.disabledReason,
+            account: group.account
+        )
+    }
+
     // MARK: - Merging
 
     /// Picks one window out of every file's claim about it, by the four rules
@@ -421,8 +622,10 @@ public struct StatuslineCacheReader: QuotaProviding {
     /// carries one, or `nil` when none does — a normal state, not a fault.
     ///
     /// Not merged window-style: this object is copied out of `~/.claude.json`,
-    /// which every session sees identically, so the newest copy is simply the
-    /// best one.
+    /// which every session of one login sees identically, so the newest copy is
+    /// simply the best one. Always called with a single account group's
+    /// readings — the file belongs to whichever account was logged in when it
+    /// was copied.
     private func newestUtilization(in readings: [Reading]) -> [String: Any]? {
         readings
             .filter { $0.utilization != nil }

@@ -47,6 +47,66 @@ Two independent tiers, deliberately decoupled:
    docker-loop usage automatically, *because* those containers reauthenticate
    as the same Anthropic account (confirmed: no separate API keys). No extra
    plumbing needed for that case.
+   - **Which account, though — the readings are grouped by one.** The user
+     swaps the global login (`~/.claude.json` + keychain) between two Anthropic
+     accounts, and *neither* quota payload names an account: the statusline
+     stdin carries `session_id`, `transcript_path`, `cwd`, `model`,
+     `workspace`, `cost`, `context_window`, `rate_limits`, `version` — nothing
+     about a user, account or org (checked against the statusline docs). So a
+     cache file left behind by the previous login is indistinguishable from a
+     current one, and "latest `resets_at` wins" happily picked the other
+     account's 7-day window. Observed on this machine: after switching from
+     account A (7-day resetting 23:00Z, 56% used) to account B (03:00Z, 0%),
+     one idle session kept re-rendering A's payload and the 7-day bar showed
+     A's 56% as this machine's usage.
+     - **Identity comes from `~/.claude.json`'s `oauthAccount`**
+       (`accountUuid`, `emailAddress`, `organizationName`, `organizationUuid`)
+       — modelled as `Models/QuotaAccount.swift`, display name
+       `organizationName ?? email ?? short uuid`. The helper script copies it
+       into every cache file it writes as a top-level `account` object;
+       `ActiveAccountReader` reads the same key for "who is logged in **now**",
+       behind the same fingerprint gate as the promo reader (no FSEvents on
+       `$HOME`). `CachedUtilizationReader` takes the account from its own
+       payload's `accountUuid`, filled out from `oauthAccount` when the uuids
+       agree.
+     - **No third-party switcher is consulted — deliberately.** Not `cswap` /
+       claude-swap, not `~/.claude-swap-backup`, not anything else: the
+       readings have to come from Claude Code's own files, or the app would be
+       correct only on machines running whichever tool we bet on. The state
+       file is right on every machine, switcher or not.
+     - **Merging is per account group, never across them.** Files stamped with
+       the same uuid form a group; unstamped files (a script copy from before
+       the stamp, a machine without `jq`, the legacy single file) form one
+       "unknown" group. `currentSnapshot()` serves the group matching
+       `oauthAccount`; with no group for that account it reports
+       `noQuotaSourceAvailable` so the backup — which reads that same login's
+       blob — takes over, rather than substituting another account's numbers or
+       claiming the unstamped group is this account's. With no `oauthAccount`
+       at all (no state file) the most recently captured group serves, which is
+       the pre-account behaviour on a one-account machine. The `utilization`
+       copy is scoped the same way: it is lifted out of a per-login file.
+     - **One heuristic, the mislabel guard.** An idle session re-renders its
+       status line from its *last* API payload, so right after a switch a hook
+       run can pipe the old account's rate limits while `~/.claude.json`
+       already names the new one — the file is then stamped with the new
+       account and carries the old one's numbers, which grouping alone cannot
+       catch. So when the active account's `cachedUsageUtilization` reports a
+       `seven_day.resets_at`, a stamped reading for that same account whose
+       `seven_day.resets_at` differs by more than **60 seconds** is dropped
+       from the merge as foreign. The tolerance exists because the two sources
+       spell the same instant differently (epoch seconds vs ISO-8601 with
+       fractional seconds) and is far below the gap between two real 7-day
+       windows. Readings with no `seven_day` are never dropped (nothing to
+       compare), and with no cached reference everything is accepted.
+     - **Every other account's readings are still carried**, through
+       `QuotaProviding.otherAccountSnapshots()` — decoration below the active
+       account's rows, never gated on staleness, never an error, and left out
+       entirely for a group whose windows have all rolled over. The state file
+       naming an account that has *no* readings anywhere is "no reading" for
+       that account (both windows `nil`), not an error and not somebody else's
+       numbers; with nothing on disk for any account the old
+       `noQuotaSourceAvailable` still stands, because "Claude Code hasn't
+       cached a reading on this Mac" is then accurate advice.
    - **`cachedUsageUtilization` (backup, `official (cached)`, zero setup).**
      Claude Code caches the same rate-limit payload into its own state file,
      `~/.claude.json`, as
@@ -155,7 +215,8 @@ Two independent tiers, deliberately decoupled:
            and neither grafts a window from the other source: a hook snapshot
            with a `nil` window stays `nil`. (`QuotaWindow` has no zeroed
            `.empty` placeholder any more; `nil` is the placeholder.)
-       - **Merge rule, per window, independently.** Ignore any reading whose
+       - **Merge rule, per window, independently — and within one account
+         group only** (see "Which account, though" above). Ignore any reading whose
          `resets_at` has passed; take the latest `resets_at` (a later reset is
          a later window); on a tie — i.e. the same window — take the *highest*
          percentage, since utilization within one window never decreases, so a
@@ -165,18 +226,25 @@ Two independent tiers, deliberately decoupled:
          the files that actually contributed a window, and the staleness gate
          applies to that.
        - The single `statusline-cache.json` older script copies wrote is no
-         longer written but still read, as one more input, so a machine whose
-         hook hasn't been reinstalled keeps working. Session files unwritten
+         longer written but still read, as one more input — unstamped, so it
+         joins the unknown-account group rather than the logged-in account's,
+         and a machine whose hook hasn't been reinstalled is served by the
+         backup source until its next render writes a stamped file. Session files unwritten
          for 7 days are deleted as the reader passes over them; the legacy file
          is not, since it may be that machine's only reading.
-     - **The cache carries all four bars, not two.** When `jq` is available the
+     - **The cache carries all four bars, not two — plus whose they are.** When
+       `jq` is available the
        helper script also reads Claude Code's own `~/.claude.json` (located the
        way `ClaudeConfigDirectory.stateFileCandidates()` does) and merges the
        `weekly_scoped` entries of `limits[]` plus `spend` and `extra_usage`
        into the same cache file it writes the rate limits to, under a third
        top-level `utilization` key shaped exactly as those objects appear in
        `cachedUsageUtilization` — so `QuotaJSON.scopedLimits(in:)` /
-       `usageCredits(in:)` read them unchanged. Not merged window-style: every
+       `usageCredits(in:)` read them unchanged — and `oauthAccount` as a fourth
+       top-level `account` key (`uuid`, `email`, `organization_name`,
+       `organization_uuid`, each omitted when the state file lacks it, the
+       whole object omitted when none is usable). Both copies ride one
+       fingerprint-gated read of that file, so the stamp costs nothing extra. Not merged window-style: every
        session copies the same `~/.claude.json`, so the reader simply takes
        this object from the most recently captured file that carries one.
        That is what makes a hook-only reading complete, and why the hook can be
@@ -294,6 +362,12 @@ Two independent tiers, deliberately decoupled:
 Click opens a popover:
 
 ```
+creativytool                      ← the account the rows below describe, from
+                                    `~/.claude.json`'s `oauthAccount`
+                                    (organisation name, else email, else a
+                                    short uuid). Only when something on disk
+                                    says — an unstamped reading leaves it out
+                                    rather than guessing.
 5-hour window     ▓▓▓▓▓▓░░ 62%     resets in 2h 14m
 7-day window       ▓▓▓░░░░░ 31%     resets in 4d 6h
 5-hour window     ░░░░░░░░  —       no reading
@@ -342,6 +416,22 @@ source: official (cached) · 4m ago              ← confidence tag + freshness;
                                     when the payload said why there are no
                                     usage credits — there is no credits row to
                                     hang it on, and it is never an error line.
+
+Bitgrip                           ← one compact group per *other* account this
+5-hour window     ░░░░░░░░  —       no reading
+7-day window       ▓▓▓▓▓░░░ 56%    resets in 2d 3h
+source: official · 3h ago
+                                  ← Mac has readings for — what is left behind
+                                    after switching the global login. Same
+                                    rows, same `—` / "no reading" for an
+                                    expired window, its own freshness tag, no
+                                    usage-credits row (that data only ever
+                                    exists for the active account). Labelled
+                                    "Unknown account" for the unstamped group,
+                                    which is shown only when it isn't the one
+                                    driving the bars above and still has a live
+                                    window. Absent entirely on a one-account
+                                    machine.
                                   [ Clear Quota Cache ]   ← deletes the
                                     statusline cache and re-polls
 

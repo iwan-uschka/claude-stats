@@ -48,6 +48,21 @@ public protocol QuotaProviding: Sendable {
     /// to bypass.
     func currentUsageCredits() async throws -> UsageCreditsReading
 
+    /// Latest reading for every account this source can see **other** than the
+    /// active one, one merged snapshot each, newest capture first.
+    ///
+    /// Decoration, so unlike ``currentSnapshot()`` it never throws and is never
+    /// gated on staleness: the popover renders each of these with its own
+    /// freshness tag, and an account whose readings went cold is exactly the
+    /// thing the user wants to see. An empty array is the normal answer — one
+    /// account, or a source that cannot tell accounts apart at all, which is
+    /// why the default implementation returns one.
+    ///
+    /// A group whose windows have all rolled over contributes nothing and is
+    /// left out entirely: with no live window there is no row to draw, only a
+    /// label over two "no reading" lines.
+    func otherAccountSnapshots() async -> [QuotaSnapshot]
+
     /// Discards whatever on-disk or cached state backs this source, so the next
     /// ``currentSnapshot()`` reflects only data written after this call.
     ///
@@ -72,6 +87,83 @@ extension QuotaProviding {
             disabledReason: snapshot.usageCreditsDisabledReason
         )
     }
+
+    public func otherAccountSnapshots() async -> [QuotaSnapshot] { [] }
+}
+
+/// The reference the mislabel guard compares a statusline reading against — see
+/// ``StatuslineCacheReader`` for what it is guarding against and why.
+///
+/// Both fields come from the same `cachedUsageUtilization` blob, so they always
+/// describe one account's one reading: the account Claude Code last fetched
+/// usage for, and when that fetch said the 7-day window rolls over.
+public struct ActiveAccountReference: Sendable, Hashable {
+    /// `cachedUsageUtilization.accountUuid`, falling back to
+    /// `oauthAccount.accountUuid` when the cached blob doesn't name one.
+    public let accountUuid: String
+    /// `cachedUsageUtilization.utilization.seven_day.resets_at`.
+    public let sevenDayResetsAt: Date
+
+    /// How far two spellings of the same instant may differ before they count
+    /// as different windows.
+    ///
+    /// The two sources format the same timestamp differently — the statusline
+    /// payload emits whole epoch seconds, `cachedUsageUtilization` an ISO-8601
+    /// string with fractional seconds — so an exact compare would reject
+    /// matching readings over sub-second rounding. A minute is far below the
+    /// gap between two real 7-day windows (hours at the very least), so nothing
+    /// foreign can hide inside it.
+    public static let tolerance: TimeInterval = 60
+
+    public init(accountUuid: String, sevenDayResetsAt: Date) {
+        self.accountUuid = accountUuid
+        self.sevenDayResetsAt = sevenDayResetsAt
+    }
+}
+
+/// One read of "who is Claude Code logged in as right now".
+public struct ActiveAccountReading: Sendable, Hashable {
+    /// `oauthAccount` from the state file, or `nil` when the file is absent,
+    /// unreadable, malformed, or simply carries no such object.
+    public let account: QuotaAccount?
+    /// The mislabel guard's reference, when the state file also holds a cached
+    /// 7-day reading to compare against. `nil` disables the guard — with no
+    /// reference, every reading is accepted.
+    public let reference: ActiveAccountReference?
+
+    public init(account: QuotaAccount? = nil, reference: ActiveAccountReference? = nil) {
+        self.account = account
+        self.reference = reference
+    }
+
+    /// Nothing known: the state file is absent, unreadable or says nothing
+    /// about an account. Not an error — see ``ActiveAccountProviding``.
+    public static let unknown = ActiveAccountReading()
+}
+
+/// Source of the account Claude Code is currently logged in as.
+///
+/// **Never throws**, for the same reason ``PromoNoticeProviding`` doesn't: the
+/// answer is read out of another program's private state file, and every way it
+/// can come up empty (no file, a Claude Code version that spells the key
+/// differently, a half-written file) leaves the app in the state it was in
+/// before accounts were modelled at all — one unknown account — rather than in
+/// a failure the user could act on.
+public protocol ActiveAccountProviding: Sendable {
+    func readActiveAccount() -> ActiveAccountReading
+}
+
+/// The "we don't know" answer, used wherever the real reader is deliberately
+/// not wired up.
+///
+/// This is the default for ``StatuslineCacheReader`` on purpose: a reader that
+/// read `~/.claude.json` unless told otherwise would make every test that
+/// constructs one touch the developer's real state file, which the suite's
+/// stated rule forbids. ``FreshestQuotaProvider`` wires the real
+/// ``ActiveAccountReader`` in, and that is the only path the app itself uses.
+public struct UnknownAccountReader: ActiveAccountProviding {
+    public init() {}
+    public func readActiveAccount() -> ActiveAccountReading { .unknown }
 }
 
 /// Outcome of one promo-notice read.

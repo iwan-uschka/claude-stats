@@ -32,6 +32,7 @@ Pre-built releases (macOS app bundle, zipped) are available on the
 - Per-source breakdown (CLI / VS Code / SDK-agents) across 5h/24h/7d windows, and per-model token/cost totals
 - Local session-log parsing (`~/.claude/projects/*/*.jsonl`) — token counts, cost, burn rate always available, no network or credentials needed
 - Live 5-hour/7-day quota percentage straight from Claude Code's own cached reading — no setup, no hook to install; the `statusLine` hook is optional and just makes it fresher — see [Quota source](#quota-source)
+- Account-aware: the bars show the Anthropic account Claude Code is logged in as, and any other account this Mac has readings for is listed below it — swapping the global login no longer mixes two accounts' numbers
 - Claude Code's own rate-limit promo notices, shown under the bar they apply to, with any link in them clickable
 - FSEvents-driven refresh — updates on write, not on a poll timer
 
@@ -57,14 +58,18 @@ wrapped, not replaced). **Remove** reverts it. Prefer doing it yourself?
 **Reveal Script in Finder** and follow the header comment. With the hook
 installed and freshly fired, the tag reads `official`.
 
-Whichever source has the newer reading wins, so one of them being quiet is
-invisible. There is no estimate fallback: with neither reporting, the popover
-shows an error rather than a guessed number, and a real-but-old reading stays
-on screen with an orange staleness warning. Token counts, cost, and burn rate
-(from local log parsing) work regardless.
+The statusline hook is the primary source and wins whenever it has a fresh
+reading; Claude Code's cached reading is the backup, used only when the hook is
+missing, failing, or stale. So one of them being quiet is invisible. There is
+no estimate fallback: with neither reporting, the popover shows an error rather
+than a guessed number, and a real-but-old reading stays on screen with an
+orange staleness warning. Token counts, cost, and burn rate (from local log
+parsing) work regardless.
 
 This tier is account-wide — it reflects usage from other machines/containers
-on the same Anthropic account automatically.
+on the same Anthropic account automatically. Which account that is comes from
+Claude Code's own `~/.claude.json`, so switching the global login switches the
+bars with it; no third-party account switcher is involved.
 
 ## Building a release app
 

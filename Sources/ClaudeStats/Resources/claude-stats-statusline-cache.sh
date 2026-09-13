@@ -111,13 +111,15 @@
 # `statusline-cache.json` beside the directory; that file is no longer written,
 # and the app still reads it if it's there.
 #
-# With `jq` installed, three top-level keys are written per file:
+# With `jq` installed, up to four top-level keys are written per file:
 #
 #   {"captured_at":1738425600,
 #    "rate_limits":{"five_hour":{"used_percentage":23.5,"resets_at":1738425600},
 #                   "seven_day":{"used_percentage":41.2,"resets_at":1738857600}},
 #    "utilization":{"limits":[{"kind":"weekly_scoped","percent":0,…}],
-#                   "spend":{…},"extra_usage":{…}}}
+#                   "spend":{…},"extra_usage":{…}},
+#    "account":{"uuid":"…","email":"…",
+#               "organization_name":"…","organization_uuid":"…"}}
 #
 # `captured_at` and `rate_limits` come from stdin — the statusline payload. The
 # `utilization` object does not: it is copied out of Claude Code's own
@@ -127,12 +129,26 @@
 # match the shape those keys already have in `~/.claude.json`, so the app's
 # existing parsers read it unchanged from either file.
 #
-# That copy is strictly best-effort and additive. A missing, unreadable or
-# malformed state file, or one with no `cachedUsageUtilization` yet, simply
-# omits the `utilization` key — `captured_at` and `rate_limits` are written
-# exactly as before, and the app falls back to reading the state file itself
-# for the two bars this key would have fed. An older cache file written before
-# this key existed is read the same way.
+# WHICH ACCOUNT THE NUMBERS BELONG TO
+# -----------------------------------
+# `account` is copied from the same state file's `oauthAccount`, one key at a
+# time. The rate limits are account-wide, and the user can swap the global login
+# (`~/.claude.json` plus the keychain) between two Anthropic accounts — but the
+# statusline payload names no account anywhere (it carries `session_id`, `model`,
+# `workspace`, `cost`, `context_window`, `rate_limits`, and nothing about who is
+# logged in). Without this stamp a cache file left behind by the previous login
+# is indistinguishable from a current one, and the app's per-window merge picked
+# whichever 7-day window resets later — the wrong account's, half the time.
+# Stamping here is the only place the answer is still available: the app reads
+# these files long after the render that wrote them.
+#
+# Both copies are strictly best-effort and additive. A missing, unreadable or
+# malformed state file, or one with no `cachedUsageUtilization` / `oauthAccount`
+# yet, simply omits that key — `captured_at` and `rate_limits` are written
+# exactly as before, the app treats an unstamped file as belonging to an unknown
+# account, and it falls back to reading the state file itself for the two bars
+# `utilization` would have fed. An older cache file written before these keys
+# existed is read the same way.
 #
 # The state file is located the way the app locates it: $CLAUDE_CONFIG_DIR
 # (trimmed, tilde-expanded) `/.claude.json` when that variable is set to
@@ -153,11 +169,13 @@
 # (`statusline-utilization-cache.json`, one for the machine rather than one per
 # session, in the cache directory itself) remembers the
 # state file's mtime+size+inode alongside the last-extracted `utilization`
-# payload, and `extract_utilization` skips the `jq` parse of the (much
-# larger) state file entirely when the fingerprint still matches — including
-# when the last extraction found nothing to carry, so a Free-tier account
-# with no `weekly_scoped`/`spend` data doesn't pay the full parse on every
-# render either. Coarser than `ClaudeStateFile`'s nanosecond-mtime version
+# payload and `account` stamp, and `extract_state_fields` skips the `jq` parse
+# of the (much larger) state file entirely when the fingerprint still matches —
+# including when the last extraction found nothing to carry, so a Free-tier
+# account with no `weekly_scoped`/`spend` data doesn't pay the full parse on
+# every render either. Both fields ride one gate because they come from one
+# read of one file; a switched login rewrites that file, so the fingerprint
+# changes with the account. Coarser than `ClaudeStateFile`'s nanosecond-mtime version
 # (whole-second `stat` resolution, no descriptor-reuse trick): a same-second
 # overwrite can be missed, costing one render's staleness on the fourth bar,
 # not a correctness bug — the reader already tolerates an absent
@@ -165,7 +183,7 @@
 #
 # Without `jq`, the raw payload is written verbatim to
 # `statusline-cache/unknown-session.json`, the app uses the file's modification
-# time as the capture time, and no `utilization` key is produced —
+# time as the capture time, and neither `utilization` nor `account` is produced —
 # hand-parsing JSON with `grep` is not worth the wrong answers it would give,
 # and that includes digging the `session_id` out, so every session on such a
 # machine shares that one file. Both shapes are accepted by the reader.
@@ -226,47 +244,67 @@ state_fingerprint() {
   stat -f '%m.%z.%i' "$1" 2>/dev/null
 }
 
-# Copies out the parts of `cachedUsageUtilization.utilization` that the
-# statusline payload can't supply, or prints nothing at all. Anything unexpected
-# — no state file, unparseable JSON, no such key, an entry of the wrong type —
-# lands on "print nothing", because a missing `utilization` key in the cache is
-# a documented, handled state and a wrong one is not.
+# Copies out the two things the statusline payload can't supply — the drawable
+# parts of `cachedUsageUtilization.utilization`, and the `oauthAccount` stamp
+# saying whose numbers these are — as one JSON object,
+# `{"utilization":…|null,"account":…|null}`. Anything unexpected (no state file,
+# unparseable JSON, no such key, an entry of the wrong type) leaves the
+# corresponding half `null`, because a missing key in the cache is a documented,
+# handled state and a wrong one is not.
 #
 # `strings` on `.kind` is what makes the `weekly_scoped` filter total: a
 # non-string `kind` yields no value, so `select` drops the entry instead of
-# `ascii_downcase` aborting the whole extraction over one malformed row.
+# `ascii_downcase` aborting the whole extraction over one malformed row. The
+# account fields are guarded by `type == "string"` for the same reason — a
+# non-string field is dropped, not fatal — and an account object left with no
+# fields at all collapses back to `null` rather than being stamped empty.
 #
-# Fingerprint-gated: a hit reuses the sidecar's stored payload (or its stored
-# "nothing to carry" verdict) without touching the state file at all; only a
-# miss pays for opening and parsing it.
-extract_utilization() {
-  local state_file fp cached_entry cached_payload
+# Fingerprint-gated: a hit reuses the sidecar's stored fields (including its
+# stored "nothing to carry" verdict) without touching the state file at all;
+# only a miss pays for opening and parsing it.
+extract_state_fields() {
+  local state_file fp cached_entry
   state_file=$(find_state_file) || return 1
   fp=$(state_fingerprint "$state_file") || return 1
 
   if [ -r "$utilization_cache_file" ]; then
-    cached_entry=$(jq -c --arg fp "$fp" 'select(.source_fingerprint == $fp)' \
+    cached_entry=$(jq -c --arg fp "$fp" \
+      'select(.source_fingerprint == $fp)
+       | {utilization: (.utilization // null), account: (.account // null)}' \
       "$utilization_cache_file" 2>/dev/null)
     if [ -n "$cached_entry" ]; then
-      cached_payload=$(printf '%s' "$cached_entry" | jq -c '.utilization // empty' 2>/dev/null)
-      if [ -n "$cached_payload" ]; then
-        printf '%s' "$cached_payload"
-        return 0
-      fi
-      return 1
+      printf '%s' "$cached_entry"
+      return 0
     fi
   fi
 
-  local payload
-  payload=$(jq -c '
-    .cachedUsageUtilization.utilization
-    | if type == "object" then
-        { limits: [ .limits[]? | select((.kind? | strings | ascii_downcase) == "weekly_scoped") ] }
-        + (if (.spend | type) == "object" then { spend: .spend } else {} end)
-        + (if (.extra_usage | type) == "object" then { extra_usage: .extra_usage } else {} end)
-      else empty end
-    | if (.limits | length) > 0 or has("spend") or has("extra_usage") then . else empty end
+  local fields
+  fields=$(jq -c '
+    {
+      utilization: (
+        .cachedUsageUtilization.utilization
+        | if type == "object" then
+            { limits: [ .limits[]? | select((.kind? | strings | ascii_downcase) == "weekly_scoped") ] }
+            + (if (.spend | type) == "object" then { spend: .spend } else {} end)
+            + (if (.extra_usage | type) == "object" then { extra_usage: .extra_usage } else {} end)
+          else null end
+        | if type == "object"
+            and ((.limits | length) > 0 or has("spend") or has("extra_usage"))
+          then . else null end
+      ),
+      account: (
+        .oauthAccount
+        | if type == "object" then
+            (if (.accountUuid | type) == "string" then { uuid: .accountUuid } else {} end)
+            + (if (.emailAddress | type) == "string" then { email: .emailAddress } else {} end)
+            + (if (.organizationName | type) == "string" then { organization_name: .organizationName } else {} end)
+            + (if (.organizationUuid | type) == "string" then { organization_uuid: .organizationUuid } else {} end)
+          else null end
+        | if type == "object" and (length > 0) then . else null end
+      )
+    }
   ' "$state_file" 2>/dev/null)
+  [ -n "$fields" ] || fields='{"utilization":null,"account":null}'
 
   # Persist the verdict regardless of outcome — an unchanged state file with
   # nothing to carry should skip the parse next render too, same as a hit
@@ -274,16 +312,11 @@ extract_utilization() {
   # redundant parse, not correctness.
   local tmp
   tmp=$(mktemp "${utilization_cache_file}.XXXXXX" 2>/dev/null) && {
-    if [ -n "$payload" ]; then
-      jq -cn --arg fp "$fp" --argjson u "$payload" '{source_fingerprint:$fp, utilization:$u}' >"$tmp" 2>/dev/null
-    else
-      jq -cn --arg fp "$fp" '{source_fingerprint:$fp, utilization:null}' >"$tmp" 2>/dev/null
-    fi
+    jq -cn --arg fp "$fp" --argjson f "$fields" '{source_fingerprint:$fp} + $f' >"$tmp" 2>/dev/null
     mv -f "$tmp" "$utilization_cache_file" 2>/dev/null || rm -f "$tmp"
   }
 
-  [ -n "$payload" ] || return 1
-  printf '%s' "$payload"
+  printf '%s' "$fields"
 }
 
 # --- write the cache -------------------------------------------------------
@@ -323,20 +356,22 @@ write_cache() {
   # needed.
 
   if command -v jq >/dev/null 2>&1; then
-    # Additive and separately fallible: `utilization` defaults to JSON null and
-    # is dropped from the object below when it stays that way, so a state file
-    # that can't be read costs the third and fourth bars nothing here — it just
-    # leaves them to the app's backup reader — and never the rate limits.
-    local utilization
-    utilization=$(extract_utilization) || utilization=""
-    [ -n "$utilization" ] || utilization="null"
+    # Additive and separately fallible: each half defaults to JSON null and is
+    # dropped from the object below when it stays that way, so a state file that
+    # can't be read costs the third and fourth bars (and the account stamp)
+    # nothing here — it just leaves them to the app's backup reader and to its
+    # unknown-account group — and never the rate limits.
+    local fields
+    fields=$(extract_state_fields) || fields=""
+    [ -n "$fields" ] || fields='{"utilization":null,"account":null}'
 
     if ! printf '%s' "$input" | jq -c \
         --argjson now "$(date +%s)" \
-        --argjson utilization "$utilization" \
+        --argjson fields "$fields" \
         'if .rate_limits
          then {captured_at: $now, rate_limits: .rate_limits}
-              + (if $utilization == null then {} else {utilization: $utilization} end)
+              + (if $fields.utilization == null then {} else {utilization: $fields.utilization} end)
+              + (if $fields.account == null then {} else {account: $fields.account} end)
          else empty end' \
         >"$tmp" 2>/dev/null; then
       rm -f "$tmp"
