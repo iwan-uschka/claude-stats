@@ -198,12 +198,22 @@ public enum DisplayFormat {
         "\(money(used, locale: locale)) of \(money(limit, locale: locale))"
     }
 
-    /// Whole-percent label for a 0...1 fraction: `62%`.
+    /// Percent label for a 0...1 fraction: `62%`.
+    ///
+    /// Whole numbers below 99%, where a percentage point either way doesn't
+    /// change what the user should do. From 99% up, one decimal place
+    /// (`99.4%`) — that band is where "almost done" and "done" diverge, and
+    /// rounding to a whole number erases the difference.
     public static func percent(fraction: Double) -> String {
-        "\(Int((clamped01(fraction) * 100).rounded()))%"
+        let value = clamped01(fraction) * 100
+        if value >= 99 && value < 100 {
+            return "\(scaled(value))%"
+        }
+        return "\(Int(value.rounded()))%"
     }
 
-    /// Whole-percent label for an already-percent value, clamped to 0...100.
+    /// Percent label for an already-percent value, clamped to 0...100 — same
+    /// formatting as ``percent(fraction:)`` (one decimal place from 99% up).
     public static func percent(percentValue: Double) -> String {
         percent(fraction: percentValue / 100)
     }

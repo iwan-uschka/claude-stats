@@ -47,6 +47,7 @@ struct WindowBarView: View {
 
             Text(DisplayFormat.windowPercent(window))
                 .font(PopoverMetrics.valueFont)
+                .lineLimit(1)
                 .frame(width: PopoverMetrics.percentColumnWidth, alignment: .trailing)
 
             Text(DisplayFormat.windowCountdown(
