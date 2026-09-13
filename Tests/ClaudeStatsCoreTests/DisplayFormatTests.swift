@@ -148,7 +148,7 @@ final class DisplayFormatTests: XCTestCase {
     func testSourceTagMatchesTheMockupLine() {
         XCTAssertEqual(
             DisplayFormat.sourceTag(confidence: .official, age: 40),
-            "source: official · 40s ago"
+            "official · 40s ago"
         )
     }
 
@@ -160,7 +160,7 @@ final class DisplayFormatTests: XCTestCase {
                 confidence: snapshot.confidence,
                 age: snapshot.age(asOf: now)
             ),
-            "source: official · 40s ago"
+            "official · 40s ago"
         )
     }
 
@@ -190,11 +190,6 @@ final class DisplayFormatTests: XCTestCase {
         XCTAssertEqual(DisplayFormat.tokens(-5_400), "-5.4k")
     }
 
-    func testBurnRateWording() {
-        XCTAssertEqual(DisplayFormat.burnRate(12_400), "12.4k tok/hr")
-        XCTAssertEqual(DisplayFormat.burnRate(0), "0 tok/hr")
-    }
-
     // MARK: - token splits
 
     func testTokenSplitListsEveryKind() {
@@ -214,7 +209,7 @@ final class DisplayFormatTests: XCTestCase {
         let dominated = TokenUsage(inputTokens: 10_000, cacheReadInputTokens: 90_000)
         XCTAssertEqual(
             DisplayFormat.cacheReadNote(dominated),
-            "90k of 100k is cache reads — billed at 1/10 the input rate"
+            "90% cache reads — billed at 1/10 the input rate"
         )
 
         // Exactly at the threshold, and below it: the raw total speaks for itself.
@@ -246,7 +241,7 @@ final class DisplayFormatTests: XCTestCase {
         XCTAssertEqual(total, TokenUsage(inputTokens: 40_000, cacheReadInputTokens: 80_000))
         XCTAssertEqual(
             DisplayFormat.cacheReadNote(total),
-            "80k of 120k is cache reads — billed at 1/10 the input rate"
+            "67% cache reads — billed at 1/10 the input rate"
         )
     }
 
@@ -267,7 +262,7 @@ final class DisplayFormatTests: XCTestCase {
         )
         XCTAssertEqual(
             DisplayFormat.cacheReadNote(breakdown.totalUsage),
-            "80k of 120k is cache reads — billed at 1/10 the input rate"
+            "67% cache reads — billed at 1/10 the input rate"
         )
 
         // A window with no cache-read dominance stays uncaptioned.
@@ -277,6 +272,37 @@ final class DisplayFormatTests: XCTestCase {
         )
         XCTAssertNil(DisplayFormat.cacheReadNote(fresh.totalUsage))
         XCTAssertNil(DisplayFormat.cacheReadNote(EntrypointBreakdown.empty(window: .fiveHour).totalUsage))
+    }
+
+    /// The share is rounded to a whole percent, both ways — the caption is a
+    /// characterisation of the total, not a measurement to a tenth.
+    func testCacheReadNoteRoundsTheShareToAWholePercent() {
+        // 81.4% → 81%.
+        XCTAssertEqual(
+            DisplayFormat.cacheReadNote(
+                TokenUsage(inputTokens: 18_600, cacheReadInputTokens: 81_400)
+            ),
+            "81% cache reads — billed at 1/10 the input rate"
+        )
+        // 81.5% → 82%, and a total that is only just over the threshold still
+        // reads as 51% rather than "50%", which would contradict the guard.
+        XCTAssertEqual(
+            DisplayFormat.cacheReadNote(
+                TokenUsage(inputTokens: 18_500, cacheReadInputTokens: 81_500)
+            ),
+            "82% cache reads — billed at 1/10 the input rate"
+        )
+        XCTAssertEqual(
+            DisplayFormat.cacheReadNote(
+                TokenUsage(inputTokens: 49_000, cacheReadInputTokens: 51_000)
+            ),
+            "51% cache reads — billed at 1/10 the input rate"
+        )
+        // All cache reads: 100%, not 99 or 101.
+        XCTAssertEqual(
+            DisplayFormat.cacheReadNote(TokenUsage(cacheReadInputTokens: 12_345)),
+            "100% cache reads — billed at 1/10 the input rate"
+        )
     }
 
     func testCostFormatting() {
@@ -447,24 +473,5 @@ final class DisplayFormatTests: XCTestCase {
         XCTAssertTrue(rows.allSatisfy {
             DisplayFormat.barFraction(value: $0.usage.totalTokens, peak: peak) == 0
         })
-    }
-
-    // MARK: - plan
-
-    func testPlanDescriptionForKnownTiers() {
-        XCTAssertEqual(DisplayFormat.planDescription(.max20), "Max20 (auto-detected)")
-        XCTAssertEqual(DisplayFormat.planDescription(.max5), "Max5 (auto-detected)")
-        XCTAssertEqual(DisplayFormat.planDescription(.pro), "Pro (auto-detected)")
-    }
-
-    func testPlanDescriptionForCustomTierShowsTheEstimatedBudget() {
-        XCTAssertEqual(
-            DisplayFormat.planDescription(.custom(tokens: 145_000)),
-            "Custom (~145k tok/5h)"
-        )
-    }
-
-    func testPlanDescriptionBeforeDetection() {
-        XCTAssertEqual(DisplayFormat.planDescription(nil), "detecting…")
     }
 }

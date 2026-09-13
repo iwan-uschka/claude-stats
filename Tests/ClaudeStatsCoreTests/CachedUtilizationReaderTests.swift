@@ -802,7 +802,7 @@ final class CachedUtilizationReaderTests: XCTestCase {
         XCTAssertEqual(account.uuid, "account-1")
         XCTAssertEqual(account.organizationName, "Bitgrip")
         XCTAssertEqual(account.email, "me@example.com")
-        XCTAssertEqual(account.displayName, "Bitgrip")
+        XCTAssertEqual(account.displayName, "me@example.com")
     }
 
     /// Claude Code has cached usage for one account and is logged in as

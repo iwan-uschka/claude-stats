@@ -72,22 +72,11 @@ public enum DisplayFormat {
         return "\(total / 86_400)d ago"
     }
 
-    /// The popover's confidence/freshness line: `source: official · 40s ago`.
+    /// The quota title row's confidence/freshness tag: `official · 40s ago`. No
+    /// `source:` prefix — it sits beside the account name in the title row, where
+    /// the prefix only added noise.
     public static func sourceTag(confidence: QuotaConfidence, age: TimeInterval) -> String {
-        "source: \(confidence.displayLabel) · \(self.age(age))"
-    }
-
-    // MARK: - Plan
-
-    /// Value half of the popover's plan line: `Max20 (auto-detected)` for a
-    /// known tier, `Custom (~220k tok/5h)` when the tier was estimated from
-    /// local history, `detecting…` before detection has produced anything.
-    public static func planDescription(_ tier: PlanTier?) -> String {
-        guard let tier else { return "detecting…" }
-        if tier.isKnownTier {
-            return "\(tier.displayName) (auto-detected)"
-        }
-        return "\(tier.displayName) (~\(tokens(tier.fiveHourTokenBudget)) tok/5h)"
+        "\(confidence.displayLabel) · \(self.age(age))"
     }
 
     // MARK: - Numbers
@@ -107,11 +96,6 @@ public enum DisplayFormat {
         return "\(count)"
     }
 
-    /// Tokens-per-hour burn rate, e.g. `12.4k tok/hr`.
-    public static func burnRate(_ tokensPerHour: Double) -> String {
-        "\(tokens(Int(tokensPerHour.rounded()))) tok/hr"
-    }
-
     // MARK: - Token splits
 
     /// The four-way breakdown behind a token total, for a tooltip:
@@ -129,15 +113,21 @@ public enum DisplayFormat {
     public static let cacheReadNoteThreshold = 0.5
 
     /// One-line footnote for a token total that cache reads dominate:
-    /// `453M of 496M is cache reads — billed at 1/10 the input rate`. `nil`
-    /// when cache reads are at or below ``cacheReadNoteThreshold`` of the
-    /// total, where the raw number needs no qualifying.
+    /// `91% cache reads — billed at 1/10 the input rate`. `nil` when cache
+    /// reads are at or below ``cacheReadNoteThreshold`` of the total, where the
+    /// raw number needs no qualifying.
+    ///
+    /// A share of the total rather than the two raw counts: the point of the
+    /// line is how much of the headline number is replayed context, and one
+    /// percentage says that without restating a number already on screen.
+    /// Rounded to a whole percent — tenths would imply a precision the caption
+    /// is not making a claim about.
     public static func cacheReadNote(_ usage: TokenUsage) -> String? {
         let total = usage.totalTokens
         guard total > 0 else { return nil }
         let share = Double(usage.cacheReadInputTokens) / Double(total)
         guard share > cacheReadNoteThreshold else { return nil }
-        return "\(tokens(usage.cacheReadInputTokens)) of \(tokens(total)) is cache reads"
+        return "\(Int((share * 100).rounded()))% cache reads"
             + " — billed at \(cacheReadRateDescription) the input rate"
     }
 

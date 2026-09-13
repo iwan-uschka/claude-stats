@@ -49,9 +49,7 @@ final class AppModelTests: XCTestCase {
 
         func entrypointBreakdown(for window: TimeWindow) throws -> EntrypointBreakdown { throw Failure() }
         func modelUsage(last24h: Bool) throws -> [ModelUsage] { throw Failure() }
-        func burnRateUsagePerHour() throws -> TokenUsage { throw Failure() }
         func estimatedCostToday() throws -> Double { throw Failure() }
-        func detectedPlanTier() throws -> PlanTier { throw Failure() }
     }
 
     /// ``MockUsageStore``'s data, but counting the breakdown reads — the point
@@ -76,9 +74,7 @@ final class AppModelTests: XCTestCase {
         }
 
         func modelUsage(last24h: Bool) throws -> [ModelUsage] { try backing.modelUsage(last24h: last24h) }
-        func burnRateUsagePerHour() throws -> TokenUsage { try backing.burnRateUsagePerHour() }
         func estimatedCostToday() throws -> Double { try backing.estimatedCostToday() }
-        func detectedPlanTier() throws -> PlanTier { try backing.detectedPlanTier() }
     }
 
     /// Hands back whatever the test scripted, and records what the model asked
@@ -569,16 +565,122 @@ final class AppModelTests: XCTestCase {
         XCTAssertTrue(model.otherAccountSnapshots.isEmpty)
     }
 
-    /// The label above each group of rows: the account's own name when the
+    /// The label on each other-account group: the account's own name when the
     /// reading was stamped, and an explicit "we don't know" when it wasn't —
-    /// never a blank line and never the neighbouring account's name.
-    func testAccountLabelNamesTheAccountOrSaysItIsUnknown() {
+    /// never a blank line and never the neighbouring account's name. Always
+    /// prefixed, so a collapsed row says these readings are not the ones the
+    /// bars above describe.
+    func testOtherAccountTitleNamesTheAccountOrSaysItIsUnknown() {
         let model = makeModel(quota: ScriptedQuotaProvider())
         var stamped = MockQuotaProvider.sampleSnapshot()
         stamped.account = Self.bitgrip
 
-        XCTAssertEqual(model.accountLabel(for: stamped), "Bitgrip")
-        XCTAssertEqual(model.accountLabel(for: MockQuotaProvider.sampleSnapshot()), "Unknown account")
+        XCTAssertEqual(model.otherAccountTitle(for: stamped), "Inactive: Bitgrip")
+        XCTAssertEqual(
+            model.otherAccountTitle(for: MockQuotaProvider.sampleSnapshot()),
+            "Inactive: Unknown account"
+        )
+    }
+
+    /// The quota section's own title, across all four states it has to cover.
+    ///
+    /// The `Active:` prefix is the interesting half: it exists to contrast with
+    /// the `Inactive:` groups below, so on the one-account machine — every
+    /// machine until the user switches logins — the bare account name (or the
+    /// section's own name, when nothing on disk said whose reading this is) has
+    /// to win instead.
+    func testQuotaSectionTitleNamesTheAccountAndOnlyPrefixesItWhenThereAreOthers() async {
+        var stamped = MockQuotaProvider.sampleSnapshot()
+        stamped.account = Self.bitgrip
+        let unstamped = MockQuotaProvider.sampleSnapshot()
+        var other = MockQuotaProvider.sampleSnapshot()
+        other.account = Self.creativytool
+
+        func titledModel(
+            active: QuotaSnapshot?,
+            others: [QuotaSnapshot]
+        ) async -> AppModel {
+            let provider = ScriptedQuotaProvider()
+            await provider.setResult(active.map { .success($0) }
+                ?? .failure(ClaudeStatsError.noQuotaSourceAvailable))
+            await provider.setOtherAccounts(others)
+            let model = makeModel(quota: provider)
+            await model.refresh(force: true)?.value
+            return model
+        }
+
+        // One account, stamped: the account's own name, no prefix.
+        let alone = await titledModel(active: stamped, others: [])
+        XCTAssertEqual(alone.snapshot?.account, Self.bitgrip)
+        XCTAssertEqual(alone.quotaSectionTitle, "Bitgrip")
+
+        // One account, unstamped: the section names itself rather than guessing.
+        let anonymous = await titledModel(active: unstamped, others: [])
+        XCTAssertEqual(anonymous.quotaSectionTitle, "Quota")
+
+        // No snapshot at all is the same case — there is no account to name.
+        let empty = await titledModel(active: nil, others: [])
+        XCTAssertNil(empty.snapshot)
+        XCTAssertEqual(empty.quotaSectionTitle, "Quota")
+
+        // Two accounts, stamped: prefixed, against the "Inactive:" group below.
+        let switched = await titledModel(active: stamped, others: [other])
+        XCTAssertFalse(switched.otherAccountSnapshots.isEmpty)
+        XCTAssertEqual(switched.quotaSectionTitle, "Active: Bitgrip")
+
+        // Two accounts, and the active one's reading is unstamped: still
+        // prefixed — there is a contrast to draw — but it names nobody.
+        let switchedAnonymous = await titledModel(active: unstamped, others: [other])
+        XCTAssertEqual(switchedAnonymous.quotaSectionTitle, "Active: Unknown account")
+    }
+
+    /// Every other-account group starts collapsed, and the disclosure binding
+    /// is the only thing that opens one — the popover rebuilds those rows on
+    /// every poll, so the open/closed state has to live on the model.
+    func testOtherAccountGroupsStartCollapsedAndToggleThroughTheBinding() {
+        let model = makeModel(quota: ScriptedQuotaProvider())
+        var stamped = MockQuotaProvider.sampleSnapshot()
+        stamped.account = Self.bitgrip
+        let unstamped = MockQuotaProvider.sampleSnapshot()
+
+        let stampedBinding = model.otherAccountExpansionBinding(for: stamped)
+        let unstampedBinding = model.otherAccountExpansionBinding(for: unstamped)
+
+        XCTAssertTrue(model.expandedOtherAccounts.isEmpty)
+        XCTAssertFalse(stampedBinding.wrappedValue)
+        XCTAssertFalse(unstampedBinding.wrappedValue)
+
+        stampedBinding.wrappedValue = true
+        XCTAssertTrue(stampedBinding.wrappedValue)
+        XCTAssertEqual(model.expandedOtherAccounts, [Self.bitgrip.uuid])
+        // One group opening must not open the others.
+        XCTAssertFalse(unstampedBinding.wrappedValue)
+
+        unstampedBinding.wrappedValue = true
+        XCTAssertEqual(model.expandedOtherAccounts, [Self.bitgrip.uuid, "unknown"])
+
+        stampedBinding.wrappedValue = false
+        XCTAssertFalse(stampedBinding.wrappedValue)
+        XCTAssertEqual(model.expandedOtherAccounts, ["unknown"])
+    }
+
+    /// The expansion key is the grouping key, so a refresh that hands back an
+    /// equal-but-new snapshot for the same account keeps that group open.
+    func testExpansionSurvivesASnapshotBeingRebuiltForTheSameAccount() {
+        let model = makeModel(quota: ScriptedQuotaProvider())
+        var first = MockQuotaProvider.sampleSnapshot()
+        first.account = Self.bitgrip
+        model.otherAccountExpansionBinding(for: first).wrappedValue = true
+
+        // Same account, a different (fresher) reading — what a poll produces.
+        var second = MockQuotaProvider.sampleSnapshot(now: Date().addingTimeInterval(60))
+        second.account = Self.bitgrip
+
+        XCTAssertTrue(model.otherAccountExpansionBinding(for: second).wrappedValue)
+        XCTAssertFalse(
+            model.otherAccountExpansionBinding(for: MockQuotaProvider.sampleSnapshot()).wrappedValue,
+            "a different group must not inherit the open state"
+        )
     }
 
     /// The other accounts' rows come from the same files the active account's

@@ -6,17 +6,27 @@ final class QuotaAccountTests: XCTestCase {
 
     // MARK: - Display name
 
-    /// The organisation name is what the user picked the account by, so it
-    /// leads.
-    func testDisplayNamePrefersTheOrganisationName() {
+    /// The login email leads: for a personal account the organisation is
+    /// auto-named "<email>'s Organization", so the org name is the email plus
+    /// noise, and the email is what the user recognises.
+    func testDisplayNamePrefersTheEmail() {
         let account = QuotaAccount(
             uuid: uuid, email: "me@example.com", organizationName: "Bitgrip")
-        XCTAssertEqual(account.displayName, "Bitgrip")
+        XCTAssertEqual(account.displayName, "me@example.com")
+
+        let personal = QuotaAccount(
+            uuid: uuid,
+            email: "me@example.com",
+            organizationName: "me@example.com's Organization"
+        )
+        XCTAssertEqual(personal.displayName, "me@example.com")
     }
 
-    func testDisplayNameFallsBackToTheEmail() {
-        let account = QuotaAccount(uuid: uuid, email: "me@example.com")
-        XCTAssertEqual(account.displayName, "me@example.com")
+    /// A real, chosen organisation name still shows when there is no email to
+    /// prefer over it.
+    func testDisplayNameFallsBackToTheOrganisationName() {
+        let account = QuotaAccount(uuid: uuid, organizationName: "Bitgrip")
+        XCTAssertEqual(account.displayName, "Bitgrip")
     }
 
     /// Last resort: a short prefix, never the full 36-character uuid — that is
@@ -89,15 +99,15 @@ final class QuotaAccountTests: XCTestCase {
         XCTAssertNil(QuotaAccount(json: ["uuid": 42]))
     }
 
-    /// A blank organisation name would otherwise win `displayName` and render a
-    /// nameless row.
+    /// A blank email would otherwise win `displayName` and render a nameless
+    /// row.
     func testBlankFieldsAreTreatedAsAbsent() throws {
         let account = try XCTUnwrap(QuotaAccount(json: [
-            "uuid": uuid, "organization_name": "  ", "email": "me@example.com",
+            "uuid": uuid, "organization_name": "Bitgrip", "email": "  ",
         ]))
 
-        XCTAssertNil(account.organizationName)
-        XCTAssertEqual(account.displayName, "me@example.com")
+        XCTAssertNil(account.email)
+        XCTAssertEqual(account.displayName, "Bitgrip")
     }
 
     func testFieldsAreTrimmed() throws {

@@ -36,6 +36,15 @@ enum PopoverMetrics {
     static let costColumnWidth: CGFloat = 76
     static let rowSpacing: CGFloat = 8
     static let sectionSpacing: CGFloat = 10
+    /// Vertical gap between the rows inside one section.
+    static let quotaRowSpacing: CGFloat = 6
+    /// Gap above each *other*-account disclosure group, and between two of
+    /// them. Deliberately double ``quotaRowSpacing``: the groups carry no
+    /// divider of their own any more (a `Divider()` there read as a top-level
+    /// section break, the same rule that separates "This Mac" from "By model"),
+    /// so whitespace is the only thing left saying a collapsed row belongs to
+    /// neither the bars above it nor the group below it.
+    static let accountGroupSpacing: CGFloat = 12
 
     static let bodyFont = Font.system(size: 11)
     static let valueFont = Font.system(size: 11).monospacedDigit()

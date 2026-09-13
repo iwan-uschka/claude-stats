@@ -42,12 +42,12 @@ public final class SessionCorpusIndex {
 
     /// How long individual events are kept before being folded into
     /// ``HistoricalModelUsage`` totals. Must cover the longest per-event
-    /// query, so it is derived from both: every ``TimeWindow`` and the
-    /// plan-tier heuristic's ``LocalLogUsageStore/planDetectionHistoryDays``
-    /// (8 days). A new, longer window case widens retention automatically
-    /// instead of silently under-reporting.
+    /// query, so it is derived from both: every ``TimeWindow`` and
+    /// ``LocalLogUsageStore/localHistoryDays`` (8 days). A new, longer window
+    /// case widens retention automatically instead of silently
+    /// under-reporting.
     public static let defaultRetention: TimeInterval = max(
-        TimeInterval(LocalLogUsageStore.planDetectionHistoryDays) * 86_400,
+        TimeInterval(LocalLogUsageStore.localHistoryDays) * 86_400,
         TimeWindow.allCases.map(\.duration).max() ?? 0
     )
 

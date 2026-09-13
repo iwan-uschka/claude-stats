@@ -30,7 +30,7 @@ Two independent tiers, deliberately decoupled:
 1. **Local log parsing (primary, always-on, zero auth).** Parse Claude Code's
    session JSONL under `~/.claude` (or `$CLAUDE_CONFIG_DIR`) —
    `~/.claude/projects/*/*.jsonl`. `~/.config/claude` is NOT consulted. Gives: token counts, cost math (per-model
-   pricing), burn rate, and a source breakdown via the `entrypoint` field
+   pricing), and a source breakdown via the `entrypoint` field
    already present on each line — confirmed values on this machine: `cli`,
    `claude-vscode`, `sdk-cli` (Agent SDK / subagents / workflows / headless
    `-p` runs). Only sees sessions whose JSONL lives on this Mac's disk.
@@ -62,7 +62,11 @@ Two independent tiers, deliberately decoupled:
      - **Identity comes from `~/.claude.json`'s `oauthAccount`**
        (`accountUuid`, `emailAddress`, `organizationName`, `organizationUuid`)
        — modelled as `Models/QuotaAccount.swift`, display name
-       `organizationName ?? email ?? short uuid`. The helper script copies it
+       `email ?? organizationName ?? short uuid`. **Email leads**: for a
+       personal account Anthropic auto-names the organisation
+       `"<email>'s Organization"`, so the org name is the email with noise
+       appended, and the email is what the user recognises and logged in with.
+       A real, chosen organisation name still shows when there is no email. The helper script copies it
        into every cache file it writes as a top-level `account` object;
        `ActiveAccountReader` reads the same key for "who is logged in **now**",
        behind the same fingerprint gate as the promo reader (no FSEvents on
@@ -100,9 +104,20 @@ Two independent tiers, deliberately decoupled:
        windows. Readings with no `seven_day` are never dropped (nothing to
        compare), and with no cached reference everything is accepted.
      - **Every other account's readings are still carried**, through
-       `QuotaProviding.otherAccountSnapshots()` — decoration below the active
+       `QuotaProviding.otherAccountSnapshots()` — listed below the active
        account's rows, never gated on staleness, never an error, and left out
-       entirely for a group whose windows have all rolled over. The state file
+       entirely for a group whose windows have all rolled over. Each group is a
+       **disclosure that starts collapsed**: the closed row is
+       `Inactive: <account>` alone, with no summary number (a percentage there
+       would be about an account the glyph and the bars above aren't
+       describing), and opening it reveals exactly the rows below. The active
+       account's own section title takes the matching `Active:` prefix, and only
+       while such a group exists — with nothing to contrast against, the bare
+       account name reads better. Which groups are open lives in
+       `AppModel.expandedOtherAccounts` (keyed by account uuid, `"unknown"` for
+       the unstamped group), so it survives the popover closing and the rows
+       being rebuilt by a poll — and is not persisted across launches, since
+       the set of other accounts isn't either. The state file
        naming an account that has *no* readings anywhere is "no reading" for
        that account (both windows `nil`), not an error and not somebody else's
        numbers; with nothing on disk for any account the old
@@ -272,7 +287,7 @@ Two independent tiers, deliberately decoupled:
      `cachedGrowthBookFeatures.tengu_rate_limit_promo_notices` holds the promo
      line the CLI renders above its own weekly bar (`{ bar, text, variant }`), and
      `cachedGrowthBookFeaturesAt` says when GrowthBook last served it. We
-     render it under the matching bar — see
+     render it below the quota bars, in bar order — see
      `Sources/ClaudeStatsCore/Quota/RateLimitPromoNoticeReader.swift`.
      Everything about this path is best-effort: it is another program's private
      state, so absent / unreadable / malformed / stale all mean "no promo" and
@@ -311,11 +326,8 @@ Two independent tiers, deliberately decoupled:
 3. Refresh via `FSEventStream` (CoreServices) watching the config dir tree —
    not polling. Kernel wakes the app only on write; debounce bursts; reparse
    only changed files, not a full rescan.
-4. Plan tier (Pro / Max5 / Max20) auto-detected: known thresholds
-   (~19k / ~88k / ~220k tokens per 5h window) plus P90 of the last 8 days of
-   local history as a fallback for custom/unclear tiers.
-5. **Retention window.** `SessionCorpusIndex` keeps individual `UsageEvent`s
-   only for the last `defaultRetention` (8 days = `planDetectionHistoryDays`);
+4. **Retention window.** `SessionCorpusIndex` keeps individual `UsageEvent`s
+   only for the last `defaultRetention` (8 days = `localHistoryDays`);
    older events fold into per-model `HistoricalModelUsage` totals that only
    `modelUsage(last24h: false)` reads back. Any new per-event query — a new
    `TimeWindow` case, a longer heuristic — must fit inside that window, or
@@ -363,12 +375,31 @@ Two independent tiers, deliberately decoupled:
 Click opens a popover:
 
 ```
-creativytool                      ← the account the rows below describe, from
-                                    `~/.claude.json`'s `oauthAccount`
-                                    (organisation name, else email, else a
-                                    short uuid). Only when something on disk
-                                    says — an unstamped reading leaves it out
-                                    rather than guessing.
+Active: me@example.com          official (cached) · 4m ago
+                                  ← the quota block's section title, the same
+                                    shape as "This Mac" and "By model" below:
+                                    title left, tag right. The title names the
+                                    account the rows describe, from
+                                    `~/.claude.json`'s `oauthAccount` (login
+                                    email, else organisation name, else a
+                                    short uuid) — only when something on disk
+                                    says; an unstamped reading (or no reading at
+                                    all) titles the section `Quota` rather than
+                                    guessing a name. The `Active:` prefix
+                                    appears **only** when there is at least one
+                                    other account listed below to contrast with;
+                                    on the one-account machine the bare name
+                                    stands alone. Tooltip distinguishes a named
+                                    account from the unstamped fallback.
+                                    The tag is the confidence + freshness one:
+                                    `official` (no suffix) once the statusline
+                                    hook is installed and has just fired, with a
+                                    `· stale` suffix past that source's
+                                    threshold. It also carries the
+                                    `disabled_reason` tooltip when the payload
+                                    said why there are no usage credits — there
+                                    is no credits row to hang it on, and it is
+                                    never an error line.
 5-hour window     ▓▓▓▓▓▓░░ 62%     resets in 2h 14m
 7-day window       ▓▓▓░░░░░ 31%     resets in 4d 6h
 5-hour window     ░░░░░░░░  —       no reading
@@ -380,11 +411,6 @@ creativytool                      ← the account the rows below describe, from
                                     Empty track, em dash, "no reading": never
                                     0%, which would be a number nobody
                                     reported.
-+50% weekly limits promo through Aug 31 · clau.de/cc-50-promo
-                                  ← Claude Code's own promo notice for this
-                                    bar, read from `~/.claude.json`; the bare
-                                    URL is clickable. Only when one is cached
-                                    and fresh.
 Fable (weekly)     ░░░░░░░░  0%
                                   ← one row per `weekly_scoped` entry in the
                                     payload's `limits[]`, labelled from
@@ -410,43 +436,48 @@ Usage credits      ▨▨░░░░░░   €0.00 of €33.00
                                     there is no countdown. The tooltip names
                                     the monthly framing and says when
                                     `spend_limit_reached` is set.
-source: official (cached) · 4m ago              ← confidence tag + freshness;
-                                    `official` (no suffix) once the statusline
-                                    hook is installed and has just fired.
-                                    Also carries the `disabled_reason` tooltip
-                                    when the payload said why there are no
-                                    usage credits — there is no credits row to
-                                    hang it on, and it is never an error line.
++50% weekly limits promo through Aug 31 · clau.de/cc-50-promo
+                                  ← Claude Code's own promo notices, read from
+                                    `~/.claude.json`; the bare URL is clickable.
+                                    Only when one is cached and fresh. All of
+                                    them sit here, below the active account's
+                                    last row and in bar order — not under the
+                                    bar each one names: the line wraps to the
+                                    full content width, so one between two bars
+                                    split the column of rows in half.
+<staleness warning, orange>       ← and after those, the staleness warning or,
+                                    with no snapshot at all, the "no source yet"
+                                    / just-cleared-cache line.
 
-Bitgrip                           ← one compact group per *other* account this
-5-hour window     ░░░░░░░░  —       no reading
-7-day window       ▓▓▓▓▓░░░ 56%    resets in 2d 3h
-source: official · 3h ago
-                                  ← Mac has readings for — what is left behind
-                                    after switching the global login. Same
-                                    rows, same `—` / "no reading" for an
-                                    expired window, its own freshness tag, no
-                                    usage-credits row (that data only ever
-                                    exists for the active account). Labelled
-                                    "Unknown account" for the unstamped group,
-                                    which is shown only when it isn't the one
-                                    driving the bars above and still has a live
-                                    window. Absent entirely on a one-account
-                                    machine.
-                                  [ Clear Quota Cache ]   ← deletes the
-                                    statusline cache and re-polls
-
-Plan: Max20 (auto-detected)
-Burn rate: 12.4k tok/hr
-10k of 12.4k is cache reads — billed at 1/10 the input rate  ← only when cache
-                                    reads are >50% of the total; same line
-                                    under the model rows. Hovering a model row
-                                    or the burn rate shows the full split.
+› Inactive: other@example.com     ← one collapsed disclosure per *other*
+                                    account this Mac has readings for — what is
+                                    left behind after switching the global
+                                    login. Closed by default, showing the
+                                    account name and nothing else; no summary
+                                    percentage. Pairs with the `Active:` prefix
+                                    above. Separated from the bars and from each
+                                    other by whitespace only — no divider (that
+                                    line marks a top-level section) and no
+                                    indent.
+⌄ Inactive: other@example.com     ← expanded: the same rows as above, same `—` /
+5-hour window     ░░░░░░░░  —       "no reading" for an expired window, its own
+7-day window       ▓▓▓▓▓░░░ 56%     freshness tag at the foot (it has no title
+official · 3h ago                   row to hang one on), no usage-credits row
+                                    (that data only ever exists for the active
+                                    account). Labelled "Inactive: Unknown
+                                    account" for the unstamped group, which is
+                                    shown only when it isn't the one driving the
+                                    bars above and still has a live window.
+                                    Absent entirely on a one-account machine.
 
 This Mac               5h   24h   7d
   CLI                   ▓░   ▓▓   ▓▓▓
   VS Code                ░    ▓    ▓▓
   SDK/agents            ▓▓   ▓▓▓  ▓▓▓▓
+81% cache reads — billed at 1/10 the input rate  ← only when cache reads are
+                                    >50% of the total, as a whole-percent share
+                                    of it; same line under the model rows.
+                                    Hovering a row shows the full token split.
 
 By model (fixed 24h window, not tied to the 5h/24h/7d toggle above)
   Sonnet   2.1M tok   $3.15
@@ -456,7 +487,13 @@ By model (fixed 24h window, not tied to the 5h/24h/7d toggle above)
 
 Est. cost today: $4.82
 
-Refresh   Settings   Quit
+Refresh   Clear Quota Cache   Settings        Quit
+                                  ← "Clear Quota Cache" deletes the statusline
+                                    cache and re-polls. It lives in the footer
+                                    with the other actions rather than under the
+                                    quota rows it acts on, where it floated
+                                    after the other accounts' groups and read as
+                                    though it belonged to the last one.
 ```
 
 Freshness tag names the source that won: `official (cached)` (Claude Code's own

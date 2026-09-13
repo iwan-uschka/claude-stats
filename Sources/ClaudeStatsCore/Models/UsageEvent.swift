@@ -40,28 +40,9 @@ public struct TokenUsage: Sendable, Hashable, Codable {
 
     /// Every token the request touched: uncached input + output + cache writes
     /// + cache reads. This is the number the popover's token columns show — it
-    /// is *not* quota- or cost-weighted (see ``quotaWeightedTokens`` and
-    /// ``ModelPricing/costUSD(for:)`` for those).
+    /// is *not* cost-weighted (see ``ModelPricing/costUSD(for:)`` for that).
     public var totalTokens: Int {
         inputTokens + outputTokens + cacheCreationInputTokens + cacheReadInputTokens
-    }
-
-    /// Tokens weighted the way billing weights them: cache writes cost 1.25×
-    /// (5-minute TTL) or 2× (1-hour TTL) of an input token, cache reads 0.1×.
-    /// Used for plan-tier detection, whose published thresholds (~19k/88k/220k
-    /// per 5-hour window) are far below raw cached-token volumes.
-    public var quotaWeightedTokens: Int {
-        let write5m = ephemeral5mInputTokens
-        let write1h = ephemeral1hInputTokens
-        // Lines without the `cache_creation` breakdown: charge the whole write at the 5m rate.
-        let unattributedWrites = max(0, cacheCreationInputTokens - write5m - write1h)
-        let weighted =
-            Double(inputTokens)
-            + Double(outputTokens)
-            + Double(write5m + unattributedWrites) * ModelPricing.cacheWrite5mMultiplier
-            + Double(write1h) * ModelPricing.cacheWrite1hMultiplier
-            + Double(cacheReadInputTokens) * ModelPricing.cacheReadMultiplier
-        return Int(weighted.rounded())
     }
 
     /// `true` when the line reported no tokens at all — e.g. Claude Code's

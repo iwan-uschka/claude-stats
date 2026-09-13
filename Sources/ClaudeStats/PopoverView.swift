@@ -29,8 +29,6 @@ struct PopoverView: View {
             header
             quotaSection
             Divider()
-            planSection
-            Divider()
             breakdownSection
             Divider()
             modelSection
@@ -62,11 +60,9 @@ struct PopoverView: View {
     // MARK: - Quota windows
 
     private var quotaSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: PopoverMetrics.quotaRowSpacing) {
+            quotaTitleRow
             if let snapshot = model.snapshot {
-                if snapshot.account != nil {
-                    accountLabel(model.accountLabel(for: snapshot), isKnown: true)
-                }
                 quotaWindowRow(.fiveHour, window: snapshot.fiveHour)
                 quotaWindowRow(.sevenDay, window: snapshot.sevenDay)
                 ForEach(snapshot.scopedWeekly) { limit in
@@ -75,7 +71,7 @@ struct PopoverView: View {
                 if let credits = snapshot.usageCredits {
                     usageCreditsRow(credits)
                 }
-                sourceTagLine(for: snapshot)
+                promoNoticeLines
                 if let warning = model.quotaWarning {
                     Text(warning)
                         .font(PopoverMetrics.captionFont)
@@ -85,6 +81,7 @@ struct PopoverView: View {
             } else {
                 quotaWindowRow(.fiveHour, window: nil)
                 quotaWindowRow(.sevenDay, window: nil)
+                promoNoticeLines
                 // The cleared-cache notice wins over both fallbacks: it names a
                 // state the user just caused on purpose, so it explains the empty
                 // bars better than "none yet" or a staleness warning would.
@@ -96,90 +93,140 @@ struct PopoverView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             otherAccountsSection
-            clearCacheRow
         }
     }
 
-    /// Which Anthropic account the rows underneath describe.
+    /// The quota block's section title, plus the freshness tag on the same
+    /// line — the shape "This Mac" and "By model" already use, so the quota
+    /// rows read as a titled section rather than as a preamble to the popover.
     ///
-    /// Above the active account's bars this is shown only when something on
-    /// disk actually said — an unstamped cache file or a state file without
-    /// `oauthAccount` leaves it out rather than labelling the rows with a
-    /// guess. On the single-account machine that is the common case there is
-    /// exactly one of these, above the two bars.
+    /// The title names the active Anthropic account when something on disk
+    /// actually said which one (see ``AppModel/quotaSectionTitle``); the
+    /// tooltip is the one thing that still distinguishes a named account from
+    /// the unstamped fallback, since the title itself deliberately reads as a
+    /// section name in that case.
     ///
-    /// A group in ``otherAccountsSection`` always gets a label, though, so that
-    /// its rows are never attributed to the account above them — and an
-    /// unstamped group's label is the "Unknown account" placeholder. `isKnown`
-    /// says which of the two this is: the placeholder must not claim a source
-    /// that named nothing, so it gets its own tooltip.
-    private func accountLabel(_ name: String, isKnown: Bool) -> some View {
-        Text(name)
-            .font(PopoverMetrics.captionFont)
-            .foregroundStyle(.secondary)
-            .lineLimit(1)
-            .truncationMode(.tail)
-            .help(isKnown
-                ? "Anthropic account these quota numbers belong to, as Claude Code's own state file names it."
-                : "Claude Code's cache file for this account doesn't record which account it is.")
+    /// The tag is trailing rather than on a line of its own: it is metadata
+    /// about the numbers below, and the title row has the width for it.
+    private var quotaTitleRow: some View {
+        HStack {
+            Text(model.quotaSectionTitle)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .help(model.snapshot?.account != nil
+                    ? "Anthropic account these quota numbers belong to, as Claude Code's own state file names it."
+                    : "Claude Code's cache file for this account doesn't record which account it is.")
+            Spacer(minLength: PopoverMetrics.rowSpacing)
+            if let snapshot = model.snapshot {
+                sourceTagLine(for: snapshot)
+            }
+        }
+        .font(PopoverMetrics.sectionTitleFont)
     }
 
-    /// One compact group per account this Mac has readings for *other* than the
-    /// active one — what is left behind after switching the global login.
+    /// Claude Code's own promo lines, in bar order, under the active account's
+    /// last row.
     ///
-    /// Same rows and the same "no reading" rendering as the active account,
-    /// each with its own freshness tag, since these readings age independently
-    /// (the account nobody is logged in as stops being written to at all).
-    /// That includes the usage-credits row and its `disabled_reason` tooltip:
+    /// Collected here rather than hung under the bar each one names: the lines
+    /// wrap to the full content width, so one sitting between two bars broke
+    /// the column of rows in half. Bar order keeps the association readable
+    /// when both bars have a notice, and every notice in ``AppModel/promoNotices``
+    /// is rendered — a bar the reader couldn't map is already dropped upstream.
+    @ViewBuilder
+    private var promoNoticeLines: some View {
+        ForEach(QuotaWindowKind.allCases, id: \.self) { bar in
+            if let notice = model.promoNotice(for: bar) {
+                promoNoticeLine(notice)
+            }
+        }
+    }
+
+    /// One collapsed group per account this Mac has readings for *other* than
+    /// the active one — what is left behind after switching the global login.
+    ///
+    /// Each group is a ``DisclosureGroup`` that starts closed, so the popover's
+    /// height doesn't grow by a whole second account's worth of rows for
+    /// readings the user is not currently living in. The collapsed row is
+    /// `Inactive: <account>` and nothing else — no summary percentage, which
+    /// would be a number about an account the bars above aren't describing.
+    /// It pairs with the `Active:` prefix ``quotaTitleRow`` takes on once these
+    /// groups exist, so the two rows read as one list of accounts.
+    ///
+    /// Separated by whitespace alone — ``PopoverMetrics/accountGroupSpacing``,
+    /// no divider and no indent. A `Divider()` per group is what the popover
+    /// used to do, and it collided with the dividers that mark the top-level
+    /// sections: the same line meant both "next section" and "next account".
+    ///
+    /// Expanded, the content is exactly what used to render inline: the same
+    /// rows and the same "no reading" rendering as the active account, each
+    /// with its own freshness tag, since these readings age independently (the
+    /// account nobody is logged in as stops being written to at all). That
+    /// includes the usage-credits row and its `disabled_reason` tooltip:
     /// `spend` normally only reaches us for the active login, but a cache file
     /// written just before a switch can still carry one, and a stale reading
     /// shown with its own freshness tag beats silently dropping a reading the
     /// other rows would have shown. Empty on a one-account machine, which is
     /// every machine until the user switches accounts.
+    ///
+    /// Which groups are open lives on ``AppModel/expandedOtherAccounts`` rather
+    /// than in `@State` here, so it survives the popover being closed and
+    /// reopened the way ``AppModel/selectedWindow`` does — and is deliberately
+    /// not persisted across launches, since the set of other accounts isn't
+    /// either.
     @ViewBuilder
     private var otherAccountsSection: some View {
         // Explicitly guarded rather than left to an empty `ForEach`, so the
         // one-account machine — every machine until the user switches logins —
         // puts nothing at all into the quota `VStack` here.
         if !model.otherAccountSnapshots.isEmpty {
-            ForEach(Array(model.otherAccountSnapshots.enumerated()), id: \.offset) { _, snapshot in
-                VStack(alignment: .leading, spacing: 4) {
-                    Divider()
-                    // An unstamped group is genuinely "we don't know", not a
-                    // nameless account — see `AppModel.accountLabel(for:)`.
-                    accountLabel(model.accountLabel(for: snapshot), isKnown: snapshot.account != nil)
-                    WindowBarView(title: QuotaWindowKind.fiveHour.title, window: snapshot.fiveHour, now: now)
-                    WindowBarView(title: QuotaWindowKind.sevenDay.title, window: snapshot.sevenDay, now: now)
-                    ForEach(snapshot.scopedWeekly) { limit in
-                        scopedWeeklyRow(limit)
+            VStack(alignment: .leading, spacing: PopoverMetrics.accountGroupSpacing) {
+                ForEach(Array(model.otherAccountSnapshots.enumerated()), id: \.offset) { _, snapshot in
+                    DisclosureGroup(isExpanded: model.otherAccountExpansionBinding(for: snapshot)) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            WindowBarView(title: QuotaWindowKind.fiveHour.title, window: snapshot.fiveHour, now: now)
+                            WindowBarView(title: QuotaWindowKind.sevenDay.title, window: snapshot.sevenDay, now: now)
+                            ForEach(snapshot.scopedWeekly) { limit in
+                                scopedWeeklyRow(limit)
+                            }
+                            if let credits = snapshot.usageCredits {
+                                usageCreditsRow(credits)
+                            }
+                            sourceTagLine(for: snapshot)
+                        }
+                    } label: {
+                        // An unstamped group is genuinely "we don't know", not a
+                        // nameless account — see `AppModel.otherAccountTitle(for:)`.
+                        Text(model.otherAccountTitle(for: snapshot))
+                            .font(PopoverMetrics.captionFont)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .help(snapshot.account != nil
+                                ? "Anthropic account these quota numbers belong to, as Claude Code's own state file names it."
+                                : "Claude Code's cache file for this account doesn't record which account it is.")
                     }
-                    if let credits = snapshot.usageCredits {
-                        usageCreditsRow(credits)
-                    }
-                    sourceTagLine(for: snapshot)
                 }
             }
+            // The quota `VStack` already spaces its rows; this tops the first
+            // group's gap up to `accountGroupSpacing` so it reads as separated
+            // from the bars rather than as one more row under them.
+            .padding(.top, PopoverMetrics.accountGroupSpacing - PopoverMetrics.quotaRowSpacing)
         }
     }
 
-    /// One quota bar plus whatever promo notice belongs under it.
+    /// One of the two account-wide quota bars.
     ///
     /// Used by *both* branches of ``quotaSection`` so a snapshot and an empty
-    /// state can't drift apart on which rows exist or what they're called.
-    /// The notice's own vertical padding (see ``promoNoticeLine(_:)``) sets
-    /// the breathing room around it; this VStack's 2 pt only closes the
-    /// remaining gap to the bar above.
+    /// state can't drift apart on which rows exist or what they're called. The
+    /// bar's promo notice is *not* rendered here — see ``promoNoticeLines``,
+    /// which collects them below the last row so a full-width line never splits
+    /// the column of bars.
     ///
     /// A `nil` `window` — no snapshot at all, or a snapshot on which no source
     /// reported this window — renders the row as no reading rather than 0%; see
     /// ``WindowBarView``.
     private func quotaWindowRow(_ bar: QuotaWindowKind, window: QuotaWindow?) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            WindowBarView(title: bar.title, window: window, now: now)
-            if let notice = model.promoNotice(for: bar) {
-                promoNoticeLine(notice)
-            }
-        }
+        WindowBarView(title: bar.title, window: window, now: now)
     }
 
     /// One per-model weekly sub-limit, as Claude Code reports it.
@@ -251,6 +298,11 @@ struct PopoverView: View {
 
     /// The freshness tag, carrying the `disabled_reason` tooltip when there is
     /// one.
+    ///
+    /// Trailing on the active account's title row (see ``quotaTitleRow``) and
+    /// at the foot of an expanded other-account group, which has no title row
+    /// of its own — each group's readings age independently, so each carries
+    /// its own tag rather than borrowing the active account's.
     ///
     /// That reason has nowhere else to go: with no credits there is no credits
     /// row to hang it on, and it must not become an error line — "credits are
@@ -327,19 +379,6 @@ struct PopoverView: View {
         return model.quotaWarning != nil ? Color.orange : Color.secondary
     }
 
-    /// Deliberately not gated on `snapshot == nil`: the whole point is to clear a
-    /// value that looks live but is wrong — every session's cache file agreeing
-    /// on a bad number — so it has to be reachable while a number is on screen.
-    private var clearCacheRow: some View {
-        HStack {
-            Spacer()
-            Button("Clear Quota Cache") { model.clearQuotaCache() }
-                .controlSize(.small)
-                .font(PopoverMetrics.captionFont)
-                .help("Deletes the cached statusline reading — use it when the percentage looks stuck or wrong. The bars fall back to Claude Code's own cached reading until the next statusline render.")
-        }
-    }
-
     private func sourceTag(for snapshot: QuotaSnapshot) -> String {
         let tag = DisplayFormat.sourceTag(
             confidence: snapshot.confidence,
@@ -356,23 +395,6 @@ struct PopoverView: View {
         return snapshot.isStale(asOf: now, threshold: threshold) ? tag + " · stale" : tag
     }
 
-    // MARK: - Plan / burn rate
-
-    private var planSection: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            labelledLine("Plan", DisplayFormat.planDescription(model.planTier))
-            if let usage = model.burnRateUsage {
-                labelledLine("Burn rate", DisplayFormat.burnRate(Double(usage.totalTokens)))
-                    .help(DisplayFormat.tokenSplit(usage))
-            } else {
-                labelledLine("Burn rate", "—")
-            }
-            if let note = model.burnRateUsage.flatMap(DisplayFormat.cacheReadNote) {
-                cacheReadNoteLine(note)
-            }
-        }
-    }
-
     /// Explains a token total that replayed cache reads dominate, so the
     /// headline number doesn't read as fresh work.
     private func cacheReadNoteLine(_ note: String) -> some View {
@@ -380,17 +402,6 @@ struct PopoverView: View {
             .font(PopoverMetrics.captionFont)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
-    }
-
-    private func labelledLine(_ label: String, _ value: String) -> some View {
-        HStack(spacing: 4) {
-            Text("\(label):")
-                .font(PopoverMetrics.bodyFont)
-                .foregroundStyle(.secondary)
-            Text(value)
-                .font(PopoverMetrics.bodyFont)
-            Spacer(minLength: 0)
-        }
     }
 
     // MARK: - This Mac
@@ -493,10 +504,25 @@ struct PopoverView: View {
 
     // MARK: - Footer
 
+    /// The popover's actions, including "Clear Quota Cache".
+    ///
+    /// That button sits here rather than under the quota rows it acts on: in
+    /// the quota section it floated after the other accounts' groups, reading
+    /// as though it belonged to the last one. It is deliberately not gated on
+    /// `snapshot == nil` — the whole point is to clear a value that looks live
+    /// but is wrong, every session's cache file agreeing on a bad number, so it
+    /// has to be reachable while a number is on screen.
     private var footer: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
             Button("Refresh") { model.refresh(force: true) }
                 .keyboardShortcut("r", modifiers: .command)
+            // `.fixedSize()` because four buttons all but fill 312 pt of content
+            // width: without it the `HStack` shrinks the longest label first
+            // and this one renders as "Clear Quota Cac…" while the trailing
+            // spacer keeps its slack.
+            Button("Clear Quota Cache") { model.clearQuotaCache() }
+                .fixedSize()
+                .help("Deletes the cached statusline reading — use it when the percentage looks stuck or wrong. The bars fall back to Claude Code's own cached reading until the next statusline render.")
             Button("Settings") { model.openSettings() }
             Spacer()
             Button("Quit") { NSApplication.shared.terminate(nil) }
@@ -530,6 +556,10 @@ struct PopoverView: View {
 
 #Preview("Popover — two accounts") {
     PopoverView(model: .previewTwoAccounts(), clock: PopoverClock())
+}
+
+#Preview("Popover — two accounts, other one expanded") {
+    PopoverView(model: .previewTwoAccounts(expanded: true), clock: PopoverClock())
 }
 
 #Preview("Popover — stale warning") {

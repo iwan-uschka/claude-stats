@@ -9,6 +9,23 @@
 ### Changed
 - Quota percentages from 99% up to 100% show one decimal place (`99.4%`), so
   "almost done" no longer reads as "done".
+- The popover's "Plan" and "Burn rate" lines are gone — the plan tier was
+  guessed from local history, and the burn rate said little the window bars
+  don't.
+- The cache-read note now reads `81% cache reads` instead of restating the two
+  raw token counts.
+- Accounts are labelled with the login email rather than the organisation name,
+  which for a personal account is just the email with `'s Organization`
+  appended.
+- Other accounts' readings are collapsed behind a disclosure, one per account,
+  closed by default, labelled `Inactive: <account>` — and the active account's
+  row is prefixed `Active:` while any of them are listed.
+- The quota block now has a title row like "This Mac" and "By model": the
+  account name on the left, the freshness tag on the right instead of on its
+  own line under the bars.
+- Promo notices moved below the quota bars instead of between them.
+- "Clear Quota Cache" moved from the quota section into the footer, next to
+  Refresh and Settings.
 
 ### Fixed
 - Switching accounts no longer mixes in a stale reading from the previous

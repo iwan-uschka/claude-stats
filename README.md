@@ -10,7 +10,7 @@ any), filled bottom-up. Click it for the popover:
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/screenshot-popover-dark.png">
-  <img alt="Menu bar glyph and the popover below it, showing 5-hour/7-day quota, a scoped weekly limit, usage credits, plan tier, burn rate, and the per-entrypoint and per-model breakdown" src="assets/screenshot-popover-light.png" width="420">
+  <img alt="Menu bar glyph and the popover below it, showing 5-hour/7-day quota, a scoped weekly limit, usage credits, and the per-entrypoint and per-model breakdown" src="assets/screenshot-popover-light.png" width="420">
 </picture>
 
 ## Download
@@ -28,12 +28,12 @@ Pre-built releases (macOS app bundle, zipped) are available on the
 
 - Menu bar glyph showing 5-hour and 7-day quota usage plus a per-model weekly limit as three thin bars, tinted for light/dark mode automatically — the third bar is empty when Claude Code reports no scoped limit
 - A fourth, hatched bar for organisation usage credits, shown only while Claude Code reports any — most accounts never see it
-- Popover with per-window usage and reset countdowns, one row per per-model weekly limit Claude Code reports, a usage-credits row showing money spent against the monthly cap (`€0.00 of €33.00`, in whatever currency the account is billed in), auto-detected plan tier (Pro / Max5 / Max20 / custom), and current burn rate
+- Popover with per-window usage and reset countdowns, one row per per-model weekly limit Claude Code reports, and a usage-credits row showing money spent against the monthly cap (`€0.00 of €33.00`, in whatever currency the account is billed in)
 - Per-source breakdown (CLI / VS Code / SDK-agents) across 5h/24h/7d windows, and per-model token/cost totals
-- Local session-log parsing (`~/.claude/projects/*/*.jsonl`) — token counts, cost, burn rate always available, no network or credentials needed
+- Local session-log parsing (`~/.claude/projects/*/*.jsonl`) — token counts and cost always available, no network or credentials needed
 - Live 5-hour/7-day quota percentage straight from Claude Code's own cached reading — no setup, no hook to install; the `statusLine` hook is optional and just makes it fresher — see [Quota source](#quota-source)
-- Account-aware: the bars show the Anthropic account Claude Code is logged in as, and any other account this Mac has readings for is listed below it — swapping the global login no longer mixes two accounts' numbers
-- Claude Code's own rate-limit promo notices, shown under the bar they apply to, with any link in them clickable
+- Account-aware: the quota section is titled with the Anthropic account Claude Code is logged in as (its login email), and any other account this Mac has readings for is listed below it as a collapsed `Inactive:` group you can open — swapping the global login no longer mixes two accounts' numbers
+- Claude Code's own rate-limit promo notices, shown below the quota bars they apply to, with any link in them clickable
 - FSEvents-driven refresh — updates on write, not on a poll timer
 
 Full architecture and data-source design: see [AGENTS.md](AGENTS.md).
@@ -63,8 +63,8 @@ reading; Claude Code's cached reading is the backup, used only when the hook is
 missing, failing, or stale. So one of them being quiet is invisible. There is
 no estimate fallback: with neither reporting, the popover shows an error rather
 than a guessed number, and a real-but-old reading stays on screen with an
-orange staleness warning. Token counts, cost, and burn rate (from local log
-parsing) work regardless.
+orange staleness warning. Token counts and cost (from local log parsing) work
+regardless.
 
 This tier is account-wide — it reflects usage from other machines/containers
 on the same Anthropic account automatically. Which account that is comes from

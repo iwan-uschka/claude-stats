@@ -89,13 +89,17 @@ public struct MockQuotaProvider: QuotaProviding {
 
     /// The account the sample readings belong to — an organisation name, since
     /// that is what ``QuotaAccount/displayName`` shows first.
+    /// `email` is what ``QuotaAccount/displayName`` actually renders, so it is
+    /// a parameter: two fixtures sharing one address would label both account
+    /// groups in the two-account preview identically.
     public static func sampleAccount(
         uuid: String = "0f9c1d3e-8a4b-4c2d-9e1f-6b7a8c9d0e1f",
+        email: String? = "me@example.com",
         organizationName: String? = "creativytool"
     ) -> QuotaAccount {
         QuotaAccount(
             uuid: uuid,
-            email: "me@example.com",
+            email: email,
             organizationName: organizationName,
             organizationUuid: "a1b2c3d4-0000-0000-0000-000000000000"
         )
@@ -114,6 +118,7 @@ public struct MockQuotaProvider: QuotaProviding {
             capturedAt: now.addingTimeInterval(-3 * 3600),
             account: sampleAccount(
                 uuid: "7d2b6a10-3c55-4f8e-9a21-0b4c5d6e7f80",
+                email: "other@example.com",
                 organizationName: "Bitgrip"
             )
         )
@@ -214,24 +219,18 @@ public struct MockUsageStore: UsageStoring {
     public var breakdowns: [TimeWindow: EntrypointBreakdown]
     public var modelUsageLast24h: [ModelUsage]
     public var modelUsageAllTime: [ModelUsage]
-    public var burnRateUsage: TokenUsage
     public var costToday: Double
-    public var planTier: PlanTier
 
     public init(
         breakdowns: [TimeWindow: EntrypointBreakdown] = MockUsageStore.sampleBreakdowns,
         modelUsageLast24h: [ModelUsage] = MockUsageStore.sampleModelUsage,
         modelUsageAllTime: [ModelUsage]? = nil,
-        burnRateUsage: TokenUsage = MockUsageStore.sampleBurnRateUsage,
-        costToday: Double = 4.82,
-        planTier: PlanTier = .max20
+        costToday: Double = 4.82
     ) {
         self.breakdowns = breakdowns
         self.modelUsageLast24h = modelUsageLast24h
         self.modelUsageAllTime = modelUsageAllTime ?? modelUsageLast24h
-        self.burnRateUsage = burnRateUsage
         self.costToday = costToday
-        self.planTier = planTier
     }
 
     public func entrypointBreakdown(for window: TimeWindow) throws -> EntrypointBreakdown {
@@ -242,25 +241,11 @@ public struct MockUsageStore: UsageStoring {
         last24h ? modelUsageLast24h : modelUsageAllTime
     }
 
-    public func burnRateUsagePerHour() throws -> TokenUsage { burnRateUsage }
-
     public func estimatedCostToday() throws -> Double { costToday }
 
-    public func detectedPlanTier() throws -> PlanTier { planTier }
-
-    /// Trailing-hour split summing to 12.4k tok/hr, cache-read-heavy like real
-    /// sessions are.
-    public static let sampleBurnRateUsage = TokenUsage(
-        inputTokens: 200,
-        outputTokens: 700,
-        cacheCreationInputTokens: 1_500,
-        cacheReadInputTokens: 10_000
-    )
-
-    /// Token totals consistent with ``sampleBurnRateUsage`` (12.4k tok/hr)
-    /// across every window, so the popover never shows two contradictory
-    /// numbers for the same underlying rate. Each row is split in roughly the
-    /// same cache-read-heavy proportions as ``sampleBurnRateUsage``.
+    /// Token totals that stay in proportion across every window, so the popover
+    /// never shows two contradictory numbers for the same underlying usage.
+    /// Each row is split cache-read-heavy, the way real sessions are.
     public static let sampleBreakdowns: [TimeWindow: EntrypointBreakdown] = [
         .fiveHour: EntrypointBreakdown(
             window: .fiveHour,

@@ -32,9 +32,8 @@ public struct QuotaAccount: Sendable, Hashable, Codable, Identifiable {
     public let uuid: String
     /// `oauthAccount.emailAddress`, when the state file carries one.
     public let email: String?
-    /// `oauthAccount.organizationName` — what the user actually recognises the
-    /// account by ("Bitgrip", "creativytool"), which is why it leads
-    /// ``displayName``.
+    /// `oauthAccount.organizationName`. Carried for fidelity and used as
+    /// ``displayName``'s fallback, not as its first choice — see there.
     public let organizationName: String?
     /// `oauthAccount.organizationUuid`; carried for fidelity, not displayed.
     public let organizationUuid: String?
@@ -66,13 +65,22 @@ public struct QuotaAccount: Sendable, Hashable, Codable, Identifiable {
 
     /// What the popover calls this account.
     ///
-    /// Organisation name first (it is what the user picked the account by),
-    /// then the login email, then a short prefix of the uuid — never the full
-    /// uuid, which is 36 characters of noise in a 312 pt popover, and never an
-    /// empty label for an account parsed by ``init(json:)``, which drops blank
-    /// fields and rejects a blank uuid outright.
+    /// The **login email first**, then the organisation name, then a short
+    /// prefix of the uuid.
+    ///
+    /// Email leads because for a personal account Anthropic auto-names the
+    /// organisation `"<email>'s Organization"` — the same string the user
+    /// already knows, with noise appended — while the email is exactly what
+    /// they typed to log in and what tells two accounts apart at a glance. An
+    /// account with a real, chosen organisation name but no email still shows
+    /// that name.
+    ///
+    /// Never the full uuid, which is 36 characters of noise in a 312 pt
+    /// popover, and never an empty label for an account parsed by
+    /// ``init(json:)``, which drops blank fields and rejects a blank uuid
+    /// outright.
     public var displayName: String {
-        organizationName ?? email ?? String(uuid.prefix(Self.shortUUIDLength))
+        email ?? organizationName ?? String(uuid.prefix(Self.shortUUIDLength))
     }
 
     /// Parses either spelling of the account object.
@@ -102,8 +110,8 @@ public struct QuotaAccount: Sendable, Hashable, Codable, Identifiable {
     }
 
     /// First non-blank string among `keys`. Blank is treated as absent: an
-    /// empty `organizationName` would otherwise win ``displayName`` and render
-    /// a nameless row.
+    /// empty `emailAddress` would otherwise win ``displayName`` and render a
+    /// nameless row.
     private static func string(_ json: [String: Any], _ keys: [String]) -> String? {
         for key in keys {
             guard let value = json[key] as? String else { continue }

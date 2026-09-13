@@ -1,5 +1,6 @@
 import ClaudeStatsCore
 import Foundation
+import SwiftUI
 
 /// Bridges the Core data layer into the UI. Holds the last successful
 /// readings for local stats/breakdown; the quota snapshot is cleared when
@@ -19,10 +20,15 @@ final class AppModel: ObservableObject {
     /// empty on a one-account machine. See
     /// ``QuotaProviding/otherAccountSnapshots()``.
     @Published private(set) var otherAccountSnapshots: [QuotaSnapshot] = []
-    @Published private(set) var planTier: PlanTier?
-    /// Trailing-hour consumption, split by token kind so the popover can both
-    /// show the rate and explain how much of it is replayed cache reads.
-    @Published private(set) var burnRateUsage: TokenUsage?
+    /// Keys of the ``otherAccountSnapshots`` groups the user has opened in the
+    /// popover — `account?.uuid`, or `"unknown"` for the unstamped group.
+    ///
+    /// Every group starts collapsed, so this is empty until something is
+    /// opened. It lives on the model rather than in the view's `@State` so it
+    /// survives the popover closing and reopening, exactly like
+    /// ``selectedWindow``; it is deliberately not persisted across launches,
+    /// since which other accounts exist isn't either.
+    @Published var expandedOtherAccounts: Set<String> = []
     @Published private(set) var estimatedCostToday: Double?
     /// Every ``TimeWindow``'s breakdown, all recomputed together by
     /// `reloadBreakdown()`. Precomputed rather than derived on demand because
@@ -48,7 +54,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var usingSampleData: Bool
 
     /// Promo lines Claude Code has cached for its own rate-limit bars, shown
-    /// under the matching bar in the popover.
+    /// in bar order below the quota bars in the popover.
     ///
     /// Deliberately untouched by every `runQuotaPoll()` failure path: the
     /// notice comes from a different file than the quota reading, so a quota
@@ -335,22 +341,79 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// What the popover calls the account a snapshot describes.
+    /// The quota block's own section title — the counterpart of the literal
+    /// "This Mac" and "By model" titles next to it.
+    ///
+    /// Names the account the bars underneath describe, so the block announces
+    /// itself the way the other two sections do. Two rules decide the wording:
+    ///
+    /// - **The account's name, or the literal "Quota".** An unstamped reading
+    ///   (or no reading at all) must not be labelled with a guessed account, so
+    ///   the section falls back to naming itself rather than naming nobody.
+    /// - **The `Active:` prefix only exists when there is something to be
+    ///   active *against*** — i.e. when ``otherAccountSnapshots`` is non-empty
+    ///   and "Inactive:" groups follow. On the one-account machine, which is
+    ///   every machine until the user switches logins, the prefix would
+    ///   contrast with nothing and the bare name reads better.
+    ///
+    /// Lives here rather than in the view so all four combinations are
+    /// testable.
+    var quotaSectionTitle: String {
+        let name = snapshot?.account?.displayName
+        guard !otherAccountSnapshots.isEmpty else { return name ?? "Quota" }
+        return "Active: \(name ?? "Unknown account")"
+    }
+
+    /// What the popover calls one of the *other* accounts' disclosure groups.
+    ///
+    /// Prefixed "Inactive:" against ``quotaSectionTitle``'s "Active:", so a
+    /// collapsed row says what it is without a number: these readings belong to
+    /// a login nobody is currently signed in as.
     ///
     /// An unstamped reading is genuinely "we don't know whose this is" — a
     /// cache file written before the hook script learned to stamp one — so it
     /// says so rather than leaving a blank label or borrowing a name from the
     /// account next to it. Lives here rather than in the view so both branches
     /// are testable.
-    func accountLabel(for snapshot: QuotaSnapshot) -> String {
-        snapshot.account?.displayName ?? "Unknown account"
+    func otherAccountTitle(for snapshot: QuotaSnapshot) -> String {
+        "Inactive: \(snapshot.account?.displayName ?? "Unknown account")"
+    }
+
+    /// Stable key for one other-account group's expansion state.
+    ///
+    /// The uuid, or the one `"unknown"` bucket the unstamped group forms — the
+    /// same grouping the readings themselves use, so a group keeps its open or
+    /// closed state across a refresh that rebuilds the snapshots.
+    static func otherAccountKey(for snapshot: QuotaSnapshot) -> String {
+        snapshot.account?.uuid ?? "unknown"
+    }
+
+    /// Two-way binding onto ``expandedOtherAccounts`` for one group's
+    /// `DisclosureGroup`.
+    ///
+    /// A `Set` of open keys rather than a `Bool` per row because the rows are
+    /// rebuilt from the snapshots on every refresh: anything stored per view
+    /// would collapse the group the moment a poll lands.
+    func otherAccountExpansionBinding(for snapshot: QuotaSnapshot) -> Binding<Bool> {
+        let key = Self.otherAccountKey(for: snapshot)
+        return Binding(
+            get: { [weak self] in self?.expandedOtherAccounts.contains(key) ?? false },
+            set: { [weak self] isExpanded in
+                guard let self else { return }
+                if isExpanded {
+                    self.expandedOtherAccounts.insert(key)
+                } else {
+                    self.expandedOtherAccounts.remove(key)
+                }
+            }
+        )
     }
 
     /// The promo notice for one bar, or `nil` when there is none.
     ///
     /// First match wins if a (malformed) payload ever carries two entries for
-    /// the same bar — the bar has one line under it, and picking the first
-    /// keeps that deterministic.
+    /// the same bar — each bar contributes one line to the popover, and picking
+    /// the first keeps that deterministic.
     func promoNotice(for bar: QuotaWindowKind) -> RateLimitPromoNotice? {
         promoNotices.first { $0.bar == bar }
     }
@@ -369,8 +432,6 @@ final class AppModel: ObservableObject {
 
     private func reloadLocalStats() {
         do {
-            planTier = try usageStore.detectedPlanTier()
-            burnRateUsage = try usageStore.burnRateUsagePerHour()
             estimatedCostToday = try usageStore.estimatedCostToday()
             modelUsage = try usageStore.modelUsage(last24h: true)
             localStatsError = nil
@@ -453,8 +514,6 @@ extension AppModel {
         model.snapshot = snapshot
         model.otherAccountSnapshots = otherAccounts
         model.promoNotices = promoNotices
-        model.planTier = try? store.detectedPlanTier()
-        model.burnRateUsage = try? store.burnRateUsagePerHour()
         model.estimatedCostToday = try? store.estimatedCostToday()
         model.modelUsage = (try? store.modelUsage(last24h: true)) ?? []
         model.quotaError = error
@@ -512,14 +571,20 @@ extension AppModel {
     }
 
     /// Two accounts: the one Claude Code is logged in as now, labelled, with
-    /// the account the user switched away from listed under it.
-    static func previewTwoAccounts(now: Date = Date()) -> AppModel {
+    /// the account the user switched away from collapsed under it.
+    ///
+    /// - Parameter expanded: opens the other account's disclosure, which is
+    ///   closed in the shipping default — the canvas needs a way to see the
+    ///   rows inside it without clicking.
+    static func previewTwoAccounts(now: Date = Date(), expanded: Bool = false) -> AppModel {
         var active = MockQuotaProvider.sampleSnapshot(now: now)
         active.account = MockQuotaProvider.sampleAccount()
-        return preview(
-            snapshot: active,
-            otherAccounts: [MockQuotaProvider.sampleOtherAccountSnapshot(now: now)]
-        )
+        let other = MockQuotaProvider.sampleOtherAccountSnapshot(now: now)
+        let model = preview(snapshot: active, otherAccounts: [other])
+        if expanded {
+            model.expandedOtherAccounts = [otherAccountKey(for: other)]
+        }
+        return model
     }
 
     /// Live source, but stale — quota still shown, plus a warning line.

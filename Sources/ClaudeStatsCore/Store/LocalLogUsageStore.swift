@@ -160,8 +160,8 @@ public struct LocalLogUsageStore: UsageStoring {
     ///
     /// Events whose `entrypoint` this version doesn't recognise are omitted —
     /// the breakdown's rows are a fixed, known set — but they still count in
-    /// ``modelUsage(last24h:)``, ``burnRateUsagePerHour()`` and
-    /// ``estimatedCostToday()``, so no spend goes missing from the totals.
+    /// ``modelUsage(last24h:)`` and ``estimatedCostToday()``, so no spend goes
+    /// missing from the totals.
     public func entrypointBreakdown(for window: TimeWindow) throws -> EntrypointBreakdown {
         let now = nowProvider()
         var totals: [Entrypoint: TokenUsage] = [:]
@@ -262,15 +262,6 @@ public struct LocalLogUsageStore: UsageStoring {
         return rows
     }
 
-    /// Tokens consumed in the trailing hour, kept split by kind. The window is
-    /// exactly one hour, so these are token counts and per-hour rates at the
-    /// same time.
-    public func burnRateUsagePerHour() throws -> TokenUsage {
-        let now = nowProvider()
-        return events(in: now.addingTimeInterval(-3600), to: now)
-            .reduce(TokenUsage.zero) { $0 + $1.usage }
-    }
-
     /// Estimated spend since local midnight, per ``calendar``. Events on models
     /// with no pricing entry contribute `0`.
     public func estimatedCostToday() throws -> Double {
@@ -279,57 +270,13 @@ public struct LocalLogUsageStore: UsageStoring {
         return events(in: midnight, to: now).reduce(0) { $0 + $1.estimatedCostUSD }
     }
 
-    /// Plan tier inferred from local history: the 90th percentile of
-    /// quota-weighted tokens per 5-hour window over the last 8 days, snapped to
-    /// the nearest published threshold by
-    /// ``PlanTier/nearestKnownTier(forFiveHourTokens:tolerance:)``.
-    ///
-    /// Windows are 5-hour buckets anchored at "now" and walked backwards; empty
-    /// buckets are excluded so idle days don't drag the percentile down.
-    /// Tokens are quota-weighted (``TokenUsage/quotaWeightedTokens``) because the
-    /// published thresholds are far below raw cached-token volumes. With no
-    /// history at all the result is `.custom(tokens: 0)`.
-    public func detectedPlanTier() throws -> PlanTier {
-        let p90 = fiveHourWindowP90()
-        return PlanTier.nearestKnownTier(forFiveHourTokens: p90)
-    }
-
     // MARK: - Derived values
 
-    /// Number of days of local history the plan-tier heuristic looks at.
-    public static let planDetectionHistoryDays = 8
-
-    /// The percentile used by the plan-tier heuristic.
-    public static let planDetectionPercentile = 0.9
-
-    /// 90th percentile of quota-weighted tokens per 5-hour window over the last
-    /// 8 days, exposed so the UI can show the raw estimate next to the snapped tier.
-    public func fiveHourWindowP90() -> Int {
-        let now = nowProvider()
-        let bucketLength = TimeWindow.fiveHour.duration
-        let historyLength = Double(LocalLogUsageStore.planDetectionHistoryDays) * 86_400
-        let start = now.addingTimeInterval(-historyLength)
-
-        var buckets: [Int: Int] = [:]
-        for event in events(in: start, to: now) {
-            let index = Int(now.timeIntervalSince(event.timestamp) / bucketLength)
-            buckets[index, default: 0] += event.usage.quotaWeightedTokens
-        }
-
-        // Bucket 0 (the most recent) only ever collects a fraction of a real
-        // 5-hour window unless "now" lands exactly on a boundary, which would
-        // skew the percentile downward right after a burst of recent usage.
-        // Excluded whenever other history exists to fall back on; kept when
-        // it's the only data available (e.g. right after a fresh install).
-        var totals = buckets.filter { $0.key != 0 }.values.filter { $0 > 0 }.sorted()
-        if totals.isEmpty {
-            totals = buckets.values.filter { $0 > 0 }.sorted()
-        }
-        guard !totals.isEmpty else { return 0 }
-        // Nearest-rank percentile: smallest value with at least 90% of samples at or below it.
-        let rank = Int((LocalLogUsageStore.planDetectionPercentile * Double(totals.count)).rounded(.up))
-        return totals[min(max(rank - 1, 0), totals.count - 1)]
-    }
+    /// How many days of local history the store is expected to be able to
+    /// answer per-event questions about. Sets the floor for
+    /// ``SessionCorpusIndex/defaultRetention``, so a query reaching further
+    /// back than this has to raise it first.
+    public static let localHistoryDays = 8
 
     /// Events with `start <= timestamp <= end`. `events` is sorted, so this is a
     /// contiguous slice.

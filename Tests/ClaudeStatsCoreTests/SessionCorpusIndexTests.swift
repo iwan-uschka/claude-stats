@@ -249,7 +249,7 @@ final class SessionCorpusIndexTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(SessionCorpusIndex.defaultRetention, longestWindow)
         XCTAssertGreaterThanOrEqual(
             SessionCorpusIndex.defaultRetention,
-            TimeInterval(LocalLogUsageStore.planDetectionHistoryDays) * 86_400
+            TimeInterval(LocalLogUsageStore.localHistoryDays) * 86_400
         )
     }
 
