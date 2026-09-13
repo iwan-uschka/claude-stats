@@ -185,15 +185,24 @@ final class AppModel: ObservableObject {
     /// with a red error banner for the same expected condition.
     private func runQuotaPoll() -> Task<Void, Never> {
         Task { [quotaProvider] in
-            // Read before the snapshot and applied on every outcome: these rows
-            // come from other accounts' cache files, so whether *this* account's
-            // reading succeeded, went stale or failed says nothing about them.
-            // The call can't throw — see `QuotaProviding.otherAccountSnapshots()`.
+            // Read and applied before the snapshot rather than per outcome:
+            // these rows come from other accounts' cache files, so whether
+            // *this* account's reading succeeds, goes stale or fails says
+            // nothing about them. The call can't throw — see
+            // `QuotaProviding.otherAccountSnapshots()`.
+            //
+            // Both reads hit disk, so a poll already superseded by a newer one
+            // bails before paying for either rather than after both have run.
+            guard !Task.isCancelled else { return }
             let otherAccounts = await quotaProvider.otherAccountSnapshots()
+            guard !Task.isCancelled else { return }
+            self.otherAccountSnapshots = otherAccounts
+            // The per-branch guards below stay: `currentSnapshot()` is the
+            // longest await here, and a poll cancelled during it must not
+            // clobber `snapshot`/`quotaError` with a superseded result.
             do {
                 let snapshot = try await quotaProvider.currentSnapshot()
                 guard !Task.isCancelled else { return }
-                self.otherAccountSnapshots = otherAccounts
                 self.snapshot = snapshot
                 self.quotaError = nil
                 self.quotaWarning = nil
@@ -217,7 +226,6 @@ final class AppModel: ObservableObject {
                 // had real numbers in hand. Fall back to the rejected reading
                 // the error carries: a stale number beats no number, the same
                 // principle `FreshestQuotaProvider` already applies internally.
-                self.otherAccountSnapshots = otherAccounts
                 self.quotaWarning = error.localizedDescription
                 if case .staleQuotaSource(let snapshot, _) = error,
                    self.snapshot == nil || self.snapshot!.capturedAt < snapshot.capturedAt {
@@ -231,7 +239,6 @@ final class AppModel: ObservableObject {
                 // fresh cache yet. `quotaCacheClearedNotice` already says so, so
                 // no error banner — that would read as a fault the user has to
                 // fix rather than a state that resolves itself. Left set.
-                self.otherAccountSnapshots = otherAccounts
                 self.quotaError = nil
                 self.quotaWarning = nil
             } catch {
@@ -243,7 +250,6 @@ final class AppModel: ObservableObject {
                 // pending "cache cleared" notice no longer applies either —
                 // this is a real, different failure.
                 self.snapshot = nil
-                self.otherAccountSnapshots = otherAccounts
                 self.quotaError = error.localizedDescription
                 self.quotaWarning = nil
                 self.quotaCacheClearedNotice = nil

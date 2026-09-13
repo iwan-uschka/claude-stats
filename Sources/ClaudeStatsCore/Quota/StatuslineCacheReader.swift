@@ -286,8 +286,9 @@ public struct StatuslineCacheReader: QuotaProviding {
     public func otherAccountSnapshots() async -> [QuotaSnapshot] {
         guard let readings = try? loadReadings() else { return [] }
         let asOf = now()
-        let groups = groups(in: readings)
-        let chosen = chosen(among: groups)
+        let active = activeAccount.readActiveAccount()
+        let groups = groups(in: readings, reference: active.reference)
+        let chosen = chosen(among: groups, account: active.account)
         return groups
             .filter { group in chosen.map { group.key != $0.key } ?? true }
             .compactMap { snapshot(for: $0, asOf: asOf) }
@@ -510,8 +511,13 @@ public struct StatuslineCacheReader: QuotaProviding {
     ///
     /// Readings with no `seven_day` window are never dropped — there is nothing
     /// to compare — and with no reference at all nothing is dropped either.
-    private func groups(in readings: [Reading]) -> [Group] {
-        let reference = activeAccount.readActiveAccount().reference
+    ///
+    /// The reference is passed in rather than read here so that one
+    /// ``ActiveAccountProviding/readActiveAccount()`` serves both this and
+    /// ``chosen(among:account:)``: two reads per refresh is duplicated file
+    /// I/O, and a login switch landing between them could have the guard and
+    /// the group choice describing different accounts.
+    private func groups(in readings: [Reading], reference: ActiveAccountReference?) -> [Group] {
         var order: [String?] = []
         var byKey: [String?: (account: QuotaAccount?, readings: [Reading])] = [:]
 
@@ -529,7 +535,7 @@ public struct StatuslineCacheReader: QuotaProviding {
             .sorted { $0.newestCapture > $1.newestCapture }
     }
 
-    /// The mislabel guard's verdict on one file — see ``groups(in:)``.
+    /// The mislabel guard's verdict on one file — see ``groups(in:reference:)``.
     private func isForeign(_ reading: Reading, reference: ActiveAccountReference?) -> Bool {
         guard let reference, reading.account?.uuid == reference.accountUuid,
             let resetsAt = reading.sevenDay?.resetsAt
@@ -545,15 +551,16 @@ public struct StatuslineCacheReader: QuotaProviding {
     /// with. That is deliberately *not* a fall-through to another group: the
     /// whole point is that the bars describe the account the user is logged in
     /// as, and the backup source reads that same login's cached blob.
-    private func chosen(among groups: [Group]) -> Group? {
-        guard let uuid = activeAccount.readActiveAccount().account?.uuid else {
+    private func chosen(among groups: [Group], account: QuotaAccount?) -> Group? {
+        guard let uuid = account?.uuid else {
             return groups.first
         }
         return groups.first { $0.key == uuid }
     }
 
     private func chosenGroup(in readings: [Reading]) -> Group? {
-        chosen(among: groups(in: readings))
+        let active = activeAccount.readActiveAccount()
+        return chosen(among: groups(in: readings, reference: active.reference), account: active.account)
     }
 
     /// Merges one group's files into that account's snapshot, or `nil` when

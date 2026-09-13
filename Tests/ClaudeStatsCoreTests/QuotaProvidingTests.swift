@@ -41,6 +41,18 @@ final class QuotaProvidingTests: XCTestCase {
         XCTAssertEqual(others, [])
     }
 
+    /// The mock's own override of the same call, which the "two accounts"
+    /// popover preview is built on: the init parameter has to reach the box and
+    /// back out again, and nothing else in `swift test` runs that path.
+    func testMockQuotaProviderReturnsConfiguredOtherAccounts() async {
+        let other = MockQuotaProvider.sampleOtherAccountSnapshot()
+        let provider = MockQuotaProvider(otherAccounts: [other])
+
+        let others = await provider.otherAccountSnapshots()
+
+        XCTAssertEqual(others, [other])
+    }
+
     /// `currentUsageCredits()`'s default implementation just reads the
     /// snapshot's credits fields off ``QuotaProviding/currentSnapshot()`` — the
     /// path every conformer without its own staleness gate to bypass takes.

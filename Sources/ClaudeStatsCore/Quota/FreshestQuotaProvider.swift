@@ -168,8 +168,12 @@ public struct FreshestQuotaProvider: QuotaProviding {
     /// it from another account's file would put that file's age on this
     /// account's freshness tag.
     private func emptyActiveAccountReading() async -> QuotaSnapshot? {
-        guard !(await statusline.otherAccountSnapshots()).isEmpty else { return nil }
+        // Account check first: it is a mostly-cached read of the state file,
+        // while `otherAccountSnapshots()` re-lists and re-parses every session
+        // cache file. With no account named there is nothing to report the
+        // absence *for*, so the expensive scan is never worth paying for.
         guard let account = activeAccount.readActiveAccount().account else { return nil }
+        guard !(await statusline.otherAccountSnapshots()).isEmpty else { return nil }
         return QuotaSnapshot(
             fiveHour: nil,
             sevenDay: nil,

@@ -173,13 +173,17 @@
 # of the (much larger) state file entirely when the fingerprint still matches —
 # including when the last extraction found nothing to carry, so a Free-tier
 # account with no `weekly_scoped`/`spend` data doesn't pay the full parse on
-# every render either. Both fields ride one gate because they come from one
+# every render either. The one exception is a sidecar entry written before this
+# script stamped an account: it is missing the key rather than storing a null
+# verdict, so it counts as a miss and is re-parsed once.
+# Both fields ride one gate because they come from one
 # read of one file; a switched login rewrites that file, so the fingerprint
 # changes with the account. Coarser than `ClaudeStateFile`'s nanosecond-mtime version
 # (whole-second `stat` resolution, no descriptor-reuse trick): a same-second
-# overwrite can be missed, costing one render's staleness on the fourth bar,
-# not a correctness bug — the reader already tolerates an absent
-# `utilization` key.
+# overwrite can be missed, costing one render's staleness on the fourth bar
+# and, now that `account` rides the same gate, one render still showing the
+# previous login's account label too — self-corrects on the next fingerprint
+# change, but no longer the harmless utilization-only gap this used to be.
 #
 # Without `jq`, the raw payload is written verbatim to
 # `statusline-cache/unknown-session.json`, the app uses the file's modification
@@ -261,7 +265,12 @@ state_fingerprint() {
 #
 # Fingerprint-gated: a hit reuses the sidecar's stored fields (including its
 # stored "nothing to carry" verdict) without touching the state file at all;
-# only a miss pays for opening and parsing it.
+# only a miss pays for opening and parsing it. An entry has to carry *both*
+# keys to count as a hit — a sidecar written by a copy of this script from
+# before the `account` stamp existed has no such key, and reading its absence as
+# "no account" would keep writing unstamped cache files for as long as the state
+# file's fingerprint happened not to change. One forced re-parse per stale entry
+# rewrites it with both fields, after which the fast path applies again.
 extract_state_fields() {
   local state_file fp cached_entry
   state_file=$(find_state_file) || return 1
@@ -269,8 +278,8 @@ extract_state_fields() {
 
   if [ -r "$utilization_cache_file" ]; then
     cached_entry=$(jq -c --arg fp "$fp" \
-      'select(.source_fingerprint == $fp)
-       | {utilization: (.utilization // null), account: (.account // null)}' \
+      'select(.source_fingerprint == $fp and has("utilization") and has("account"))
+       | {utilization: .utilization, account: .account}' \
       "$utilization_cache_file" 2>/dev/null)
     if [ -n "$cached_entry" ]; then
       printf '%s' "$cached_entry"

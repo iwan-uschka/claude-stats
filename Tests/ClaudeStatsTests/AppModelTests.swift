@@ -614,8 +614,15 @@ final class AppModelTests: XCTestCase {
 
         await provider.setOtherAccounts([])
         await provider.setResult(.failure(ClaudeStatsError.noQuotaSourceAvailable))
+        let callsBeforeClear = await provider.callCount
         model.clearQuotaCache()
 
+        XCTAssertTrue(model.otherAccountSnapshots.isEmpty)
+        // The synchronous clear is only half of it: wait for the repoll the
+        // clear kicks off and check the rows stay gone once it has answered.
+        await waitUntil(timeout: 5) { await provider.callCount > callsBeforeClear }
+        let callsAfterClear = await provider.callCount
+        XCTAssertGreaterThan(callsAfterClear, callsBeforeClear)
         XCTAssertTrue(model.otherAccountSnapshots.isEmpty)
     }
 

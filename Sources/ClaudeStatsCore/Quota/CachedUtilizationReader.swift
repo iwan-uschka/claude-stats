@@ -149,9 +149,11 @@ public struct CachedUtilizationReader: QuotaProviding {
     /// when its windows are too old to win the freshness compare, so a stale
     /// `cachedUsageUtilization` blob doesn't have to take the scoped bars down
     /// along with it while the statusline hook keeps the account-wide numbers
-    /// current.
+    /// current. Bypassing staleness does not mean bypassing whose numbers
+    /// these are, though — see ``matchesActiveAccount(root:cached:)``.
     public func currentScopedWeekly() async throws -> [QuotaScopedLimit] {
-        let (_, _, utilization) = try loadUtilization()
+        let (root, cached, utilization) = try loadUtilization()
+        guard Self.matchesActiveAccount(root: root, cached: cached) else { return [] }
         return QuotaJSON.scopedLimits(in: utilization)
     }
 
@@ -160,9 +162,11 @@ public struct CachedUtilizationReader: QuotaProviding {
     /// reason: `spend` is this source's alone (the statusline payload has no
     /// such object), so a stale blob must not take the credits row down while
     /// the hook keeps the account-wide numbers current. A month-long spend
-    /// total an hour behind is still the right number to show.
+    /// total an hour behind is still the right number to show — as long as
+    /// it's this account's total; see ``matchesActiveAccount(root:cached:)``.
     public func currentUsageCredits() async throws -> UsageCreditsReading {
-        let (_, _, utilization) = try loadUtilization()
+        let (root, cached, utilization) = try loadUtilization()
+        guard Self.matchesActiveAccount(root: root, cached: cached) else { return .unavailable }
         return QuotaJSON.usageCredits(in: utilization)
     }
 
@@ -176,6 +180,21 @@ public struct CachedUtilizationReader: QuotaProviding {
         guard let readingUuid = QuotaAccount(json: cached)?.uuid else { return loggedIn }
         if let loggedIn, loggedIn.uuid == readingUuid { return loggedIn }
         return QuotaAccount(uuid: readingUuid)
+    }
+
+    /// Whether the cached blob's own account agrees with who is logged in
+    /// now. ``currentScopedWeekly()`` and ``currentUsageCredits()`` bypass
+    /// staleness on purpose, but must not also bypass whose numbers these
+    /// are: a blob left over from the previous login would otherwise graft
+    /// its scoped rows or spend onto the current login's bars. With nothing
+    /// to compare (either side missing a uuid) there is no known mismatch to
+    /// block on.
+    private static func matchesActiveAccount(root: [String: Any], cached: [String: Any]) -> Bool {
+        guard let loggedInUuid = QuotaJSON.object(root[ActiveAccountReader.oauthAccountKey])
+            .flatMap(QuotaAccount.init(json:))?.uuid,
+            let readingUuid = QuotaAccount(json: cached)?.uuid
+        else { return true }
+        return loggedInUuid == readingUuid
     }
 
     /// Loads and unwraps `cachedUsageUtilization.utilization`, common to

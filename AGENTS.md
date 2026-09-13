@@ -82,8 +82,9 @@ Two independent tiers, deliberately decoupled:
        `noQuotaSourceAvailable` so the backup — which reads that same login's
        blob — takes over, rather than substituting another account's numbers or
        claiming the unstamped group is this account's. With no `oauthAccount`
-       at all (no state file) the most recently captured group serves, which is
-       the pre-account behaviour on a one-account machine. The `utilization`
+       at all (state file absent, unreadable, or simply carrying no such key)
+       the most recently captured group serves, which is the pre-account
+       behaviour on a one-account machine. The `utilization`
        copy is scoped the same way: it is lifted out of a per-login file.
      - **One heuristic, the mislabel guard.** An idle session re-renders its
        status line from its *last* API payload, so right after a switch a hook

@@ -48,12 +48,13 @@ final class CachedUtilizationReaderTests: XCTestCase {
     }
 
     /// The payload as it actually appears on a real machine, trimmed only of
-    /// the unrelated top-level keys (`projects`, `userID`, …). Keys this reader
-    /// deliberately ignores — `accountUuid`, the null scoped windows, and the
-    /// `session` / `weekly_all` entries of `limits[]` — are kept, so a future
-    /// reader for them can't quietly change what this one sees. No `spend` /
-    /// `extra_usage` here: those have their own fixtures below, and this one
-    /// doubles as the "payload with no usage credits" case.
+    /// the unrelated top-level keys (`projects`, `userID`, …). `accountUuid` is
+    /// read (see the "Which account" tests below); the null scoped windows and
+    /// the `session` / `weekly_all` entries of `limits[]` are still deliberately
+    /// ignored and kept only so a future reader for them can't quietly change
+    /// what this one sees. No `spend` / `extra_usage` here: those have their own
+    /// fixtures below, and this one doubles as the "payload with no usage
+    /// credits" case.
     private func stateFile(fetchedAt: Date) -> String {
         """
         {

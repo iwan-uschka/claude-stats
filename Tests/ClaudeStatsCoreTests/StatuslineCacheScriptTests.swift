@@ -340,10 +340,39 @@ final class StatuslineCacheScriptTests: XCTestCase {
         XCTAssertNil(try json(of: "aaaa-1111.json")["account"])
     }
 
+    /// A non-object `oauthAccount` — a shape Claude Code has never been observed
+    /// to write, but the script's type guard must survive it without aborting
+    /// the whole extraction (which would also blank out `utilization`).
+    func testNonObjectOAuthAccountOmitsTheStampWithoutBreakingUtilization() throws {
+        try skipUnlessJqOnPath()
+        try writeStateFile(oauthAccount: "\"just-a-string\"")
+
+        try run(payload(session: "aaaa-1111"))
+
+        let root = try json(of: "aaaa-1111.json")
+        XCTAssertNil(root["account"])
+        XCTAssertNotNil(root["utilization"])
+    }
+
     /// No state file at all: both copied keys are omitted and the rate limits
     /// still land, which is the whole point of them being best-effort.
     func testMissingStateFileStillWritesTheRateLimits() throws {
         try skipUnlessJqOnPath()
+
+        try run(payload(session: "aaaa-1111"))
+
+        let root = try json(of: "aaaa-1111.json")
+        XCTAssertNil(root["account"])
+        XCTAssertNil(root["utilization"])
+        XCTAssertNotNil(root["rate_limits"])
+    }
+
+    /// A state file that opens but isn't JSON: distinct from "no state file",
+    /// which never reaches the parse at all. The `jq` call yields nothing, both
+    /// copied keys are omitted, and the rate limits still land.
+    func testMalformedStateFileOmitsBothCopiedKeys() throws {
+        try skipUnlessJqOnPath()
+        try Data("{ this is not valid json".utf8).write(to: stateFileURL)
 
         try run(payload(session: "aaaa-1111"))
 
@@ -370,6 +399,35 @@ final class StatuslineCacheScriptTests: XCTestCase {
 
         let account = try XCTUnwrap(try json(of: "bbbb-2222.json")["account"] as? [String: Any])
         XCTAssertEqual(account["uuid"] as? String, "from-the-sidecar")
+    }
+
+    /// The upgrade path: a sidecar written by a version of this script that
+    /// predates the stamp has no `account` key at all, and its fingerprint may
+    /// still match. That entry is a miss, not a hit with "nothing to carry" —
+    /// otherwise the first renders after an update would keep writing unstamped
+    /// files until `~/.claude.json` happened to change for unrelated reasons.
+    func testLegacySidecarWithoutAnAccountKeyIsReParsedRatherThanReadAsUnstamped() throws {
+        try skipUnlessJqOnPath()
+        try writeStateFile(oauthAccount: fullOAuthAccount)
+        try run(payload(session: "aaaa-1111"))
+
+        // Simulate a sidecar written before the `account` stamp existed: the key
+        // is removed entirely, not set to null.
+        var sidecar = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: utilizationSidecarURL)) as? [String: Any])
+        sidecar.removeValue(forKey: "account")
+        try JSONSerialization.data(withJSONObject: sidecar).write(to: utilizationSidecarURL)
+
+        try run(payload(session: "bbbb-2222"))
+
+        let account = try XCTUnwrap(try json(of: "bbbb-2222.json")["account"] as? [String: Any])
+        XCTAssertEqual(account["organization_name"] as? String, "Bitgrip")
+        // The re-parse rewrote the sidecar, so the entry now carries both keys
+        // and the next render takes the fast path again.
+        let rewritten = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: utilizationSidecarURL)) as? [String: Any])
+        XCTAssertNotNil(rewritten["account"])
+        XCTAssertNotNil(rewritten["utilization"])
     }
 
     /// Case B in the script's header: an existing status line passed as

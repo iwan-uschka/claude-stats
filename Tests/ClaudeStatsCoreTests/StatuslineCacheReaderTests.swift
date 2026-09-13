@@ -1055,6 +1055,31 @@ final class StatuslineCacheReaderTests: XCTestCase {
         XCTAssertTrue(others.allSatisfy { $0.isStale(asOf: now) })
     }
 
+    /// The state file names an account with no matching group — the same setup
+    /// `testActiveAccountWithNoFilesReportsNoQuotaSourceAvailable` throws on.
+    /// Every group on disk, the unstamped one included, is then "other":
+    /// nothing is currently being served, and that is what lets
+    /// `FreshestQuotaProvider` tell "readings exist, none of them this
+    /// account's" from "nothing at all".
+    func testOtherAccountSnapshotsIncludeEveryGroupWhenTheActiveAccountHasNone() async throws {
+        try write(session: "other", cache(
+            capturedAt: now.addingTimeInterval(-30),
+            windowJSON("five_hour", percent: 56, resetsAt: now.addingTimeInterval(3600)),
+            account: bitgrip
+        ))
+        try write(session: "unstamped", cache(
+            capturedAt: now.addingTimeInterval(-20),
+            windowJSON("five_hour", percent: 12, resetsAt: now.addingTimeInterval(3600))
+        ))
+
+        let others = await makeReader(
+            activeAccount: ActiveAccountReading(account: creativytool)
+        ).otherAccountSnapshots()
+
+        XCTAssertEqual(others.map { $0.account }, [nil, bitgrip])
+        XCTAssertEqual(others.map { $0.fiveHour?.percentUsed }, [12, 56])
+    }
+
     /// A group whose every window has rolled over has nothing to draw: no
     /// label, no two "no reading" lines. This is the rule that keeps the
     /// unknown-account group from appearing on a machine whose only unstamped

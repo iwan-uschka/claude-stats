@@ -39,6 +39,13 @@ public struct QuotaAccount: Sendable, Hashable, Codable, Identifiable {
     /// `oauthAccount.organizationUuid`; carried for fidelity, not displayed.
     public let organizationUuid: String?
 
+    /// Stores the four fields as given — no trimming, no blank check.
+    ///
+    /// The non-blank guarantee ``displayName`` relies on belongs to
+    /// ``init(json:)``, which is how every reading off disk is built; this
+    /// initialiser is for callers that already hold known-good values (fixtures,
+    /// and readings being re-wrapped). A blank `uuid` passed here produces a
+    /// blank ``displayName``.
     public init(
         uuid: String,
         email: String? = nil,
@@ -62,7 +69,8 @@ public struct QuotaAccount: Sendable, Hashable, Codable, Identifiable {
     /// Organisation name first (it is what the user picked the account by),
     /// then the login email, then a short prefix of the uuid — never the full
     /// uuid, which is 36 characters of noise in a 312 pt popover, and never an
-    /// empty label.
+    /// empty label for an account parsed by ``init(json:)``, which drops blank
+    /// fields and rejects a blank uuid outright.
     public var displayName: String {
         organizationName ?? email ?? String(uuid.prefix(Self.shortUUIDLength))
     }
@@ -82,12 +90,12 @@ public struct QuotaAccount: Sendable, Hashable, Codable, Identifiable {
     /// group by, and an account known only by its email would silently form a
     /// group of its own next to the same account's uuid-keyed readings.
     public init?(json: [String: Any]) {
-        guard let uuid = Self.string(json, ["uuid", "accountUuid", "account_uuid"]) else {
+        guard let uuid = Self.string(json, ["uuid", "accountUuid"]) else {
             return nil
         }
         self.init(
             uuid: uuid,
-            email: Self.string(json, ["email", "emailAddress", "email_address"]),
+            email: Self.string(json, ["email", "emailAddress"]),
             organizationName: Self.string(json, ["organization_name", "organizationName"]),
             organizationUuid: Self.string(json, ["organization_uuid", "organizationUuid"])
         )

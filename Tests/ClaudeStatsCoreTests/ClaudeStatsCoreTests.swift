@@ -189,6 +189,48 @@ final class ClaudeStatsCoreTests: XCTestCase {
         XCTAssertNil(decoded.usageCreditsDisabledReason)
     }
 
+    // MARK: - Account coding
+
+    func testQuotaSnapshotRoundTripsWithAccount() throws {
+        let account = QuotaAccount(
+            uuid: "0f9c1d3e-8a4b-4c2d-9e1f-6b7a8c9d0e1f",
+            email: "me@example.com",
+            organizationName: "Bitgrip",
+            organizationUuid: "a1b2c3d4-0000-0000-0000-000000000000"
+        )
+        let snapshot = QuotaSnapshot(
+            fiveHour: QuotaWindow(percentUsed: 11),
+            sevenDay: QuotaWindow(percentUsed: 97),
+            confidence: .cachedOfficial,
+            capturedAt: Date(timeIntervalSince1970: 1_787_935_500),
+            account: account
+        )
+
+        let decoded = try roundTripped(snapshot)
+
+        XCTAssertEqual(decoded, snapshot)
+        XCTAssertEqual(decoded.account, account)
+        XCTAssertEqual(decoded.account?.organizationName, "Bitgrip")
+    }
+
+    /// Same contract as the scoped-limits and usage-credits keys: a payload
+    /// encoded before the account stamp existed has no such key and must decode
+    /// as an unknown account rather than fail.
+    func testQuotaSnapshotDecodesJSONWithoutAccountKey() throws {
+        let json = """
+        { "fiveHour": { "percentUsed": 62 },
+          "sevenDay": { "percentUsed": 31 },
+          "confidence": "official",
+          "capturedAt": 776543210,
+          "scopedWeekly": [] }
+        """
+
+        let decoded = try JSONDecoder().decode(QuotaSnapshot.self, from: Data(json.utf8))
+
+        XCTAssertNil(decoded.account)
+        XCTAssertEqual(decoded.fiveHour?.percentUsed, 62)
+    }
+
     /// The two fields are one answer, so they move together — see
     /// ``QuotaSnapshot/apply(_:)``.
     func testApplyingAReadingReplacesBothCreditsAndReason() {
