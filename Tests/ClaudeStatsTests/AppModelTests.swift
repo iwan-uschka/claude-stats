@@ -50,6 +50,7 @@ final class AppModelTests: XCTestCase {
         func entrypointBreakdown(for window: TimeWindow) throws -> EntrypointBreakdown { throw Failure() }
         func modelUsage(last24h: Bool) throws -> [ModelUsage] { throw Failure() }
         func estimatedCostToday() throws -> Double { throw Failure() }
+        func dailyUsage(days: Int) throws -> DailyUsageHistory { throw Failure() }
     }
 
     /// ``MockUsageStore``'s data, but counting the breakdown reads — the point
@@ -75,6 +76,7 @@ final class AppModelTests: XCTestCase {
 
         func modelUsage(last24h: Bool) throws -> [ModelUsage] { try backing.modelUsage(last24h: last24h) }
         func estimatedCostToday() throws -> Double { try backing.estimatedCostToday() }
+        func dailyUsage(days: Int) throws -> DailyUsageHistory { try backing.dailyUsage(days: days) }
     }
 
     /// Hands back whatever the test scripted, and records what the model asked

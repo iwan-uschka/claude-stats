@@ -3,9 +3,11 @@ import Foundation
 /// Per-model lifetime totals for events that have aged out of the store's
 /// per-event retention window (see ``SessionCorpusIndex``).
 ///
-/// Only ``LocalLogUsageStore/modelUsage(last24h:)`` with `last24h == false`
-/// needs data older than the longest rolling window, and it only needs these
-/// sums — so old events are folded down to this instead of being kept whole.
+/// ``LocalLogUsageStore/modelUsage(last24h:)`` with `last24h == false` needs
+/// data older than the longest rolling window, and needs only these sums — so
+/// old events are folded down to this instead of being kept whole. The same
+/// fold also writes ``DailyUsageCell`` totals for the charts, which need the
+/// same events split by day; neither structure reads the other.
 public struct HistoricalModelUsage: Sendable, Hashable {
     /// Summed token counts of every folded event for this model ID.
     public var usage: TokenUsage
@@ -52,15 +54,28 @@ public struct LocalLogUsageStore: UsageStoring {
     /// Every token-bearing event known to this store, sorted oldest-first.
     ///
     /// When the store is built by ``SessionCorpusIndex`` this only spans the
-    /// retention window; older history lives in ``historicalByModel``.
+    /// retention window; older history lives in ``historicalByModel`` and
+    /// ``historicalDailyCells``.
     public let events: [UsageEvent]
 
     /// Per-model totals for events older than the retention window, keyed by
     /// raw model ID (`nil` for events that carried none). Empty when the store
     /// was built from a full parse. Consulted only by
     /// ``modelUsage(last24h:)`` with `last24h == false` — every rolling-window
-    /// query is answerable from ``events`` alone.
+    /// query is answerable from ``events`` alone, and the charts' longer reach
+    /// back is served by ``historicalDailyCells`` instead.
     public let historicalByModel: [String?: HistoricalModelUsage]
+
+    /// Daily token/cost cells for events older than the retention window, the
+    /// history half of ``dailyUsage(days:)``. Empty when the store was built
+    /// from a full parse, where every event is still in ``events``.
+    ///
+    /// Deliberately a second accumulation next to ``historicalByModel`` rather
+    /// than a replacement for it: that one keeps a `latestTimestamp` per model
+    /// for `modelUsage`'s "newest raw ID wins" rule, which summing daily cells
+    /// could only approximate to the day. Both are filled in the same fold, so
+    /// neither costs an extra pass.
+    public let historicalDailyCells: [DailyUsageCell: DailyUsageTotals]
 
     /// Non-fatal problems from the last scan. When the store is built by
     /// ``SessionCorpusIndex`` this is a *sample* (at most
@@ -85,10 +100,12 @@ public struct LocalLogUsageStore: UsageStoring {
         events: [UsageEvent],
         skippedLines: [ClaudeStatsError] = [],
         historicalByModel: [String?: HistoricalModelUsage] = [:],
+        historicalDailyCells: [DailyUsageCell: DailyUsageTotals] = [:],
         calendar: Calendar = .current,
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.historicalByModel = historicalByModel
+        self.historicalDailyCells = historicalDailyCells
         // `adding(events:)` merges two individually-sorted sequences; skip the
         // O(n log n) resort of the whole accumulated history when the
         // concatenation is already in order, which is the common case for an
@@ -149,6 +166,7 @@ public struct LocalLogUsageStore: UsageStoring {
             events: events + newEvents,
             skippedLines: skippedLines + newSkipped,
             historicalByModel: historicalByModel,
+            historicalDailyCells: historicalDailyCells,
             calendar: calendar,
             now: nowProvider
         )
@@ -268,6 +286,78 @@ public struct LocalLogUsageStore: UsageStoring {
         let now = nowProvider()
         let midnight = calendar.startOfDay(for: now)
         return events(in: midnight, to: now).reduce(0) { $0 + $1.estimatedCostUSD }
+    }
+
+    /// Daily token and cost history for the last `days` local days, ending with
+    /// today.
+    ///
+    /// Answered from two halves that never overlap, exactly as
+    /// ``modelUsage(last24h:)`` answers all-time usage: events still inside the
+    /// retention window come from ``events``, everything older from the
+    /// ``historicalDailyCells`` the fold left behind. A full-parse store has an
+    /// empty second half and reads entirely from the first.
+    ///
+    /// Days are walked with ``calendar`` rather than by adding 86 400 seconds,
+    /// so the day after a DST transition is still one day long.
+    public func dailyUsage(days: Int) throws -> DailyUsageHistory {
+        guard days > 0 else { return .empty }
+        let now = nowProvider()
+        let today = calendar.startOfDay(for: now)
+        guard let windowStart = calendar.date(byAdding: .day, value: -(days - 1), to: today) else {
+            return .empty
+        }
+
+        var cells: [DailyUsageCell: DailyUsageTotals] = [:]
+        for (cell, totals) in historicalDailyCells where cell.day >= windowStart {
+            cells[cell, default: DailyUsageTotals()].merge(totals)
+        }
+        var days = LocalDayResolver(calendar: calendar)
+        for event in events(in: windowStart, to: now) where DailyUsageTotals.countsTowardsDailyHistory(event) {
+            let cell = DailyUsageCell(
+                day: days.day(for: event.timestamp),
+                modelID: event.modelID,
+                entrypoint: event.entrypoint
+            )
+            cells[cell, default: DailyUsageTotals()].add(event)
+        }
+
+        // The axis starts at the oldest day that actually has usage, not at the
+        // requested window start — see ``DailyUsageHistory/days``.
+        guard let firstDay = cells.keys.map(\.day).min() else { return .empty }
+        var axis: [Date] = []
+        var cursor = firstDay
+        while cursor <= today {
+            axis.append(cursor)
+            guard let next = calendar.date(byAdding: .day, value: 1, to: cursor) else { break }
+            cursor = next
+        }
+
+        var totalByDay: [Date: DailyUsageTotals] = [:]
+        var sourceByDay: [Entrypoint: [Date: DailyUsageTotals]] = [:]
+        var familyByDay: [ModelFamily?: [Date: DailyUsageTotals]] = [:]
+        for (cell, totals) in cells {
+            totalByDay[cell.day, default: DailyUsageTotals()].merge(totals)
+            if let entrypoint = cell.entrypoint {
+                sourceByDay[entrypoint, default: [:]][cell.day, default: DailyUsageTotals()].merge(totals)
+            }
+            let family = cell.modelID.flatMap(ModelFamily.inferred(fromModelID:))
+            familyByDay[family, default: [:]][cell.day, default: DailyUsageTotals()].merge(totals)
+        }
+
+        func series(_ byDay: [Date: DailyUsageTotals]) -> [DailyUsagePoint] {
+            axis.map { day in
+                let totals = byDay[day] ?? DailyUsageTotals()
+                return DailyUsagePoint(day: day, usage: totals.usage, estimatedCostUSD: totals.estimatedCostUSD)
+            }
+        }
+
+        return DailyUsageHistory(
+            days: axis,
+            total: series(totalByDay),
+            // Dense over every known source, including ones that did nothing.
+            bySource: Dictionary(uniqueKeysWithValues: Entrypoint.allCases.map { ($0, series(sourceByDay[$0] ?? [:])) }),
+            byModelFamily: familyByDay.mapValues(series)
+        )
     }
 
     // MARK: - Derived values

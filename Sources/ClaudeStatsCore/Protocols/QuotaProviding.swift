@@ -218,6 +218,11 @@ public protocol UsageStoring: Sendable {
 
     /// Estimated spend in USD since local midnight.
     func estimatedCostToday() throws -> Double
+
+    /// Daily token and cost history for the last `days` local days, for the
+    /// popover's charts. The returned window is shortened, never zero-padded,
+    /// when the corpus is younger than `days`.
+    func dailyUsage(days: Int) throws -> DailyUsageHistory
 }
 
 public extension UsageStoring {

@@ -34,6 +34,11 @@ public final class SessionCorpusIndex {
         var recentEvents: [UsageEvent]
         /// This file's events that aged past the cutoff, folded per model ID.
         var foldedByModel: [String?: HistoricalModelUsage]
+        /// The same aged-out events, folded per (day, model, source) instead —
+        /// the history half of ``LocalLogUsageStore/dailyUsage(days:)``. Bounded
+        /// by the days this one file spans, which is why no separate retention
+        /// is needed for it.
+        var dailyCells: [DailyUsageCell: DailyUsageTotals]
         /// Total malformed lines seen in this file's last parse.
         var skippedCount: Int
         /// First few skipped-line errors, capped at `skippedSampleLimit`.
@@ -167,11 +172,19 @@ public final class SessionCorpusIndex {
                     // exclusivity trap. Do not inline these back into the call.
                     var recentEvents = cached.recentEvents
                     var foldedByModel = cached.foldedByModel
+                    var dailyCells = cached.dailyCells
                     let fold = Self.signposter.beginInterval("Fold", id: Self.signposter.makeSignpostID())
-                    Self.fold(events: &recentEvents, into: &foldedByModel, before: cutoff)
+                    Self.fold(
+                        events: &recentEvents,
+                        into: &foldedByModel,
+                        daily: &dailyCells,
+                        before: cutoff,
+                        calendar: calendar
+                    )
                     Self.signposter.endInterval("Fold", fold, "events: \(recentEvents.count)")
                     cached.recentEvents = recentEvents
                     cached.foldedByModel = foldedByModel
+                    cached.dailyCells = dailyCells
                     files[path] = cached
                 }
                 continue
@@ -190,6 +203,7 @@ public final class SessionCorpusIndex {
                 fileSize: fileSize,
                 recentEvents: result.events,
                 foldedByModel: [:],
+                dailyCells: [:],
                 skippedCount: result.skippedLines.count,
                 skippedSamples: Array(result.skippedLines.prefix(Self.skippedSampleLimit))
             )
@@ -199,11 +213,19 @@ public final class SessionCorpusIndex {
             // exclusivity trap. Do not inline these back into the call.
             var recentEvents = entry.recentEvents
             var foldedByModel = entry.foldedByModel
+            var dailyCells = entry.dailyCells
             let fold = Self.signposter.beginInterval("Fold", id: Self.signposter.makeSignpostID())
-            Self.fold(events: &recentEvents, into: &foldedByModel, before: cutoff)
+            Self.fold(
+                events: &recentEvents,
+                into: &foldedByModel,
+                daily: &dailyCells,
+                before: cutoff,
+                calendar: calendar
+            )
             Self.signposter.endInterval("Fold", fold, "events: \(recentEvents.count)")
             entry.recentEvents = recentEvents
             entry.foldedByModel = foldedByModel
+            entry.dailyCells = dailyCells
             files[path] = entry
         }
         files = files.filter { seen.contains($0.key) }
@@ -216,6 +238,7 @@ public final class SessionCorpusIndex {
         var events: [UsageEvent] = []
         var skipped: [ClaudeStatsError] = []
         var historical: [String?: HistoricalModelUsage] = [:]
+        var dailyCells: [DailyUsageCell: DailyUsageTotals] = [:]
         // Sorted by path so the assembly is deterministic across launches,
         // matching `SessionLogParser.sessionFileURLs`' ordering guarantee —
         // Dictionary iteration order would let timestamp ties resolve
@@ -227,11 +250,15 @@ public final class SessionCorpusIndex {
             for (modelID, total) in entry.foldedByModel {
                 historical[modelID, default: HistoricalModelUsage()].merge(total)
             }
+            for (cell, totals) in entry.dailyCells {
+                dailyCells[cell, default: DailyUsageTotals()].merge(totals)
+            }
         }
         let store = LocalLogUsageStore(
             events: events,
             skippedLines: skipped,
             historicalByModel: historical,
+            historicalDailyCells: dailyCells,
             calendar: calendar,
             now: nowProvider
         )
@@ -255,13 +282,24 @@ public final class SessionCorpusIndex {
     private static func fold(
         events: inout [UsageEvent],
         into folded: inout [String?: HistoricalModelUsage],
-        before cutoff: Date
+        daily: inout [DailyUsageCell: DailyUsageTotals],
+        before cutoff: Date,
+        calendar: Calendar
     ) {
         var kept: [UsageEvent] = []
         kept.reserveCapacity(events.count)
+        var days = LocalDayResolver(calendar: calendar)
         for event in events {
             if event.timestamp < cutoff {
                 folded[event.modelID, default: HistoricalModelUsage()].fold(event)
+                if DailyUsageTotals.countsTowardsDailyHistory(event) {
+                    let cell = DailyUsageCell(
+                        day: days.day(for: event.timestamp),
+                        modelID: event.modelID,
+                        entrypoint: event.entrypoint
+                    )
+                    daily[cell, default: DailyUsageTotals()].add(event)
+                }
             } else {
                 kept.append(event)
             }

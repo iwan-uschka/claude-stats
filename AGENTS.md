@@ -341,6 +341,24 @@ Two independent tiers, deliberately decoupled:
    `modelUsage(last24h: false)` reads back. Any new per-event query — a new
    `TimeWindow` case, a longer heuristic — must fit inside that window, or
    raise `defaultRetention` first.
+   - **The same fold also buckets by day**, into `DailyUsageCell` →
+     `DailyUsageTotals` (`Models/DailyUsage.swift`) keyed by
+     `(local day, raw model ID, entrypoint)`. That is what lets
+     `LocalLogUsageStore.dailyUsage(days:)` chart 30 days without retention
+     being raised: it is not a per-event query, so the rule above does not
+     apply to it. It reads the folded cells for old days and the retained
+     events for recent ones, exactly the two-halves split
+     `modelUsage(last24h: false)` already uses — the halves never overlap,
+     because the fold moves events rather than copying them.
+   - Both accumulations are filled in one pass, so neither costs extra I/O;
+     the parse already happens. `HistoricalModelUsage` stays alongside the
+     cells rather than being derived from them because it carries a
+     `latestTimestamp` per model for `modelUsage`'s "newest raw ID wins" rule,
+     which day-resolution cells could only approximate.
+   - Series come back **dense** — an idle day inside the window is a zero
+     point, never a gap, or a line chart connects across it and draws usage
+     that never happened — and the window is **shortened, never zero-padded**,
+     when the corpus is younger than it was asked for.
 
 ### Explicit non-goals (v1)
 
