@@ -37,6 +37,41 @@ final class PopoverColorTests: XCTestCase {
         )
     }
 
+    /// HSL, measured here rather than taken off `NSColor` — which reports HSB,
+    /// a different saturation figure. The ramp is defined in HSL, so that is
+    /// the space the muting has to be checked in.
+    private static func hsl(red: CGFloat, green: CGFloat, blue: CGFloat) -> (hue: CGFloat, saturation: CGFloat, lightness: CGFloat) {
+        let high = max(red, green, blue)
+        let low = min(red, green, blue)
+        let chroma = high - low
+        let lightness = (high + low) / 2
+        guard chroma > 0 else { return (0, 0, lightness) }
+        let saturation = chroma / (1 - abs(2 * lightness - 1))
+        let sector: CGFloat
+        if high == red {
+            sector = ((green - blue) / chroma).truncatingRemainder(dividingBy: 6)
+        } else if high == green {
+            sector = (blue - red) / chroma + 2
+        } else {
+            sector = (red - green) / chroma + 4
+        }
+        return ((sector * 60 + 360).truncatingRemainder(dividingBy: 360), saturation, lightness)
+    }
+
+    private static func hsl(of color: NSColor) -> (hue: CGFloat, saturation: CGFloat, lightness: CGFloat) {
+        hsl(red: color.redComponent, green: color.greenComponent, blue: color.blueComponent)
+    }
+
+    /// The same, for one of the unmuted `0xRRGGBB` literals the ramp is built
+    /// from — the thing the painted colour is compared against.
+    private static func hsl(ofHex hex: Int) -> (hue: CGFloat, saturation: CGFloat, lightness: CGFloat) {
+        hsl(
+            red: CGFloat((hex >> 16) & 0xFF) / 255,
+            green: CGFloat((hex >> 8) & 0xFF) / 255,
+            blue: CGFloat(hex & 0xFF) / 255
+        )
+    }
+
     /// WCAG 2.2 relative luminance.
     private func luminance(_ color: NSColor) -> CGFloat {
         func channel(_ value: CGFloat) -> CGFloat {
@@ -74,10 +109,64 @@ final class PopoverColorTests: XCTestCase {
 
     func testTheBrandColourIsTheTwoDocumentedLiterals() throws {
         // `#CA7C5E` — one literal for both appearances — measured 3.17:1 on a
-        // light card, under the 4.5:1 AA floor for caption-size text. These two
-        // are what replaced it, and the numbers below are why.
-        XCTAssertEqual(hex(try resolved(PopoverMetrics.brandNSColor, .aqua)), "A85E3E")
-        XCTAssertEqual(hex(try resolved(PopoverMetrics.brandNSColor, .darkAqua)), "E88A5C")
+        // light card, under the 4.5:1 AA floor for caption-size text. `#A85E3E`
+        // and `#E88A5C` replaced it; these two are those, muted by
+        // ``PopoverMetrics/saturationReduction``.
+        XCTAssertEqual(hex(try resolved(PopoverMetrics.brandNSColor, .aqua)), "9B634B")
+        XCTAssertEqual(hex(try resolved(PopoverMetrics.brandNSColor, .darkAqua)), "D6906E")
+    }
+
+    func testTheTerracottaIsTheBrandHueAtThreeQuartersSaturation() throws {
+        // The muting is a property of the *colour*, not of the two hex strings
+        // above: hue and lightness are the literals', saturation is exactly
+        // `1 - saturationReduction` of theirs. Measured in HSL, which is the
+        // space the ramp interpolates in — the reduction is defined there, and
+        // the HSB figure `NSColor` reports moves by a different factor.
+        XCTAssertEqual(PopoverMetrics.saturationReduction, 0.25)
+        for (name, literal) in [(NSAppearance.Name.aqua, 0xA85E3E), (.darkAqua, 0xE88A5C)] {
+            let painted = Self.hsl(of: try resolved(PopoverMetrics.brandNSColor, name))
+            let unmuted = Self.hsl(ofHex: literal)
+            XCTAssertEqual(painted.hue, unmuted.hue, accuracy: 0.5, "hue moved in \(name.rawValue)")
+            XCTAssertEqual(
+                painted.lightness,
+                unmuted.lightness,
+                accuracy: 0.005,
+                "lightness moved in \(name.rawValue)"
+            )
+            XCTAssertEqual(
+                painted.saturation,
+                unmuted.saturation * (1 - PopoverMetrics.saturationReduction),
+                accuracy: 0.005,
+                "\(name.rawValue) is not the brand hue at three quarters saturation"
+            )
+        }
+    }
+
+    func testEveryBandIsMutedByTheSameFactorAsTheBrandColour() throws {
+        // One reduction for the whole system, applied where the ramp's ends are
+        // read — so no band, no bar and no dot can keep the unmuted hue while
+        // its neighbours lose it. Measured against the ramp's own ends, since
+        // every shade between them is an interpolation of the two.
+        for (name, ends) in [
+            (NSAppearance.Name.aqua, (strong: 0xA85E3E, pale: 0xDCBAAB)),
+            (.darkAqua, (strong: 0xE88A5C, pale: 0x844C30)),
+        ] {
+            let expected = 1 - PopoverMetrics.saturationReduction
+            let strong = Self.hsl(of: try resolved(PopoverMetrics.chartBandNSColor(0, of: 2), name))
+            let pale = Self.hsl(of: try resolved(PopoverMetrics.chartBandNSColor(1, of: 2), name))
+            XCTAssertEqual(
+                strong.saturation / Self.hsl(ofHex: ends.strong).saturation,
+                expected,
+                accuracy: 0.01,
+                "the strong end of the \(name.rawValue) ramp"
+            )
+            XCTAssertEqual(
+                pale.saturation / Self.hsl(ofHex: ends.pale).saturation,
+                expected,
+                accuracy: 0.01,
+                "the pale end of the \(name.rawValue) ramp"
+            )
+        }
     }
 
     func testTheBrandColourClearsAAContrastInBothAppearances() throws {
@@ -142,36 +231,36 @@ final class PopoverColorTests: XCTestCase {
         for count in Self.drawnBandCounts where count > 1 {
             XCTAssertEqual(
                 try XCTUnwrap(try bandContrasts(count, .aqua, against: Self.lightBackground).last),
-                1.80,
+                1.79,
                 accuracy: 0.02,
                 "the pale end of \(count) light bands"
             )
             XCTAssertEqual(
                 try XCTUnwrap(try bandContrasts(count, .darkAqua, against: Self.darkBackground).last),
-                2.29,
+                2.26,
                 accuracy: 0.02,
                 "the dark end of \(count) dark bands"
             )
         }
         // A stack of one is the brand colour, not the middle of the ramp:
         // nothing to be told apart from, and "band 0" must keep its meaning.
-        XCTAssertEqual(try bandContrasts(1, .aqua, against: Self.lightBackground), [4.84], accuracy: 0.02)
-        XCTAssertEqual(try bandContrasts(1, .darkAqua, against: Self.darkBackground), [6.15], accuracy: 0.02)
+        XCTAssertEqual(try bandContrasts(1, .aqua, against: Self.lightBackground), [4.90], accuracy: 0.02)
+        XCTAssertEqual(try bandContrasts(1, .darkAqua, against: Self.darkBackground), [6.05], accuracy: 0.02)
     }
 
     func testTheRampMeasuresWhatItsDocumentationClaims() throws {
         // The table in ``PopoverMetrics/chartBandColor(_:of:)``, measured.
         let light: [Int: [CGFloat]] = [
-            2: [4.84, 1.80],
-            3: [4.84, 2.88, 1.80],
-            4: [4.84, 3.40, 2.45, 1.80],
-            5: [4.84, 3.69, 2.88, 2.27, 1.80],
+            2: [4.90, 1.79],
+            3: [4.90, 2.87, 1.79],
+            4: [4.90, 3.41, 2.44, 1.79],
+            5: [4.90, 3.72, 2.87, 2.25, 1.79],
         ]
         let dark: [Int: [CGFloat]] = [
-            2: [6.15, 2.29],
-            3: [6.15, 4.05, 2.29],
-            4: [6.15, 4.70, 3.35, 2.29],
-            5: [6.15, 5.03, 4.05, 3.04, 2.29],
+            2: [6.05, 2.26],
+            3: [6.05, 3.89, 2.26],
+            4: [6.05, 4.54, 3.26, 2.26],
+            5: [6.05, 4.89, 3.89, 2.98, 2.26],
         ]
         for (count, expected) in light {
             XCTAssertEqual(try bandContrasts(count, .aqua, against: Self.lightBackground), expected, accuracy: 0.02)
@@ -202,8 +291,9 @@ final class PopoverColorTests: XCTestCase {
     func testEveryStepIsWeakerThanTheOneBeforeItByAVisibleMargin() throws {
         // Two touching bands of a stack are only told apart by this step. 1.2
         // is the floor, and it holds for every stack the popover can draw; the
-        // tightest is a five-band dark stack at ≈1.22. A sixth band would fall
-        // to ≈1.18 — the honest cost of spreading — and nothing can ask for one.
+        // tightest is a five-band dark stack at ≈1.24. A sixth band would fall
+        // below the floor — the honest cost of spreading — and nothing can ask
+        // for one.
         for count in Self.drawnBandCounts {
             for (name, background) in cards {
                 let contrasts = try bandContrasts(count, name, against: background)
@@ -282,9 +372,12 @@ final class PopoverColorTests: XCTestCase {
                     XCTAssertGreaterThan(color.redComponent, color.greenComponent, where_)
                     XCTAssertGreaterThan(color.greenComponent, color.blueComponent, where_)
                     // HSB saturation, which reads lower than the HSL figure the
-                    // ramp is interpolated in: the palest light shade `#DCBAAB`
-                    // is 41% there and 0.22 here.
-                    XCTAssertGreaterThan(color.saturationComponent, 0.2, "\(where_) is a grey")
+                    // ramp is interpolated in: the palest light shade is 31%
+                    // there and 0.17 here. The floor is 0.15 rather than the
+                    // 0.2 it was before ``PopoverMetrics/saturationReduction``
+                    // muted the hue — 0.17 is what the ramp's palest step now
+                    // measures, and it is the closest any shade comes to grey.
+                    XCTAssertGreaterThan(color.saturationComponent, 0.15, "\(where_) is a grey")
                 }
             }
         }

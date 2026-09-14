@@ -891,6 +891,69 @@ final class AppModelTests: XCTestCase {
         XCTAssertTrue(model.promoNotices.isEmpty)
     }
 
+    // MARK: - Settings: default display range
+
+    /// A defaults domain of this test's own, so the preference can be written
+    /// and read back without touching whatever the process's standard domain
+    /// holds. Removed afterwards, so one test can't seed the next.
+    private func makeDefaults(_ name: String = #function) throws -> UserDefaults {
+        let suite = "de.bitgrip.claude-stats.tests.\(name)"
+        UserDefaults.standard.removePersistentDomain(forName: suite)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        addTeardownBlock { UserDefaults.standard.removePersistentDomain(forName: suite) }
+        return defaults
+    }
+
+    private func makeModel(defaults: UserDefaults) -> AppModel {
+        AppModel(
+            quotaProvider: MockQuotaProvider(),
+            usageStore: MockUsageStore(),
+            promoNoticeProvider: MockPromoNoticeProvider(notices: []),
+            defaults: defaults
+        )
+    }
+
+    func testTheDefaultDisplayRangeStartsAtTheWholeWindow() throws {
+        // The window the popover has always opened on: nothing stored means the
+        // thirty-day sum, not a silently different default for a new install.
+        let model = makeModel(defaults: try makeDefaults())
+
+        XCTAssertEqual(model.defaultDisplayRange, .last30Days)
+    }
+
+    func testSettingTheDisplayRangePersistsItForTheNextLaunch() throws {
+        let defaults = try makeDefaults()
+        let model = makeModel(defaults: defaults)
+
+        model.setDefaultDisplayRange(.latestDay)
+        XCTAssertEqual(model.defaultDisplayRange, .latestDay)
+
+        // Written through immediately — there is no Apply button in the
+        // Settings pane — so a model built fresh over the same domain, which is
+        // what the next launch is, comes up on the same setting.
+        XCTAssertEqual(makeModel(defaults: defaults).defaultDisplayRange, .latestDay)
+
+        model.setDefaultDisplayRange(.last30Days)
+        XCTAssertEqual(makeModel(defaults: defaults).defaultDisplayRange, .last30Days)
+    }
+
+    func testAnUnreadableStoredRangeFallsBackToTheWholeWindow() throws {
+        let defaults = try makeDefaults()
+        defaults.set("lastFortnight", forKey: "de.bitgrip.claude-stats.defaultDisplayRange")
+
+        // A value written by a version that spelled the cases differently must
+        // not leave the popover with no setting at all.
+        XCTAssertEqual(makeModel(defaults: defaults).defaultDisplayRange, .last30Days)
+    }
+
+    func testEveryRangeIsOfferedAndNamesTheWindowItShows() {
+        // The picker lists both, and the thirty is spelled from the window the
+        // charts actually draw rather than typed into the label.
+        XCTAssertEqual(DefaultDisplayRange.allCases, [.last30Days, .latestDay])
+        XCTAssertEqual(DefaultDisplayRange.last30Days.label, "Last \(AppModel.chartWindowDays) days")
+        XCTAssertEqual(DefaultDisplayRange.latestDay.label, "Latest day")
+    }
+
     // MARK: - README showcase fixture
 
     func testShowcaseFixtureShowsTwoAccountsWithGenericNames() throws {

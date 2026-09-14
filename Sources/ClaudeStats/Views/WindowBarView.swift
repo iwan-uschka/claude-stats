@@ -3,7 +3,7 @@ import SwiftUI
 
 /// One rate-limit window row: `5-hour  ▓▓▓▓▓▓░░ 62%  2h 14m`.
 ///
-/// A `nil` ``window`` is the "no reading" row — `—  no reading` over an empty
+/// A `nil` ``window`` is the "no reading" row — `—  no data` over an empty
 /// track. That is not 0%: it means no quota source currently reports the
 /// window at all, which is the normal state right after one rolls over. Scoped
 /// weekly and usage-credits rows always have a window and pass a non-`nil` one.
@@ -15,7 +15,7 @@ struct WindowBarView: View {
     /// Passed in rather than read from the clock so the countdown ticks with the
     /// popover's timer and previews stay deterministic.
     var now: Date
-    /// Whether a `nil` `window.resetsAt` renders as "reset pending" or as an
+    /// Whether a `nil` `window.resetsAt` renders as `pending` or as an
     /// empty column.
     ///
     /// The two account-wide bars always have documented reset semantics, so
@@ -45,17 +45,34 @@ struct WindowBarView: View {
                 .frame(minWidth: 48)
                 .accessibilityHidden(window == nil)
 
-            Text(DisplayFormat.windowPercent(window))
-                .font(PopoverMetrics.valueFont)
-                .lineLimit(1)
-                .frame(width: PopoverMetrics.percentColumnWidth, alignment: .trailing)
+            // The two readings sit flush against each other, with no
+            // `rowSpacing` between them. Both are right-aligned in columns
+            // wider than anything they hold, so `62%` still stands 21 pt clear
+            // of `2h 2m` without one; a frame gap on top of that only pushed
+            // the percentage back towards the bar.
+            //
+            // The percentage's right edge lands 261 pt from the row's leading
+            // edge, and the bar takes everything in front of it — see
+            // ``PopoverMetrics/countdownColumnWidth``, which is where those
+            // points came from, and ``PopoverMetrics/quotaBarWidth``, where
+            // they went.
+            HStack(spacing: 0) {
+                Text(DisplayFormat.windowPercent(window))
+                    .font(PopoverMetrics.valueFont)
+                    .lineLimit(1)
+                    .frame(width: PopoverMetrics.percentColumnWidth, alignment: .trailing)
 
-            Text(DisplayFormat.windowCountdown(
-                window, from: now, showsPendingResetPlaceholder: showsPendingResetPlaceholder
-            ))
-                .font(PopoverMetrics.captionFont)
-                .foregroundStyle(.secondary)
-                .frame(width: PopoverMetrics.countdownColumnWidth, alignment: .trailing)
+                Text(DisplayFormat.windowCountdown(
+                    window, from: now, showsPendingResetPlaceholder: showsPendingResetPlaceholder
+                ))
+                    // A countdown is a number and it ticks: monospaced digits
+                    // keep `2h 14m` from jittering as it counts down past
+                    // `2h 9m`, and keep the column of them right-aligned on the
+                    // same stems.
+                    .font(PopoverMetrics.captionValueFont)
+                    .foregroundStyle(.secondary)
+                    .frame(width: PopoverMetrics.countdownColumnWidth, alignment: .trailing)
+            }
         }
         .accessibilityElement(children: .combine)
     }

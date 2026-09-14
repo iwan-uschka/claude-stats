@@ -509,11 +509,19 @@ final class DailyUsageChartTests: XCTestCase {
 
     func testTheLabelColumnIsMeasuredInTheFontTheAxisDrawsIn() {
         // The width the popover gives both charts comes from these strings, so
-        // it has to be measured in the font that renders them.
+        // it has to be measured in the font that renders them — the axis draws
+        // its labels with monospaced digits, so a proportional measurement
+        // would reserve a column narrower than the one on screen.
         let width = PopoverChartAxis.yLabelWidth(of: ["0", "2M", "4M"])
-        let widest = ("4M" as NSString).size(withAttributes: [.font: PopoverMetrics.captionNSFont]).width
+        let widest = ("4M" as NSString).size(withAttributes: [.font: PopoverMetrics.captionValueNSFont]).width
 
         XCTAssertEqual(width, widest, accuracy: 0.01)
+        XCTAssertNotEqual(
+            widest,
+            ("4M" as NSString).size(withAttributes: [.font: PopoverMetrics.captionNSFont]).width,
+            accuracy: 0.01,
+            "the two fonts measure the same, so this test would pass with either"
+        )
         XCTAssertEqual(PopoverChartAxis.yLabelWidth(of: []), 0)
     }
 }

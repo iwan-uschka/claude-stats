@@ -42,6 +42,8 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 16) {
             generalSection
             Divider()
+            displaySection
+            Divider()
             refreshSection
             Divider()
             quotaSourceSection
@@ -127,6 +129,34 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+        }
+    }
+
+    // MARK: - Display
+
+    /// Which window the popover's two tables open on — see
+    /// ``DefaultDisplayRange``. Same shape as the poll-interval picker below:
+    /// a labels-hidden `Picker` under the section heading, with one caption
+    /// explaining what it moves and what it deliberately leaves alone.
+    private var displaySection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Display").font(.headline)
+            Picker(
+                "Default range",
+                selection: Binding(
+                    get: { model.defaultDisplayRange },
+                    set: { model.setDefaultDisplayRange($0) }
+                )
+            ) {
+                ForEach(DefaultDisplayRange.allCases) { range in
+                    Text(range.label).tag(range)
+                }
+            }
+            .labelsHidden()
+            Text("Which window the popover's tables show when you aren't pointing at a day: the whole charted window, or just the latest day in it. The charts always draw the full window, and hovering a day still shows that day either way.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 

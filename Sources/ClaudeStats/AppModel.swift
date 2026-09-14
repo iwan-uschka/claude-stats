@@ -2,6 +2,42 @@ import ClaudeStatsCore
 import Foundation
 import SwiftUI
 
+/// Which window the popover's two tables read **at rest** — the Settings
+/// preference behind ``AppModel/defaultDisplayRange``.
+///
+/// The choice is about the numbers, not about the plot: both charts keep
+/// drawing the whole window either way, because a single day is one point with
+/// no shape to read and the hover rule would have nothing left to move over.
+/// What the setting changes is which reading the tables open on — the window's
+/// sum, or the newest day in it, which is the figure someone checking "what
+/// have I spent today" comes for and which used to be reachable only by
+/// hovering the right edge of a 250 pt plot.
+///
+/// Hovering still wins wherever it lands, so the "latest day" setting is a
+/// different *default*, not a second mode with its own rules.
+enum DefaultDisplayRange: String, CaseIterable, Identifiable {
+    /// The whole charted window summed — how the popover has always opened.
+    case last30Days
+    /// The newest day the charts plot, i.e. today once anything has been
+    /// logged. Resolved by position, never as a stored date, so midnight
+    /// sliding the window moves it along.
+    case latestDay
+
+    var id: String { rawValue }
+
+    /// What the Settings picker calls it. The 30 is spelled from
+    /// ``AppModel/chartWindowDays`` rather than typed, so shortening the
+    /// window can't leave the label claiming a month — which is also why this
+    /// is `@MainActor`: that constant lives on the main-actor model.
+    @MainActor
+    var label: String {
+        switch self {
+        case .last30Days: return "Last \(AppModel.chartWindowDays) days"
+        case .latestDay: return "Latest day"
+        }
+    }
+}
+
 /// Bridges the Core data layer into the UI. Holds the last successful
 /// readings for local stats/breakdown; the quota snapshot is cleared when
 /// its source hard-fails (see `refresh()`) so stale numbers don't read as live.
@@ -91,6 +127,18 @@ final class AppModel: ObservableObject {
     static let pollIntervalOptions: [TimeInterval] = [30, 60, 120, 300]
     private static let pollIntervalDefaultsKey = "de.bitgrip.claude-stats.quotaPollInterval"
 
+    /// Which window the popover's tables show at rest — see
+    /// ``DefaultDisplayRange``. Persisted like the poll interval, and read on
+    /// every render rather than baked into the tables, so changing it in
+    /// Settings takes effect on the open popover.
+    @Published private(set) var defaultDisplayRange: DefaultDisplayRange
+    private static let defaultDisplayRangeDefaultsKey = "de.bitgrip.claude-stats.defaultDisplayRange"
+
+    /// Where both preferences are read and written. Injected so a test can
+    /// exercise persistence in its own suite instead of writing into whatever
+    /// domain the process happens to have.
+    private let defaults: UserDefaults
+
     /// `promoNoticeProvider` deliberately has no default. Defaulting it to the
     /// real reader would make every test read the developer's own
     /// `~/.claude.json`, which the suite's stated rule forbids; defaulting it
@@ -100,21 +148,36 @@ final class AppModel: ObservableObject {
         quotaProvider: any QuotaProviding,
         usageStore: any UsageStoring,
         promoNoticeProvider: any PromoNoticeProviding,
-        usingSampleData: Bool = false
+        usingSampleData: Bool = false,
+        defaults: UserDefaults = .standard
     ) {
         self.quotaProvider = quotaProvider
         self.usageStore = usageStore
         self.promoNoticeProvider = promoNoticeProvider
         self.usingSampleData = usingSampleData
+        self.defaults = defaults
 
-        let stored = UserDefaults.standard.double(forKey: Self.pollIntervalDefaultsKey)
+        let stored = defaults.double(forKey: Self.pollIntervalDefaultsKey)
         self.quotaPollInterval = Self.pollIntervalOptions.contains(stored) ? stored : 60
+
+        // Anything unrecognised — an absent key, or a value written by a
+        // version that spelled the cases differently — falls back to the
+        // thirty-day window the popover has always opened on.
+        self.defaultDisplayRange = defaults.string(forKey: Self.defaultDisplayRangeDefaultsKey)
+            .flatMap(DefaultDisplayRange.init(rawValue:)) ?? .last30Days
     }
 
     /// Persists the new cadence immediately so it survives the next launch.
     func setQuotaPollInterval(_ interval: TimeInterval) {
         quotaPollInterval = interval
-        UserDefaults.standard.set(interval, forKey: Self.pollIntervalDefaultsKey)
+        defaults.set(interval, forKey: Self.pollIntervalDefaultsKey)
+    }
+
+    /// Persists the new resting window immediately, the way the cadence is —
+    /// there is no Apply button in this Settings pane.
+    func setDefaultDisplayRange(_ range: DefaultDisplayRange) {
+        defaultDisplayRange = range
+        defaults.set(range.rawValue, forKey: Self.defaultDisplayRangeDefaultsKey)
     }
 
     /// Swaps in a freshly-rebuilt store (the FSEvents-triggered refresh path)

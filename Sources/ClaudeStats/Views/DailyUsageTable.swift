@@ -39,8 +39,19 @@ struct DailyUsageTable: View {
     /// that is somewhere else entirely would be a surprise.
     var hoveredDay: Date?
 
-    /// The caption at rest — `Last 30 days`, or fewer on a young corpus.
+    /// The caption at rest — `Last 30 days`, or fewer on a young corpus. Not
+    /// shown when ``restingRange`` is ``DefaultDisplayRange/latestDay``, whose
+    /// resting caption is the day itself.
     let restingCaption: String
+
+    /// Which window the table reads when the pointer is elsewhere — the
+    /// Settings preference, see ``DefaultDisplayRange``.
+    ///
+    /// It moves the *resting* reading only: hovering a day still shows that
+    /// day in either setting, and the chart above draws the whole window
+    /// either way, since a one-day plot is a single point with no shape to
+    /// read.
+    var restingRange: DefaultDisplayRange = .last30Days
 
     /// One line of the table.
     struct Row: Equatable {
@@ -51,6 +62,73 @@ struct DailyUsageTable: View {
         let cost: Double
     }
 
+    /// One of the two value columns every row ends in.
+    ///
+    /// A column rather than two hand-written `Text`s per row: the heading, the
+    /// width, the figure and what VoiceOver says all belong to the same column,
+    /// and the caption row and the value rows have to agree on their order —
+    /// which they can only do by construction if there is one order to read.
+    enum Column: CaseIterable {
+        case estimatedCost
+        case tokens
+
+        /// The heading over the column, in the caption row.
+        var heading: String {
+            switch self {
+            case .estimatedCost: return "Estimated cost"
+            case .tokens: return "Tokens"
+            }
+        }
+
+        /// Reserved width — see ``PopoverMetrics/tableCostColumnWidth`` and
+        /// ``PopoverMetrics/tableTokenColumnWidth`` for how each was measured.
+        var width: CGFloat {
+            switch self {
+            case .estimatedCost: return PopoverMetrics.tableCostColumnWidth
+            case .tokens: return PopoverMetrics.tableTokenColumnWidth
+            }
+        }
+
+        /// Whether the figure is set in secondary ink. The token counts are:
+        /// money is the reading the "By model" block exists for, and two
+        /// columns at full strength make the row read as two headlines.
+        var isSecondary: Bool {
+            switch self {
+            case .estimatedCost: return false
+            case .tokens: return true
+            }
+        }
+
+        func text(of row: Row) -> String {
+            switch self {
+            case .estimatedCost: return DisplayFormat.cost(row.cost)
+            case .tokens: return DisplayFormat.tokens(row.usage.totalTokens)
+            }
+        }
+
+        /// The same figure with its unit spelled out, for VoiceOver — which
+        /// reads a row without the headings above it.
+        func spokenValue(of row: Row) -> String {
+            switch self {
+            case .estimatedCost: return "\(DisplayFormat.cost(row.cost)) estimated"
+            case .tokens: return "\(DisplayFormat.tokens(row.usage.totalTokens)) tokens"
+            }
+        }
+    }
+
+    /// The value columns left to right: **money first, tokens second**.
+    ///
+    /// The two used to run the other way. Cost is the figure a reader of this
+    /// card comes for and the wider column of the two (74 pt against 48, sized
+    /// by its spelled-out heading), so putting it first ends the rows on the
+    /// narrow column and leaves the slack next to the labels — which is where
+    /// a sparkline or a bar at the head of a table would have to go.
+    ///
+    /// One order for both blocks and for the caption row, so "same columns in
+    /// the same places" stays a fact rather than a convention two pieces of
+    /// code happen to agree on.
+    static let columnOrder: [Column] = [.estimatedCost, .tokens]
+
     /// Where the pointer is in the current window, or `nil` at rest.
     ///
     /// Re-resolved every render rather than remembered: a poll — or midnight
@@ -58,13 +136,32 @@ struct DailyUsageTable: View {
     /// stranding a number from a window that has moved.
     var hoveredIndex: Int? { PopoverChartHover.index(of: hoveredDay, in: days) }
 
+    /// The day the table reads at rest, or `nil` when it reads the whole
+    /// window — the last plotted day under ``DefaultDisplayRange/latestDay``.
+    ///
+    /// The *last* day rather than a stored date: "latest" has to follow the
+    /// window, or the setting would strand the table on yesterday the moment
+    /// midnight slid it.
+    var restingIndex: Int? {
+        guard restingRange == .latestDay else { return nil }
+        return days.indices.last
+    }
+
+    /// The day every figure in the table is for, or `nil` for the whole
+    /// window. Hover wins over the resting preference: the pointer is a
+    /// deliberate act, the setting is a default.
+    var shownIndex: Int? { hoveredIndex ?? restingIndex }
+
     /// The leading caption: which window every number in the table is for.
     ///
     /// This is the whole hover disclosure. The caption already made that claim,
     /// so swapping it says the numbers changed meaning — no floating tooltip
-    /// over a 72 pt plot, and no second styling vocabulary.
+    /// over a 72 pt plot, and no second styling vocabulary. It is also what
+    /// says the table is showing one day rather than the window when the
+    /// preference is set that way — a single day's figures under `Last 30 days`
+    /// would simply be wrong.
     var caption: String {
-        guard let index = hoveredIndex, index < days.count else { return restingCaption }
+        guard let index = shownIndex, index < days.count else { return restingCaption }
         return PopoverChartHover.label(for: days[index])
     }
 
@@ -90,13 +187,14 @@ struct DailyUsageTable: View {
     /// numbers on screen rather than a window nothing displays.
     var shownUsage: TokenUsage { totalRow.usage }
 
-    /// One series' reading: the hovered day's point, or the whole window summed.
+    /// One series' reading: the shown day's point (hovered, or the latest one
+    /// when the preference asks for a single day), or the whole window summed.
     ///
     /// ``Sequence/summed()`` rather than a second pass over the corpus — the
     /// points are already in hand, and folding them here is what let the tables
     /// be a pure UI change.
     private func reading(of points: [DailyUsagePoint]) -> DailyUsageTotals {
-        if let index = hoveredIndex, index < points.count {
+        if let index = shownIndex, index < points.count {
             let point = points[index]
             return DailyUsageTotals(usage: point.usage, estimatedCostUSD: point.estimatedCostUSD)
         }
@@ -124,17 +222,27 @@ struct DailyUsageTable: View {
         HStack(spacing: PopoverMetrics.legendSwatchSpacing) {
             Text(caption)
                 .lineLimit(1)
+                // The caption is a *number* half the time — the hovered day's
+                // date, and a day count at rest — so it takes the monospaced
+                // digits every other figure in the table is set in. The
+                // headings beside it are words and keep the proportional font.
+                .font(PopoverMetrics.captionValueFont)
             Spacer(minLength: PopoverMetrics.rowSpacing)
-            Text("Tokens")
-                .frame(width: PopoverMetrics.tableTokenColumnWidth, alignment: .trailing)
-            Text("Estimated cost")
-                .frame(width: PopoverMetrics.tableCostColumnWidth, alignment: .trailing)
+            ForEach(Self.columnOrder, id: \.self) { column in
+                Text(column.heading)
+                    .frame(width: column.width, alignment: .trailing)
+            }
         }
         .font(PopoverMetrics.captionFont)
         .foregroundStyle(.secondary)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Window")
         .accessibilityValue(caption)
+    }
+
+    /// What VoiceOver reads for one row: both figures, in ``columnOrder``.
+    func spokenValue(of row: Row) -> String {
+        Self.columnOrder.map { $0.spokenValue(of: row) }.joined(separator: ", ")
     }
 
     private func tableRow(_ row: Row) -> some View {
@@ -150,20 +258,21 @@ struct DailyUsageTable: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
             Spacer(minLength: PopoverMetrics.rowSpacing)
-            Text(DisplayFormat.tokens(row.usage.totalTokens))
-                .font(PopoverMetrics.valueFont)
-                .foregroundStyle(.secondary)
-                .frame(width: PopoverMetrics.tableTokenColumnWidth, alignment: .trailing)
-            Text(DisplayFormat.cost(row.cost))
-                .font(PopoverMetrics.valueFont)
-                .frame(width: PopoverMetrics.tableCostColumnWidth, alignment: .trailing)
+            ForEach(Self.columnOrder, id: \.self) { column in
+                Text(column.text(of: row))
+                    .font(PopoverMetrics.valueFont)
+                    .foregroundStyle(column.isSecondary ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
+                    .frame(width: column.width, alignment: .trailing)
+            }
         }
         .accessibilityElement(children: .combine)
         // The caption is in the label, not just on the caption row: VoiceOver
         // reads one row at a time, and a bare "18k, $0.42" says neither which
         // band nor which window.
         .accessibilityLabel("\(row.label), \(caption)")
-        .accessibilityValue("\(DisplayFormat.tokens(row.usage.totalTokens)) tokens, \(DisplayFormat.cost(row.cost)) estimated")
+        // Spoken in column order, so what VoiceOver reads and what the eye
+        // sees can't disagree about which figure comes first.
+        .accessibilityValue(spokenValue(of: row))
         // The four-way token split, which used to hang on the old table's
         // cells. It follows the hovered day like everything else in the row, or
         // tooltip and row would contradict each other on screen.

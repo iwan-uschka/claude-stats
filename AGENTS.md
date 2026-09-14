@@ -238,7 +238,7 @@ Two independent tiers, deliberately decoupled:
            means *no source made a claim about this window* — the normal state
            between a rollover and that session's next API call, when no file
            mentions the window at all. The popover renders it as `—` /
-           `no reading` and the glyph bar draws empty with VoiceOver saying
+           `no data` and the glyph bar draws empty with VoiceOver saying
            unknown; nothing anywhere substitutes 0%. Both readers apply the
            same guard — at least one window, or `noQuotaSourceAvailable` —
            and neither grafts a window from the other source: a hook snapshot
@@ -401,13 +401,36 @@ Two independent tiers, deliberately decoupled:
 
 ## UI
 
+### Type
+
+**A number is set in monospaced digits; a word is not.** Every figure on the
+card sits in a right-aligned column of fixed width — the quota percentages, the
+reset countdowns, both chart axes, both table columns, the money on the
+usage-credits row — and a proportional `1` is narrower than a proportional `8`,
+so a column of proportional figures doesn't line up on its digits and a ticking
+countdown visibly reflows under a stationary pointer. The fonts are
+`PopoverMetrics.valueFont` (body size) and `captionValueFont` (caption size),
+each the `.monospacedDigit()` variant of the label font beside it, so a numeric
+caption still reads as a caption. The tables' window caption counts as a number:
+it is a date whenever a single day is shown.
+
+Labels, section titles and the column headings stay proportional — only digits
+gain from a fixed advance, and widening the letters of `Estimated cost` would
+cost the column the width it was measured for. The chart's y-label column is
+*measured* in `captionValueNSFont`, the same font the axis draws in: measuring
+proportionally would reserve a column narrower than the labels on screen.
+`PopoverFontTests` measures both halves of the rule.
+
 ### Colour
 
 **One colour, and it is Claude's terracotta.** Everything else is ink —
 primary, secondary, the system's own control colours. The brand colour is
-`PopoverMetrics.brandColor`, a per-appearance `NSColor` (`#A85E3E` light,
-`#E88A5C` dark; one literal for both measured 3.17:1 on a light card, under the
-4.5:1 AA floor for caption-size text). It is what paints the promo link, the
+`PopoverMetrics.brandColor`, a per-appearance `NSColor` built from `#A85E3E`
+light and `#E88A5C` dark (one literal for both measured 3.17:1 on a light card,
+under the 4.5:1 AA floor for caption-size text) and **muted by
+`PopoverMetrics.saturationReduction`**, so what actually paints is `#9B634B`
+light (≈4.90:1 on white) and `#D6906E` dark (≈6.05:1 on the card). It is what
+paints the promo link, the
 Claude mark in the popover header, **the filled part of every quota bar**, the
 staleness warning, the sample-data line, the error lines, and the menu bar's
 dev-build dot. There is no second alert hue: `.orange` for a warning, `.red` for
@@ -444,27 +467,40 @@ hue, strongest first, position 0 being the brand colour itself.
 chart took the first `count` of, so a three-band block sat on three adjacent
 steps of five and its bands were ≈1.28 apart whatever the block. It now spreads
 `count` bands across the *whole* bounded range, so the fewer the bands the
-further apart they sit. The ends are exactly the old ramp's first and last steps,
-so the bounds are unchanged — measured against white and the ≈`#232323` dark
-card, 4.84 → 1.80 in light and 6.15 → 2.29 in dark:
+further apart they sit. The ends are the old ramp's first and last steps, muted
+like everything else — measured against white and the ≈`#232323` dark card,
+4.90 → 1.79 in light and 6.05 → 2.26 in dark:
 
 | bands | light, on white | dark, on `#232323` |
 | --- | --- | --- |
-| 2 | 4.84 / 1.80 | 6.15 / 2.29 |
-| 3 | 4.84 / 2.88 / 1.80 | 6.15 / 4.05 / 2.29 |
-| 4 | 4.84 / 3.40 / 2.45 / 1.80 | 6.15 / 4.70 / 3.35 / 2.29 |
-| 5 | 4.84 / 3.69 / 2.88 / 2.27 / 1.80 | 6.15 / 5.03 / 4.05 / 3.04 / 2.29 |
+| 2 | 4.90 / 1.79 | 6.05 / 2.26 |
+| 3 | 4.90 / 2.87 / 1.79 | 6.05 / 3.89 / 2.26 |
+| 4 | 4.90 / 3.41 / 2.44 / 1.79 | 6.05 / 4.54 / 3.26 / 2.26 |
+| 5 | 4.90 / 3.72 / 2.87 / 2.25 / 1.79 | 6.05 / 4.89 / 3.89 / 2.98 / 2.26 |
 
 Five is the most the popover can ask for (four model families plus "Other"); the
-smallest step in that table is 1.22, and a sixth band would fall to ≈1.18, which
-is the honest cost of spreading. **Saturation moves with lightness**, so two
-neighbours differ in two dimensions rather than one: interpolated in HSL between
-the two end literals, the ramp runs 46% → 41% saturation as it lightens in light
-and 75% → 47% as it darkens in dark. (HSB, which is what `NSColor` reports and
-what the "not a grey" test measures, reads 0.63 → 0.22 in light; in dark it
-barely moves, 0.60 → 0.64, because both the chroma and the maximum it divides by
-fall together.) Held at the brand value instead, the darker dark-mode steps came
-out a vivid orange rather than terracotta.
+smallest step in that table is 1.24, and a sixth band would fall below the 1.2
+floor, which is the honest cost of spreading. **Saturation moves with
+lightness**, so two neighbours differ in two dimensions rather than one:
+interpolated in HSL between the two muted end literals, the ramp runs
+35% → 31% saturation as it lightens in light and 56% → 35% as it darkens in
+dark. (HSB, which is what `NSColor` reports and what the "not a grey" test
+measures, reads 0.51 → 0.17 in light; in dark it barely moves, 0.49 → 0.52,
+because both the chroma and the maximum it divides by fall together.) Held at
+the brand value instead, the darker dark-mode steps came out a vivid orange
+rather than terracotta.
+
+**The whole hue is muted 25%, at one place.** `PopoverMetrics.saturationReduction`
+multiplies the HSL saturation of the four literals above by 0.75 — hue and
+lightness untouched — and it is applied where `BandRamp` reads them, which is
+the only place they are read: the brand colour is the ramp's own strong end, so
+every bar, band, dot, link and warning line is muted by construction and no call
+site is tuned by hand. It costs the ramp its distance from grey rather than its
+contrast: the brand ink *gains* a little on the light card (4.84 → 4.90) and
+loses a little on the dark one (6.15 → 6.05), both still clear of the 4.5:1 AA
+floor, while the palest light band drops from 0.22 to 0.17 HSB saturation —
+which is why `PopoverColorTests` measures that end at a 0.15 floor instead of
+the 0.2 it held before.
 `PopoverColorTests` measures all of it, at every stack height the popover can
 draw; the literals are not to be nudged by eye in one appearance. The same call
 returns the same `NSColor` *instance*, which is not an optimisation: a dynamic
@@ -544,16 +580,44 @@ Click opens a popover:
                                     weekly rows no parentheses: the label column
                                     is 80 pt, sized to the payload-labelled rows
                                     (`Sonnet weekly`), and everything those two
-                                    gave up went to the bar, now 100 pt wide.
+                                    gave up went to the bar, now 123 pt wide.
                                     Tooltips and VoiceOver still say "5-hour
                                     window" — nothing competes for width there.
-5-hour      ░░░░░░░░░░  —      no reading
+                                    **The percentage and the countdown sit
+                                    flush against each other**, with no
+                                    `rowSpacing` between their columns: both are
+                                    right-aligned in columns wider than anything
+                                    they hold, so a frame gap on top of that
+                                    only pushed the percentage back against the
+                                    bar.
+                                    **The percentage's right edge sits 261 pt
+                                    from the row's leading edge**, which is the
+                                    number the column widths are fitted to
+                                    rather than a consequence of them — it was
+                                    242, and moving it right is what the bar's
+                                    123 pt (from 104) is made of. Every point
+                                    came from the countdown column, 70 → 51 pt,
+                                    and none of it was spent on the gaps or on
+                                    the percent column (still 42). Paying for
+                                    it took **both countdown placeholders**:
+                                    `reset pending` → `pending` (66.5 → 39.0 pt,
+                                    it was what sized the column) and
+                                    `no reading` → `no data` (51.2 → 36.2), the
+                                    latter because it shares its row with the em
+                                    dash and would have been left 0.8 pt clear
+                                    of it. What is left is genuinely pinned:
+                                    the label column by `Sonnet weekly` (76.2 of
+                                    80), the percent column by `99.9%` (34.6 of
+                                    42), the countdown column by the longest
+                                    countdown the formatter can make, `11d 11h`
+                                    (40.9 of 51).
+5-hour      ░░░░░░░░░░  —      no data
                                   ← how either of the two rows above renders
                                     while no quota source reports that window
                                     (`QuotaSnapshot.fiveHour == nil`) — after
                                     it rolled over and before the next API
                                     call, and for the no-snapshot-at-all state.
-                                    Empty track, em dash, "no reading": never
+                                    Empty track, em dash, "no data": never
                                     0%, which would be a number nobody
                                     reported.
 Fable weekly ░░░░░░░░░  0%
@@ -576,9 +640,17 @@ Usage credits ▨▨░░░░░░   €0.00 of €33.00
                                     rate-limit window. The value column is
                                     money (formatted from the payload's own
                                     `currency`/`exponent`), not a percentage,
-                                    and spans the percent + countdown columns:
+                                    and spans the percent + countdown columns
+                                    *and the gap in front of them* (101 pt):
                                     the monthly cap has no reported reset, so
-                                    there is no countdown. The tooltip names
+                                    there is no countdown. The gap is in that
+                                    span because the two columns alone are now
+                                    93 pt and the widest locale's figure
+                                    (`20,87 € of 33,00 €`) is 99.8 — borrowing
+                                    it is what keeps this row's bar the same
+                                    123 pt as the bars above, which is why the
+                                    row nests the bar and the value in a
+                                    zero-spacing stack. The tooltip names
                                     the monthly framing and says when
                                     `spend_limit_reached` is set.
 +50% weekly limits promo through Aug 31 · clau.de/cc-50-promo
@@ -616,7 +688,7 @@ Usage credits ▨▨░░░░░░   €0.00 of €33.00
                                     whitespace only — no divider (that line
                                     marks a top-level section) and no indent.
 ✕ other@example.com            ⌃  ← expanded: the same rows as above, same `—` /
-5-hour      ░░░░░░░░░░  —           "no reading" for an expired window, a
+5-hour      ░░░░░░░░░░  —           "no data" for an expired window, a
 7-day       ▓▓▓▓▓░░░░░ 56%          `cached` tag at the foot only if that group
                                     came from the backup source (it never does:
                                     statusline files are the only per-account
@@ -634,11 +706,11 @@ By source
 1M ┤
    ┼──┬───────┬───────┬───────┬────
    16. Aug. 23. Aug. 30. Aug. 6. Sept.
-Last 30 days            Tokens  Estimated cost
-● CLI                     14.9M          $24.51
-● VS Code                  3.5M           $5.77
-● SDK/agents              25.3M          $41.82
-  Total                   43.7M          $72.10
+Last 30 days    Estimated cost          Tokens
+● CLI                   $24.51           14.9M
+● VS Code                $5.77            3.5M
+● SDK/agents            $41.82           25.3M
+  Total                 $72.10           43.7M
       hovered: the caption reads `6. Sept.` and every number in the table is
       that day's; the chart draws a rule and a dot per band edge
                                   ← the first of two **symmetric blocks**: a
@@ -656,8 +728,9 @@ Last 30 days            Tokens  Estimated cost
                                     of which had to be labelled to be readable
                                     at all. Now every figure below the quota
                                     bars is the same thirty days, or the one day
-                                    under the pointer, and the caption row says
-                                    which.
+                                    under the pointer (or the one day the
+                                    `Latest day` preference rests on — see
+                                    "Settings"), and the caption row says which.
 
                                     **Two blocks answer two questions**: where
                                     do the tokens come from, and where does the
@@ -762,9 +835,26 @@ Last 30 days            Tokens  Estimated cost
                                       claimed which window the numbers are for,
                                       so changing it says they changed meaning.
                                       No floating tooltip over a 72 pt plot, and
-                                      no second styling vocabulary.
-                                    - The **column headings**, `Tokens` and
-                                      `Estimated cost`, sit over the two value
+                                      no second styling vocabulary. With the
+                                      `Latest day` preference set (see
+                                      "Settings") the resting caption is a date
+                                      too — the table is then showing one day,
+                                      and `Last 30 days` over one day's figures
+                                      would simply be wrong.
+                                    - **Cost first, tokens second.** The two
+                                      value columns used to run the other way.
+                                      Money is what a reader of this card comes
+                                      for and the wider column of the two, so
+                                      ending the rows on the narrow one leaves
+                                      the slack beside the labels, which is
+                                      where a sparkline at the head of a table
+                                      would have to go. One order for the
+                                      caption row, the value rows and VoiceOver
+                                      — `DailyUsageTable.columnOrder`, which is
+                                      also what carries each column's heading,
+                                      width and ink, so the three can't drift.
+                                    - The **column headings**, `Estimated cost`
+                                      and `Tokens`, sit over the two value
                                       columns. They are what let the token
                                       column drop the `tok` suffix every cell
                                       used to carry: said once instead of once
@@ -802,10 +892,13 @@ Last 30 days            Tokens  Estimated cost
                                       bug the "Other" band was added to fix.
                                     - Values are ``[DailyUsagePoint].summed()``
                                       over the window at rest, the hovered day's
-                                      point while hovering. No second pass over
-                                      the corpus either way: the points the
-                                      chart is already drawing are what gets
-                                      folded.
+                                      point while hovering — or the newest day's
+                                      at rest under the `Latest day` preference,
+                                      which is the same code path with the index
+                                      coming from the setting instead of the
+                                      pointer. No second pass over the corpus
+                                      any of those ways: the points the chart is
+                                      already drawing are what gets folded.
 
                                     **Hovering one block changes only that
                                     block.** Two `@State` days in `PopoverView`,
@@ -819,12 +912,12 @@ $4 ┤ ▁▂▅▃▂▆█▅▃▂▄▆█▃▂▄▅█▃▂▁▂▄▅�
 $2 ┤
    ┼──┬───────┬───────┬───────┬────
    16. Aug. 23. Aug. 30. Aug. 6. Sept.
-Last 30 days            Tokens  Estimated cost
-● Sonnet                  20.1M          $33.17
-● Opus                    14.9M          $24.51
-● Haiku                    4.8M           $7.93
-● Fable                    3.9M           $6.49
-  Total                   43.7M          $72.10
+Last 30 days    Estimated cost          Tokens
+● Sonnet                $33.17           20.1M
+● Opus                  $24.51           14.9M
+● Haiku                  $7.93            4.8M
+● Fable                  $6.49            3.9M
+  Total                 $72.10           43.7M
 78% cache reads — billed at 1/10 the input rate
                                   ← the second block: the same chart over the
                                     same days, stacking **estimated cost** per
@@ -1105,6 +1198,33 @@ real-but-old reading keeps the last numbers with a terracotta staleness warning.
 directory plus the legacy single file; `~/.claude.json` is Claude Code's, not
 ours — so the bars fall back to the cached-state numbers rather than going
 empty.
+
+### Settings
+
+Panes: General (launch at login), Display, Refresh (poll interval), Quota source
+(the statusline hook), About. Every preference is written through the moment it
+changes — there is no Apply button — and read back on the next launch from
+`UserDefaults` under a `de.bitgrip.claude-stats.` key. `AppModel` takes the
+defaults object as an init parameter, so a test exercises persistence in its own
+suite rather than in whatever domain the process happens to have.
+
+- **Display → Default range** (`AppModel.defaultDisplayRange`, a
+  `DefaultDisplayRange`): whether the two usage tables rest on `Last 30 days` —
+  the window summed, which is how the popover has always opened — or on
+  `Latest day`, the newest day the charts plot.
+  - **It moves the resting *reading*, not the window that is queried.** Both
+    charts still draw all thirty days: a one-day plot is a single point with no
+    shape to read, and the hover rule would have nothing left to move over. What
+    changes is which index the tables fold their points at, which is the same
+    code path hovering already used.
+  - **Hover still wins wherever it lands**, so this is a different default and
+    not a second mode with its own rules. "Latest" is resolved by position on
+    every render, never stored as a date, so midnight sliding the window moves
+    the reading along instead of stranding the table on a day that has dropped
+    out.
+  - An unrecognised stored value — an absent key, or one written by a version
+    that spelled the cases differently — falls back to `Last 30 days` rather
+    than leaving the popover with no setting at all.
 
 ## Tech / release
 

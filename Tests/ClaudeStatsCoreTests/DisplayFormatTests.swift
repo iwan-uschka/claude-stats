@@ -59,9 +59,9 @@ final class DisplayFormatTests: XCTestCase {
     }
 
     func testResetCountdownFallsBackWhenUnknownOrElapsed() {
-        XCTAssertEqual(DisplayFormat.resetCountdown(nil), "reset pending")
-        XCTAssertEqual(DisplayFormat.resetCountdown(0), "reset pending")
-        XCTAssertEqual(DisplayFormat.resetCountdown(-5), "reset pending")
+        XCTAssertEqual(DisplayFormat.resetCountdown(nil), "pending")
+        XCTAssertEqual(DisplayFormat.resetCountdown(0), "pending")
+        XCTAssertEqual(DisplayFormat.resetCountdown(-5), "pending")
     }
 
     func testResetCountdownUsesTheWindowsOwnDeadline() {
@@ -82,13 +82,13 @@ final class DisplayFormatTests: XCTestCase {
     /// point of ``QuotaSnapshot``'s optional windows.
     func testWindowColumnsForAnUnreportedWindow() {
         XCTAssertEqual(DisplayFormat.windowPercent(nil), "—")
-        XCTAssertEqual(DisplayFormat.windowCountdown(nil, from: Date()), "no reading")
-        // Even the row that suppresses the "reset pending" placeholder still
-        // says "no reading": the absence of the window outranks the absence of
-        // its reset stamp.
+        XCTAssertEqual(DisplayFormat.windowCountdown(nil, from: Date()), "no data")
+        // Even the row that suppresses the `pending` placeholder still says
+        // "no data": the absence of the window outranks the absence of its
+        // reset stamp.
         XCTAssertEqual(
             DisplayFormat.windowCountdown(nil, from: Date(), showsPendingResetPlaceholder: false),
-            "no reading"
+            "no data"
         )
     }
 
@@ -110,14 +110,14 @@ final class DisplayFormatTests: XCTestCase {
         let now = Date()
         let window = QuotaWindow(percentUsed: 0)
 
-        XCTAssertEqual(DisplayFormat.windowCountdown(window, from: now), "reset pending")
+        XCTAssertEqual(DisplayFormat.windowCountdown(window, from: now), "pending")
         XCTAssertEqual(
             DisplayFormat.windowCountdown(window, from: now, showsPendingResetPlaceholder: false),
             ""
         )
         // An elapsed deadline is the same case as no deadline.
         let elapsed = QuotaWindow(percentUsed: 0, resetsAt: now.addingTimeInterval(-5))
-        XCTAssertEqual(DisplayFormat.windowCountdown(elapsed, from: now), "reset pending")
+        XCTAssertEqual(DisplayFormat.windowCountdown(elapsed, from: now), "pending")
         XCTAssertEqual(
             DisplayFormat.windowCountdown(elapsed, from: now, showsPendingResetPlaceholder: false),
             ""
@@ -150,18 +150,18 @@ final class DisplayFormatTests: XCTestCase {
 
     func testTokenCountsMatchTheMockup() {
         XCTAssertEqual(DisplayFormat.tokens(2_100_000), "2.1M")
-        XCTAssertEqual(DisplayFormat.tokens(180_000), "180k")
-        XCTAssertEqual(DisplayFormat.tokens(640_000), "640k")
-        XCTAssertEqual(DisplayFormat.tokens(90_000), "90k")
+        XCTAssertEqual(DisplayFormat.tokens(180_000), "180.0k")
+        XCTAssertEqual(DisplayFormat.tokens(640_000), "640.0k")
+        XCTAssertEqual(DisplayFormat.tokens(90_000), "90.0k")
     }
 
-    func testTokenCountsTrimTrailingZeroDecimal() {
+    func testTokenCountsAlwaysKeepOneDecimal() {
         XCTAssertEqual(DisplayFormat.tokens(12_400), "12.4k")
-        XCTAssertEqual(DisplayFormat.tokens(12_000), "12k")
-        XCTAssertEqual(DisplayFormat.tokens(1_000_000), "1M")
+        XCTAssertEqual(DisplayFormat.tokens(12_000), "12.0k")
+        XCTAssertEqual(DisplayFormat.tokens(1_000_000), "1.0M")
         XCTAssertEqual(DisplayFormat.tokens(1_050_000), "1.1M")
         // The ladder has to roll over, or a busy corpus reads `2000M`.
-        XCTAssertEqual(DisplayFormat.tokens(2_000_000_000), "2G")
+        XCTAssertEqual(DisplayFormat.tokens(2_000_000_000), "2.0G")
         XCTAssertEqual(DisplayFormat.tokens(2_140_000_000), "2.1G")
         XCTAssertEqual(DisplayFormat.tokens(999_900_000), "999.9M")
         XCTAssertEqual(DisplayFormat.tokens(3_500_000_000_000), "3.5T")
@@ -188,7 +188,7 @@ final class DisplayFormatTests: XCTestCase {
         )
         XCTAssertEqual(
             DisplayFormat.tokenSplit(usage),
-            "in 9.9k · out 4.7M · cache write 36.3M · cache read 453M"
+            "in 9.9k · out 4.7M · cache write 36.3M · cache read 453.0M"
         )
     }
 

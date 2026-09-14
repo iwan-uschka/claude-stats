@@ -474,8 +474,10 @@ struct DailyUsageChart: View {
             AxisMarks(values: tickDays) { value in
                 AxisTick(length: PopoverMetrics.chartTickLength, stroke: StrokeStyle(lineWidth: 0.5))
                     .foregroundStyle(.primary)
+                // Dated ticks are numbers: monospaced digits so `6. Sept.` and
+                // `16. Aug.` sit on the same stems as the labels either side.
                 AxisValueLabel(format: PopoverChartHover.dayLabelFormat)
-                    .font(PopoverMetrics.captionFont)
+                    .font(PopoverMetrics.captionValueFont)
                     .foregroundStyle(.primary)
             }
         }
@@ -483,7 +485,10 @@ struct DailyUsageChart: View {
             AxisMarks(position: .leading, values: yValues) { value in
                 AxisValueLabel {
                     Text(yLabels.indices.contains(value.index) ? yLabels[value.index] : "")
-                        .font(PopoverMetrics.captionFont)
+                        // Monospaced digits, and measured in the same font
+                        // below: a column of `$1.5k / $1.0k / $0.5k` is read
+                        // as a scale, which only works if the digits line up.
+                        .font(PopoverMetrics.captionValueFont)
                         .foregroundStyle(.primary)
                         .frame(width: yLabelWidth, alignment: .trailing)
                 }
@@ -606,10 +611,14 @@ enum PopoverChartAxis {
         return stride(from: 0, through: top + step / 2, by: step).map { Swift.min($0, top) }
     }
 
-    /// Width of the widest label in `labels`, in the font the axis draws them.
+    /// Width of the widest label in `labels`, in the font the axis draws them —
+    /// ``PopoverMetrics/captionValueNSFont``, the monospaced-digit counterpart
+    /// of what `AxisValueLabel` is set in. Measuring in the proportional font
+    /// would under-reserve the shared y-label column for any label whose digits
+    /// are narrow ones.
     static func yLabelWidth(of labels: [String]) -> CGFloat {
         labels
-            .map { ($0 as NSString).size(withAttributes: [.font: PopoverMetrics.captionNSFont]).width }
+            .map { ($0 as NSString).size(withAttributes: [.font: PopoverMetrics.captionValueNSFont]).width }
             .max() ?? 0
     }
 }
