@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.9.10] - 2026-09-14
+
 ### Added
 - The popover's usage sections are now two matching blocks, "By source" and
   "By model": a 30-day stacked chart each — tokens per source, estimated cost
