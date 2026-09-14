@@ -579,15 +579,16 @@ Usage credits ▨▨░░░░░░   €0.00 of €33.00
                                     Absent entirely on a one-account machine.
 
 By source
-4M ┤
+3M ┤
 2M ┤ ▁▂▅▃▂▆█▅▃▂▄▆█▃▂▄▅█▃▂▁▂▄▅█▆▃▂▁▃
- 0 ┼──┬───────┬───────┬───────┬────
+1M ┤
+   ┼──┬───────┬───────┬───────┬────
    16. Aug. 23. Aug. 30. Aug. 6. Sept.
 Last 30 days            Tokens  Estimated cost
-● CLI                     18.2M          $30.04
-● VS Code                     0           $0.00
-● SDK/agents              31.0M          $51.15
-  Total                   49.2M          $81.19
+● CLI                     14.9M          $24.51
+● VS Code                  3.5M           $5.77
+● SDK/agents              25.3M          $41.82
+  Total                   43.7M          $72.10
       hovered: the caption reads `6. Sept.` and every number in the table is
       that day's; the chart draws a rule and a dot per band edge
                                   ← the first of two **symmetric blocks**: a
@@ -719,16 +720,17 @@ Last 30 days            Tokens  Estimated cost
 
 By model
 $6 ┤
-$3 ┤ ▁▂▅▃▂▆█▅▃▂▄▆█▃▂▄▅█▃▂▁▂▄▅█▆▃▂▁▃
- 0 ┼──┬───────┬───────┬───────┬────
+$4 ┤ ▁▂▅▃▂▆█▅▃▂▄▆█▃▂▄▅█▃▂▁▂▄▅█▆▃▂▁▃
+$2 ┤
+   ┼──┬───────┬───────┬───────┬────
    16. Aug. 23. Aug. 30. Aug. 6. Sept.
 Last 30 days            Tokens  Estimated cost
-● Sonnet                  22.6M          $37.35
-● Opus                    16.7M          $27.60
-● Haiku                    5.4M           $8.93
-● Fable                    4.4M           $7.31
-  Total                   49.2M          $81.19
-81% cache reads — billed at 1/10 the input rate
+● Sonnet                  20.1M          $33.17
+● Opus                    14.9M          $24.51
+● Haiku                    4.8M           $7.93
+● Fable                    3.9M           $6.49
+  Total                   43.7M          $72.10
+78% cache reads — billed at 1/10 the input rate
                                   ← the second block: the same chart over the
                                     same days, stacking **estimated cost** per
                                     model family instead of tokens per source.
