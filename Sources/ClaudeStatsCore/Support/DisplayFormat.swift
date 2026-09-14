@@ -74,12 +74,24 @@ public enum DisplayFormat {
 
     // MARK: - Numbers
 
-    /// Compact token count: `2.1M`, `640k`, `12.4k`, `840`. One decimal place,
+    /// Compact token count: `2.1G`, `2.1M`, `640k`, `840`. One decimal place,
     /// with a trailing `.0` trimmed so round numbers stay short.
+    ///
+    /// `G` and `T`, not `B` and `Tn`: the ladder starts at `k` and `M`, which
+    /// are SI prefixes, so the next two are giga and tera. It carries as far as
+    /// tera because a ladder that stops rolls over instead — 2 billion tokens
+    /// read `2000M` until `G` was added, and a cache-read-heavy corpus reaches
+    /// billions in a way it never reaches trillions.
     public static func tokens(_ count: Int) -> String {
         let magnitude = abs(count)
         let sign = count < 0 ? "-" : ""
 
+        if magnitude >= 1_000_000_000_000 {
+            return sign + scaled(Double(magnitude) / 1_000_000_000_000) + "T"
+        }
+        if magnitude >= 1_000_000_000 {
+            return sign + scaled(Double(magnitude) / 1_000_000_000) + "G"
+        }
         if magnitude >= 1_000_000 {
             return sign + scaled(Double(magnitude) / 1_000_000) + "M"
         }

@@ -160,6 +160,11 @@ final class DisplayFormatTests: XCTestCase {
         XCTAssertEqual(DisplayFormat.tokens(12_000), "12k")
         XCTAssertEqual(DisplayFormat.tokens(1_000_000), "1M")
         XCTAssertEqual(DisplayFormat.tokens(1_050_000), "1.1M")
+        // The ladder has to roll over, or a busy corpus reads `2000M`.
+        XCTAssertEqual(DisplayFormat.tokens(2_000_000_000), "2G")
+        XCTAssertEqual(DisplayFormat.tokens(2_140_000_000), "2.1G")
+        XCTAssertEqual(DisplayFormat.tokens(999_900_000), "999.9M")
+        XCTAssertEqual(DisplayFormat.tokens(3_500_000_000_000), "3.5T")
     }
 
     func testTokenCountsBelowAThousandStayExact() {
