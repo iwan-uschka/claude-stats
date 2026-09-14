@@ -224,12 +224,19 @@ final class PopoverChartHoverTests: XCTestCase {
         let readings = [
             DisplayFormat.unknownWindowCountdown,
             DisplayFormat.resetCountdown(nil),
+            // The longest countdown the formatter can make, which is what the
+            // column was sized to.
+            DisplayFormat.resetCountdown(11 * 86_400 + 11 * 3600),
             DisplayFormat.resetCountdown(6 * 86_400 + 23 * 3600),
             DisplayFormat.resetCountdown(2 * 3600 + 14 * 60),
         ]
         for reading in readings {
             XCTAssertLessThanOrEqual(
-                width(reading, captionFont),
+                // ``WindowBarView`` draws this column in the monospaced-digit
+                // caption font, and monospacing widens the narrow digits — a
+                // proportional measurement would under-read the very strings
+                // this guard exists to keep inside 51 pt.
+                width(reading, PopoverMetrics.captionValueNSFont),
                 PopoverMetrics.countdownColumnWidth,
                 "\(reading) overflows the countdown column"
             )
@@ -239,8 +246,15 @@ final class PopoverChartHoverTests: XCTestCase {
     /// The bar is whatever the row's three fixed columns and the two gaps
     /// around it don't take — ``UsageBar`` is greedy — so a column widened for
     /// its own sake is width taken off the bar. ``PopoverMetrics/quotaBarWidth``
-    /// is that leftover, and this is what keeps the constant, the docs and the
-    /// row that actually lays out agreeing.
+    /// is that leftover, and this is what keeps the constant and the docs
+    /// agreeing.
+    ///
+    /// The equality below restates ``PopoverMetrics/quotaBarWidth``'s own
+    /// formula, so it checks *internal consistency* — that the leftover is
+    /// still spelled out of the same three columns and two gaps — rather than a
+    /// rendered row: the constant is deliberately not applied, so no SwiftUI
+    /// layout runs here. The bound under it is the part that catches a column
+    /// growing at the bar's expense.
     func testTheBarGetsWhatTheQuotaRowsFixedColumnsLeave() {
         let fixed = PopoverMetrics.labelColumnWidth
             + PopoverMetrics.percentColumnWidth
@@ -320,10 +334,21 @@ final class PopoverChartHoverTests: XCTestCase {
         // of it is the column width less the string.
         // Measured in the font the column is *drawn* in — monospacing widens
         // some digits, and `11d 11h` is the widest string it holds.
-        for countdown in ["11d 11h", "6d 23h", "2h 14m", "88m", "pending", "no data"] {
+        //
+        // `59m` is the minutes-only maximum the formatter can reach, not a
+        // two-digit number picked for width: ``DisplayFormat/duration(_:)``
+        // only returns a bare `\(minutes)m` once the hours are zero, and the
+        // minutes it takes from the remainder are `0...59` there. Anything
+        // longer comes back as `2h 14m`, which is already in this list.
+        for countdown in ["11d 11h", "6d 23h", "2h 14m", "59m", "pending", "no data"] {
             let gap = PopoverMetrics.countdownColumnWidth
                 - width(countdown, PopoverMetrics.captionValueNSFont)
-            XCTAssertGreaterThanOrEqual(gap, 10, "\(countdown) crowds the reading beside it")
+            // 9.5 rather than 10: `11d 11h` is the binding string at 40.9 of
+            // the column's 51 pt, so the real margin is 10.1 pt and a floor of
+            // 10 leaves a tenth of a point of headroom — close enough that a
+            // font-metric change between macOS versions could fail this without
+            // the layout having moved.
+            XCTAssertGreaterThanOrEqual(gap, 9.5, "\(countdown) crowds the reading beside it")
         }
     }
 
@@ -347,7 +372,10 @@ final class PopoverChartHoverTests: XCTestCase {
     /// the day under the pointer — so neither state may truncate.
     func testTheCaptionRowFitsInBothOfItsStates() {
         let captions = ["Last 30 days", "Last 8 days"] + days(366).map { PopoverChartHover.label(for: $0) }
-        let widest = captions.map { width($0, captionFont) }.max() ?? 0
+        // Both states are half number, so ``DailyUsageTable``'s caption draws
+        // monospaced — measured in the proportional font this would under-read
+        // every caption that carries digits.
+        let widest = captions.map { width($0, PopoverMetrics.captionValueNSFont) }.max() ?? 0
 
         let row = widest
             + PopoverMetrics.rowSpacing

@@ -121,7 +121,7 @@ public enum DisplayFormat {
     /// One SI unit for a whole axis, decided by its largest value.
     ///
     /// ``tokens(_:)`` scales every number on its own, which is right for a row
-    /// — `640k` beside `2.1G` are two different readings. On an axis it is
+    /// — `640.0k` beside `2.1G` are two different readings. On an axis it is
     /// wrong: `1.5G / 1G / 500M / 0` makes the reader convert `500M` into
     /// `0.5G` to see that the steps are even. One unit for the column, and the
     /// steps read themselves: `1.5G / 1.0G / 0.5G / 0`.
@@ -191,7 +191,7 @@ public enum DisplayFormat {
     // MARK: - Token splits
 
     /// The four-way breakdown behind a token total, for a tooltip:
-    /// `in 9.9k · out 4.7M · cache write 36.3M · cache read 453M`.
+    /// `in 9.9k · out 4.7M · cache write 36.3M · cache read 453.0M`.
     public static func tokenSplit(_ usage: TokenUsage) -> String {
         "in \(tokens(usage.inputTokens))"
             + " · out \(tokens(usage.outputTokens))"

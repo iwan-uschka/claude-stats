@@ -206,9 +206,15 @@ enum PopoverMetrics {
     /// widening the letters of `Estimated cost` would cost the column the
     /// width it was measured for.
     static let captionValueFont = Font.system(size: captionFontSize).monospacedDigit()
-    /// The caption font as an `NSFont`, for measuring a label before SwiftUI
-    /// has laid it out — see ``PopoverChartAxis/yLabelWidth(of:)``. Built from
-    /// the same size as ``captionFont`` so the two can't drift apart.
+    /// The proportional caption font as an `NSFont`, kept as the measuring
+    /// counterpart of ``captionFont`` — and as what ``PopoverFontTests``
+    /// compares ``captionValueNSFont`` against, since the whole rule is that
+    /// the two differ. Built from the same size as ``captionFont`` so they
+    /// can't drift apart.
+    ///
+    /// Nothing in the popover measures in it: the one column that is measured
+    /// before layout is the chart's y-labels, and those draw monospaced — see
+    /// ``captionValueNSFont`` and ``PopoverChartAxis/yLabelWidth(of:)``.
     static let captionNSFont = NSFont.systemFont(ofSize: captionFontSize)
     /// ``captionValueFont`` as an `NSFont`, and the one the chart axis measures
     /// its labels in — the axis draws them monospaced, so measuring them
@@ -522,17 +528,4 @@ private extension NSAppearance {
     /// a name compare, so a vibrant or high-contrast variant resolves to the
     /// side of the pair it actually looks like.
     var isDarkPopover: Bool { bestMatch(from: [.aqua, .darkAqua]) == .darkAqua }
-}
-
-private extension NSColor {
-    /// An opaque sRGB colour from a `0xRRGGBB` literal, so a ramp reads as the
-    /// hex values it was measured as.
-    convenience init(srgbHex hex: UInt32) {
-        self.init(
-            srgbRed: CGFloat((hex >> 16) & 0xFF) / 255,
-            green: CGFloat((hex >> 8) & 0xFF) / 255,
-            blue: CGFloat(hex & 0xFF) / 255,
-            alpha: 1
-        )
-    }
 }

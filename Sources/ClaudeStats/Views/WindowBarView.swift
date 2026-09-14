@@ -70,6 +70,10 @@ struct WindowBarView: View {
                     // `2h 9m`, and keep the column of them right-aligned on the
                     // same stems.
                     .font(PopoverMetrics.captionValueFont)
+                    // Pinned like the percentage beside it: the column is sized
+                    // to `11d 11h`, and a payload with a far-future `resets_at`
+                    // must truncate rather than grow the row to two lines.
+                    .lineLimit(1)
                     .foregroundStyle(.secondary)
                     .frame(width: PopoverMetrics.countdownColumnWidth, alignment: .trailing)
             }

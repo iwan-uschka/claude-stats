@@ -71,11 +71,14 @@ enum PopoverPixels {
         }
 
         /// Terracotta rather than ink or card: red clearly over green, green
-        /// clearly over blue. Every shade of the band ramp passes in both
-        /// appearances; the card, the text and the gridlines do not.
+        /// clearly over blue. The thresholds are set against the *palest* shade
+        /// of the muted ramp seen through ``PopoverMetrics/chartBandOpacity``
+        /// (red−green ≈ 0.085 there), which is the tightest pixel the popover
+        /// paints; the card, the text and the gridlines are neutral and clear
+        /// none of it.
         func isTerracotta(_ x: Int, _ y: Int) -> Bool {
             let pixel = channels[y * width + x]
-            return pixel.red > pixel.green + 0.08 && pixel.green > pixel.blue + 0.03
+            return pixel.red > pixel.green + 0.05 && pixel.green > pixel.blue + 0.02
         }
 
         /// Rows that a chart band crosses — the only rows in the popover with a

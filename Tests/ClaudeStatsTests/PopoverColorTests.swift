@@ -135,7 +135,7 @@ final class PopoverColorTests: XCTestCase {
             )
             XCTAssertEqual(
                 painted.saturation,
-                unmuted.saturation * (1 - PopoverMetrics.saturationReduction),
+                unmuted.saturation * CGFloat(1 - PopoverMetrics.saturationReduction),
                 accuracy: 0.005,
                 "\(name.rawValue) is not the brand hue at three quarters saturation"
             )
@@ -151,7 +151,7 @@ final class PopoverColorTests: XCTestCase {
             (NSAppearance.Name.aqua, (strong: 0xA85E3E, pale: 0xDCBAAB)),
             (.darkAqua, (strong: 0xE88A5C, pale: 0x844C30)),
         ] {
-            let expected = 1 - PopoverMetrics.saturationReduction
+            let expected = CGFloat(1 - PopoverMetrics.saturationReduction)
             let strong = Self.hsl(of: try resolved(PopoverMetrics.chartBandNSColor(0, of: 2), name))
             let pale = Self.hsl(of: try resolved(PopoverMetrics.chartBandNSColor(1, of: 2), name))
             XCTAssertEqual(

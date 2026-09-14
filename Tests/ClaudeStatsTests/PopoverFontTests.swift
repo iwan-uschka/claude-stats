@@ -70,7 +70,7 @@ final class PopoverFontTests: XCTestCase {
         // that is the widest string in this column — `11d 11h`, at 40.9 of the
         // column's 51 pt. So this is the measurement that sizes it, not a
         // re-check of one taken in the proportional font.
-        for text in ["pending", "no data", "2h 14m", "6d 23h", "11d 11h", "88m"] {
+        for text in ["pending", "no data", "2h 14m", "6d 23h", "11d 11h", "59m"] {
             XCTAssertLessThanOrEqual(
                 width(text, PopoverMetrics.captionValueNSFont),
                 PopoverMetrics.countdownColumnWidth,

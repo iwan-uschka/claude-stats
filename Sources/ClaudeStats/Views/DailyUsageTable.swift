@@ -68,7 +68,10 @@ struct DailyUsageTable: View {
     /// width, the figure and what VoiceOver says all belong to the same column,
     /// and the caption row and the value rows have to agree on their order —
     /// which they can only do by construction if there is one order to read.
-    enum Column: CaseIterable {
+    /// `Hashable` for the `ForEach(Self.columnOrder, id: \.self)` the rows and
+    /// the caption row are both built from, and for the tests that assert the
+    /// order is the whole of ``allCases``.
+    enum Column: CaseIterable, Hashable {
         case estimatedCost
         case tokens
 
