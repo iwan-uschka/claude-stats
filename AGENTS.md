@@ -370,15 +370,22 @@ Two independent tiers, deliberately decoupled:
      source is a `0` row the popover shows), while the `nil` key of either is
      present **only** when such usage exists, so the chart's "Other" band never
      appears over nothing. `bySource` used to drop unrecognised entrypoints, the
-     rule `EntrypointBreakdown` (the 5h numbers) still follows; that is why the
-     source stack fell short of the total beside it.
+     rule `EntrypointBreakdown` still follows; that is why the source stack once
+     fell short of the total beside it. Nothing in the UI reads that breakdown
+     any more — see the popover mock — so the rule now survives only inside the
+     data layer's own query.
    - `[DailyUsagePoint].summed()` folds a series back into one
      `DailyUsageTotals` — the whole-window reading a table under a chart shows,
      tokens split and cost, without a second pass over the corpus.
-   - A cell carries **tokens and cost**, which is why "Estimated cost" could be
-     added as a pure UI change: the spend was already in the buckets. Keep it
-     that way — a second accumulation for a second chart would mean a second
-     pass over the corpus.
+   - A cell carries **tokens and cost**, which is why the popover can stack
+     spend and why both of its tables show tokens *and* money without a second
+     accumulation: it was already in the buckets. Keep it that way — a second
+     pass over the corpus is what this shape exists to avoid. It is also what
+     let one `dailyUsage(days:)` replace the three windowed queries the popover
+     used to make per reload (`entrypointBreakdown`, `modelUsage(last24h:)`,
+     `estimatedCostToday()`), each of which walked tens of thousands of
+     `UsageEvent`s on the main actor. All three are still on `UsageStoring`; no
+     view calls them.
 
 ### Explicit non-goals (v1)
 
@@ -406,10 +413,10 @@ dot. There is no second alert hue: `.orange` for a warning, `.red` for an error
 and terracotta for a link put three colours on a card whose vocabulary is
 "Claude" versus "ink", and the words already say which of the three a line is.
 
-**Only the chart bands and the legend dots that point at them may use a
+**Only the chart bands and the table dots that point at them may use a
 *shade*** — `PopoverMetrics.chartBandColors`, five steps of the same hue,
-strongest first, the first step being the brand colour itself (which is also
-the cost line's ink). The ramp is bounded rather than running to white or
+strongest first, the first step being the brand colour itself. The ramp is
+bounded rather than running to white or
 black: measured against white and the ≈`#232323` dark card it steps
 4.84 / 3.77 / 2.94 / 2.31 / 1.80 and 6.15 / 4.79 / 3.75 / 2.92 / 2.29, about a
 factor of 1.28 apart, which is what lets two touching bands be told apart while
@@ -450,7 +457,7 @@ Click opens a popover:
 ```
 ✓ me@example.com                cached
                                   ← the quota block's section title, the same
-                                    shape as "Tokens by source" and "Costs by model" below:
+                                    shape as "By source" and "By model" below:
                                     title left, tag right. The title names the
                                     account the rows describe, from
                                     `~/.claude.json`'s `oauthAccount` (login
@@ -571,441 +578,285 @@ Usage credits ▨▨░░░░░░   €0.00 of €33.00
                                     bars above and still has a live window.
                                     Absent entirely on a one-account machine.
 
-Tokens by source
+By source
 4M ┤
 2M ┤ ▁▂▅▃▂▆█▅▃▂▄▆█▃▂▄▅█▃▂▁▂▄▅█▆▃▂▁▃
  0 ┼──┬───────┬───────┬───────┬────
    16. Aug. 23. Aug. 30. Aug. 6. Sept.
-● CLI 18k   ● VS Code 0   ● SDK 40.6k   5h
-      hovered: title row gains `20. Aug.`, the chips read that day, `5h` goes
-                                  ← a stacked daily area chart of the last 30
-                                    days, one band per entrypoint, plus one
-                                    legend chip per band carrying that source's
-                                    **five-hour** token count.
+Last 30 days            Tokens  Estimated cost
+● CLI                     18.2M          $30.04
+● VS Code                     0           $0.00
+● SDK/agents              31.0M          $51.15
+  Total                   49.2M          $81.19
+      hovered: the caption reads `6. Sept.` and every number in the table is
+      that day's; the chart draws a rule and a dot per band edge
+                                  ← the first of two **symmetric blocks**: a
+                                    stacked daily area chart of the last 30
+                                    days, one band per entrypoint, and a table
+                                    of the same window's numbers under it.
 
-                                    This replaced a 3×3 table (one row per
-                                    entrypoint, one column per `TimeWindow`).
-                                    The `24h` and `7d` columns were integrals
-                                    over ranges the x-axis now covers — the
-                                    last point and the last seven — so they
-                                    went. `5h` did not: a daily chart has no
-                                    intra-day resolution, it is the only
-                                    sub-day reading in the popover, and it is
-                                    the machine-local counterpart to the
-                                    account-wide five-hour quota bar above. So
-                                    it survives as the legend's value rather
-                                    than as a column. (The table in turn had
-                                    replaced a segmented picker with
-                                    peak-relative bars, which compared rows
-                                    inside one window and said nothing across
-                                    windows.)
+                                    **One window, one hover rule, for every
+                                    local number in the popover.** That is the
+                                    whole reorganisation. This section used to
+                                    caption a 30-day chart with five-hour
+                                    counts, "Costs by model" was tagged
+                                    `fixed 24h`, and "Estimated cost" ended in a
+                                    `Today` row — four windows on one card, three
+                                    of which had to be labelled to be readable
+                                    at all. Now every figure below the quota
+                                    bars is the same thirty days, or the one day
+                                    under the pointer, and the caption row says
+                                    which.
 
-                                    Every dot is drawn in plain primary ink
-                                    rather than in its own band's: a dot has to
-                                    read against whichever band it lands on, and
-                                    the palest shade sits at about 1.8:1 against
-                                    the card. The dots are markers, not more
-                                    data, and carry the same weight as the cost
-                                    chart's single one — which is also why they
-                                    are the one thing in these charts that is
-                                    not terracotta. Two dots still merge where a
-                                    band is thin — about 330k tokens of a 4M
-                                    axis — which is the cost of asking a stacked
-                                    chart for a per-band readout.
+                                    **Two blocks answer two questions**: where
+                                    do the tokens come from, and where does the
+                                    money go. Same shape twice on purpose — same
+                                    chart type, same columns in the same places,
+                                    same stack order, same hover — so the second
+                                    costs no reading effort once the first is
+                                    understood, and the two `Total` rows can be
+                                    compared straight down the card. They are
+                                    two splits of one ``DailyUsageHistory``, so
+                                    those totals are the same number by
+                                    construction, and a test says so.
 
-                                    One hue, five shades of it — never five
-                                    colours: see "Colour" above. Bands are `.monotone`, never
-                                    `.catmullRom`: a spline through spiky daily
-                                    counts overshoots, and on a stack an
-                                    overshoot dips below the band underneath,
-                                    drawing usage that never happened.
+                                    The bands are ``DailyUsageSeries``:
+                                    `sources(from:)` here, `models(from:)`
+                                    below, both indexing
+                                    ``PopoverMetrics.chartBandColors`` by stack
+                                    position. One hue, five shades of it — never
+                                    five colours: see "Colour". Bands are
+                                    `.monotone`, never `.catmullRom`: a spline
+                                    through spiky daily counts overshoots, and
+                                    on a stack an overshoot dips below the band
+                                    underneath, drawing usage that never
+                                    happened.
 
-                                    Every entrypoint is always listed, at 0 if
-                                    need be — a silent source keeps a band and a
-                                    chip rather than vanishing. Hovering a chip
-                                    shows that source's full five-hour token
-                                    split, which is where the table's per-cell
-                                    tooltip went.
+                                    **Every entrypoint is always listed**, at 0
+                                    if need be — a silent source keeps a band and
+                                    a row rather than vanishing, because "VS
+                                    Code: 0" is a reading about a tool the user
+                                    either uses or doesn't. The model split
+                                    below does the opposite and lists only the
+                                    families the window holds; the asymmetry
+                                    follows the data (``bySource`` is dense over
+                                    `Entrypoint.allCases`, ``byModelFamily``
+                                    is not), and a zero row for a model this
+                                    account never touched would say nothing.
 
-                                    A window holding usage from an `entrypoint`
-                                    this version doesn't recognise grows a
-                                    fourth band, **"Other", last, i.e. on top**
-                                    — so the bands sum to the day's total, the
-                                    way the model split always has. Only when
-                                    there is such usage: a bucket that can
-                                    appear between two polls goes on top so it
-                                    never shuffles the named bands under it.
-                                    Its chip reads `—` at rest, not `0`: the
-                                    five-hour `EntrypointBreakdown` still drops
-                                    those events, so there is no number to show
-                                    until the pointer puts the chip on a day.
+                                    A window holding usage this version doesn't
+                                    recognise — an unknown `entrypoint` here, an
+                                    unknown model ID below — grows an extra band,
+                                    **"Other", last, i.e. on top**, so the bands
+                                    sum to the day's total. Only when there is
+                                    such usage: a bucket that can appear between
+                                    two polls goes on top so it never shuffles
+                                    the named bands under it. It is a real row
+                                    now, with a real number in both columns —
+                                    the `—` it used to read at rest was an
+                                    artefact of the five-hour breakdown dropping
+                                    those events, and that breakdown is gone.
 
-                                    Both axes are drawn, sparsely: without a
-                                    y-axis the bands show shape but no
-                                    magnitude, and without dated x-ticks a spike
-                                    can't be tied to a day — but thirty dated
-                                    labels across a 340 pt popover would be
-                                    mush, so it is one label a week and three
-                                    or four round values up the y. The y-axis
-                                    draws **horizontal lines but no ticks** —
-                                    the line already reaches the label, and a
-                                    stub in front of it only thickens the left
-                                    margin. The lines are `RuleMark`s spanning
-                                    the first day to the last, not
-                                    `AxisGridLine`s: a gridline spans the whole
-                                    plot, gutter included, so it overhangs the
-                                    data it is there to be read against.
-                                    **X-ticks stop four days
-                                    short of the right edge**: a label starts at
-                                    its tick, runs to the right of it, and is
-                                    truncated at the chart's trailing bound, so
-                                    a tick any closer renders as `1…` no matter
-                                    how the plot is inset (tried: padding the
-                                    chart, then padding the plot area — neither
-                                    helps, the label has nowhere to sit). Nothing is lost by it, since
-                                    the right edge of a trailing window is always
-                                    today.
+                                    **The table.** A caption row, one row per
+                                    band in stack order, and a `Total`.
 
-                                    Drawn axes still don't make a chart legible
-                                    to VoiceOver, so it carries a real
-                                    `AXChartDescriptor` — one series per source,
-                                    one point per day, y-axis reaching the
-                                    tallest *stacked* day — rather than being an
-                                    unlabelled image. Its value formatter guards
-                                    non-finite input and clamps to 2^53, not to
-                                    `Double(Int.max)` (which rounds up to 2^63
-                                    and traps): the framework calls it with
-                                    probe values of its own choosing, and both
-                                    traps were live crashes.
+                                    - The **caption** is `Last 30 days` at rest
+                                      (counted off the history — a Mac with
+                                      younger logs charts fewer days and the
+                                      caption says so) and the hovered day's
+                                      date while the pointer is in *this
+                                      block's* chart. Swapping it is the whole
+                                      hover disclosure: the caption already
+                                      claimed which window the numbers are for,
+                                      so changing it says they changed meaning.
+                                      No floating tooltip over a 72 pt plot, and
+                                      no second styling vocabulary.
+                                    - The **column headings**, `Tokens` and
+                                      `Estimated cost`, sit over the two value
+                                      columns. They are what let the token
+                                      column drop the `tok` suffix every cell
+                                      used to carry: said once instead of once
+                                      per row, which is 50 pt back
+                                      (98 → 48 pt, measured against `298.5M` at
+                                      41.0 pt). **"Estimated" is spelled out**,
+                                      not `Est.` — it is the word doing the
+                                      qualifying, a stacked area invites reading
+                                      what is under it as a bill, and this is a
+                                      local estimate from published per-token
+                                      prices: on a subscription, spend that was
+                                      never charged. It didn't fit the old
+                                      76 pt column, so the column widened to 74
+                                      pt against the heading's own 71.7 pt
+                                      rather than the word shrinking. There was
+                                      room: dot, widest label (`SDK/agents`,
+                                      61.4 pt) and both columns come to 209 of
+                                      the 312 pt content width.
+                                    - A **dot in the band's own shade** ties each
+                                      row to its area in the plot. The `Total`
+                                      row has none — it is the stack's outline,
+                                      not a band in it — but keeps the dot's
+                                      width, so every label starts at the same x.
+                                    - The **`Total` is summed from
+                                      ``DailyUsageHistory.total``**, not from the
+                                      rows above it. Adding the rows up would
+                                      make the total agree with itself no matter
+                                      what the split dropped; summing the
+                                      history's own total means a dropped band
+                                      shows as a mismatch. That is exactly the
+                                      bug the "Other" band was added to fix.
+                                    - Values are ``[DailyUsagePoint].summed()``
+                                      over the window at rest, the hovered day's
+                                      point while hovering. No second pass over
+                                      the corpus either way: the points the
+                                      chart is already drawing are what gets
+                                      folded.
 
-                                    **No window tag** opposite the title,
-                                    unlike every other section: the dated
-                                    x-axis already says how far back the chart
-                                    reaches and that it ends today, so a
-                                    `30 days` caption would only repeat it. A
-                                    Mac whose logs don't reach back that far
-                                    simply charts fewer days; one with no local
-                                    history at all gets `No local usage yet`
-                                    instead of a flat line through zero.
+                                    **Hovering one block changes only that
+                                    block.** Two `@State` days in `PopoverView`,
+                                    not one — the charts share an x-axis, but a
+                                    table rewriting itself while the pointer is
+                                    in the *other* block's chart is a surprise.
 
-                                    The plot carries a small margin above and
-                                    below — it is the only element in the
-                                    popover that is a picture rather than a row
-                                    of text, and flush against the title and
-                                    legend it reads as part of them. Vertical
-                                    only: it spans the full content width like
-                                    every other row, so a sideways inset would
-                                    pull its axis out of that alignment.
-
-                                    **Hovering** the plot draws a rule on the
-                                    nearest day, a dot on each band's top edge
-                                    — cumulative sums, since the areas stack,
-                                    and none for a band that did nothing that
-                                    day, whose edge is its neighbour's — and
-                                    swaps every chip's number for that day's
-                                    per-source count. `.help()` on a chip
-                                    follows the same day, or tooltip and chip
-                                    would contradict each other on screen.
-
-                                    **The hovered date goes opposite the
-                                    section title**, and the trailing `5h`
-                                    steps aside while it is there. The mock had
-                                    the date replacing `5h` at the end of the
-                                    legend, and it does not fit: three source
-                                    names (124 pt), their swatches and gaps (42)
-                                    and a dated caption (44) leave 34 pt a
-                                    column for counts that need 42, and the
-                                    first render of that row came back reading
-                                    `CLI 842.…` and `VS Co…`. Dropping the names
-                                    instead was tried and rejected — they are
-                                    what says which source. The title row was
-                                    empty, it is where "Costs by model" already
-                                    answers *which window is this?*, and it is
-                                    the only arrangement that keeps every name.
-                                    `testTheHoveredLegendRowFits…` pins the
-                                    budget.
-
-                                    The token column is reserved *only* while
-                                    hovering, so the resting row is laid out
-                                    exactly as it was before hover existed —
-                                    the committed screenshots did not change.
-
-                                    Every dot is drawn in plain primary ink
-                                    rather than in its own band's: a dot has to
-                                    read against whichever band it lands on, and
-                                    the palest shade sits at about 1.8:1 against
-                                    the card. The dots are markers, not more
-                                    data, and carry the same weight as the cost
-                                    chart's single one — which is also why they
-                                    are the one thing in these charts that is
-                                    not terracotta. Two dots still merge where a
-                                    band is thin — about 330k tokens of a 4M
-                                    axis — which is the cost of asking a stacked
-                                    chart for a per-band readout.
-
-                                    One hue, five shades of it — never five
-                                    colours: see "Colour" above. Bands are `.monotone`, never
-                                    `.catmullRom`: a spline through spiky daily
-                                    counts overshoots, and on a stack an
-                                    overshoot dips below the band underneath,
-                                    drawing usage that never happened.
-
-                                    Every entrypoint is always listed, at 0 if
-                                    need be — a silent source keeps a band and a
-                                    chip rather than vanishing. Hovering a chip
-                                    shows that source's full five-hour token
-                                    split, which is where the table's per-cell
-                                    tooltip went.
-
-                                    A window holding usage from an `entrypoint`
-                                    this version doesn't recognise grows a
-                                    fourth band, **"Other", last, i.e. on top**
-                                    — so the bands sum to the day's total, the
-                                    way the model split always has. Only when
-                                    there is such usage: a bucket that can
-                                    appear between two polls goes on top so it
-                                    never shuffles the named bands under it.
-                                    Its chip reads `—` at rest, not `0`: the
-                                    five-hour `EntrypointBreakdown` still drops
-                                    those events, so there is no number to show
-                                    until the pointer puts the chip on a day.
-
-                                    Both axes are drawn, sparsely: without a
-                                    y-axis the bands show shape but no
-                                    magnitude, and without dated x-ticks a spike
-                                    can't be tied to a day — but thirty dated
-                                    labels across a 340 pt popover would be
-                                    mush, so it is one label a week and three
-                                    or four round values up the y. The y-axis
-                                    draws **horizontal lines but no ticks** —
-                                    the line already reaches the label, and a
-                                    stub in front of it only thickens the left
-                                    margin. The lines are `RuleMark`s spanning
-                                    the first day to the last, not
-                                    `AxisGridLine`s: a gridline spans the whole
-                                    plot, gutter included, so it overhangs the
-                                    data it is there to be read against.
-                                    **X-ticks stop four days
-                                    short of the right edge**: a label starts at
-                                    its tick, runs to the right of it, and is
-                                    truncated at the chart's trailing bound, so
-                                    a tick any closer renders as `1…` no matter
-                                    how the plot is inset (tried: padding the
-                                    chart, then padding the plot area — neither
-                                    helps, the label has nowhere to sit). Nothing is lost by it, since
-                                    the right edge of a trailing window is always
-                                    today.
-
-                                    Drawn axes still don't make a chart legible
-                                    to VoiceOver, so it carries a real
-                                    `AXChartDescriptor` — one series per source,
-                                    one point per day, y-axis reaching the
-                                    tallest *stacked* day — rather than being an
-                                    unlabelled image. Its value formatter guards
-                                    non-finite input and clamps to 2^53, not to
-                                    `Double(Int.max)` (which rounds up to 2^63
-                                    and traps): the framework calls it with
-                                    probe values of its own choosing, and both
-                                    traps were live crashes.
-
-                                    **No window tag** opposite the title,
-                                    unlike every other section: the dated
-                                    x-axis already says how far back the chart
-                                    reaches and that it ends today, so a
-                                    `30 days` caption would only repeat it. A
-                                    Mac whose logs don't reach back that far
-                                    simply charts fewer days; one with no local
-                                    history at all gets `No local usage yet`
-                                    instead of a flat line through zero.
-
-                                    The plot carries a small margin above and
-                                    below — it is the only element in the
-                                    popover that is a picture rather than a row
-                                    of text, and flush against the title and
-                                    legend it reads as part of them. Vertical
-                                    only: it spans the full content width like
-                                    every other row, so a sideways inset would
-                                    pull its axis out of that alignment.
-
-                                    **Hovering** the plot draws a rule on the
-                                    nearest day, a dot on each band's top edge
-                                    — cumulative sums, since the areas stack,
-                                    and none for a band that did nothing that
-                                    day, whose edge is its neighbour's — and
-                                    swaps what the legend reads: the chips carry that day's
-                                    per-source counts, and the trailing `5h`
-                                    becomes the date. That caption already said
-                                    *which window these numbers are for*, so
-                                    swapping it is the whole disclosure — no
-                                    floating tooltip over a 72 pt plot, and no
-                                    second styling vocabulary. `.help()` on a
-                                    chip follows the same day, or tooltip and
-                                    chip would contradict each other on screen.
-
-                                    The source names drop while hovering, and
-                                    the swatches carry the tie to the bands
-                                    alone. Measured, not chosen: three names
-                                    (124 pt), three swatches with their gaps
-                                    (42) and a dated caption (44) leave 34 pt a
-                                    column for numbers that need 42, and the
-                                    first render of that row came back reading
-                                    `CLI 842.…` and `VS Co…`. The token and
-                                    caption columns are reserved *only* while
-                                    hovering, so the resting row is laid out
-                                    exactly as it was before hover existed —
-                                    the committed screenshots did not change.
-
-                                    No cache-read note here: the
-                                    chart's numbers are a single window's
-                                    per-source split, and "Costs by model" (fixed 24h)
-                                    keeps that explanation on screen.
-
-Costs by model (fixed 24h window)
-  Sonnet   2.1M tok   $3.15
-  Opus      180k tok   $2.70
-  Haiku     640k tok   $0.19
-  Fable      90k tok   $0.08
-81% cache reads — billed at 1/10 the input rate  ← only when cache reads are
-                                    >50% of the model rows' total, as a
-                                    whole-percent share of it. The one place
-                                    that explanation still appears.
-
-Estimated cost
+By model
 $6 ┤
-$4 ┤  ╱╲  ╱╲╱╲  ╱╲  ╱╲╱╲  ╱╲  ╱╲╱╲
-$0 ┼──┬───────┬───────┬───────┬────
+$3 ┤ ▁▂▅▃▂▆█▅▃▂▄▆█▃▂▄▅█▃▂▁▂▄▅█▆▃▂▁▃
+ 0 ┼──┬───────┬───────┬───────┬────
    16. Aug. 23. Aug. 30. Aug. 6. Sept.
-Today                              $3.05
-                                  ← a single line of estimated daily spend over
-                                    the same 30 days and the same x-ticks as
-                                    "Tokens by source" (both take them from
-                                    `PopoverChartAxis`, so a given x position
-                                    means one day in both plots).
+Last 30 days            Tokens  Estimated cost
+● Sonnet                  22.6M          $37.35
+● Opus                    16.7M          $27.60
+● Haiku                    5.4M           $8.93
+● Fable                    4.4M           $7.31
+  Total                   49.2M          $81.19
+81% cache reads — billed at 1/10 the input rate
+                                  ← the second block: the same chart over the
+                                    same days, stacking **estimated cost** per
+                                    model family instead of tokens per source.
 
-                                    A line, not a stacked area: one series with
-                                    nothing under it, and a filled band would
-                                    read as a fourth source rather than as a
-                                    different question. Same ink as the source
-                                    chart's first band, i.e. the brand colour —
-                                    one visual weight for the popover's own
-                                    data, not a second palette.
+                                    **The top edge of this stack is the old
+                                    "Estimated cost" line.** Literally: that
+                                    section drew one series of
+                                    `total[i].estimatedCostUSD`, which is what
+                                    these bands sum to. So the section and its
+                                    `LineMark` chart are gone rather than kept
+                                    alongside — the same curve now also says
+                                    which models are under it, at the price of
+                                    nothing. The band ramp's first shade was
+                                    that line's ink, so even the colour is
+                                    unchanged where the eye follows the top
+                                    edge.
 
-                                    `.monotone` for the reason the stacked chart
-                                    uses it, only sharper here: an overshoot
-                                    below the baseline draws **negative
-                                    dollars**. `chartYScale(includesZero:)` pins
-                                    zero into the domain so a quiet stretch
-                                    still sits visibly above the axis.
+                                    **Deliberately a per-model chart**, which an
+                                    earlier round recorded as settled the other
+                                    way. It lost then on two counts: five bands
+                                    against a palette that had three shades, and
+                                    sitting above rows tagged `fixed 24h`, which
+                                    would have sharpened a window ambiguity the
+                                    tag only papered over. Both are gone — the
+                                    ramp carries five distinguishable shades (see
+                                    "Colour"), and there is no second window left
+                                    to be ambiguous about.
+
+                                    **Today's spend is hover-only now**, by
+                                    decision. The `Today` row was the popover's
+                                    last fixed reading, and keeping it would have
+                                    meant keeping a second window and a second
+                                    rule for one figure that the rightmost day of
+                                    the chart already draws — hover it and the
+                                    caption says `today's date` with the split
+                                    across models beside it, which is strictly
+                                    more than the row gave. `AppModel`'s
+                                    `estimatedCostToday` went with it.
+
+                                    The **cache-read note** is the one thing only
+                                    this block carries, and the one asymmetry
+                                    between the two. It qualifies a token total
+                                    that replayed context dominates, and this is
+                                    the block a reader is most likely to take for
+                                    "what the real work cost". It is computed
+                                    from whatever the table is currently showing,
+                                    so hovering restates the share for that day
+                                    rather than leaving a thirty-day percentage
+                                    under one day's numbers. Only above
+                                    ``DisplayFormat.cacheReadNoteThreshold``.
+
+Both blocks, mechanically
+                                  ← everything below is true of either chart;
+                                    one implementation
+                                    (``DailyUsageChart`` + ``DailyUsageMetric``)
+                                    draws both, so it is one description rather
+                                    than two that drift. The metric decides
+                                    exactly three things: which field of a
+                                    ``DailyUsagePoint`` is read, which axis
+                                    formatter spells it, and what VoiceOver
+                                    calls it.
+
+                                    **No window tag** opposite either title,
+                                    unlike the quota block: the x-axis is dated,
+                                    so it already says how far back the chart
+                                    reaches and that it ends today, and the
+                                    table's caption says the same in words for
+                                    the numbers. A Mac with no local history at
+                                    all gets `No local usage yet` instead of a
+                                    flat line through zero.
+
+                                    **Both axes are drawn, sparsely.** Without a
+                                    y-axis the bands show shape but no magnitude,
+                                    and without dated x-ticks a spike can't be
+                                    tied to a day — but thirty dated labels
+                                    across a 340 pt popover would be mush, so it
+                                    is one label a week and three or four round
+                                    values up the y. The y-axis draws
+                                    **horizontal lines but no ticks** — the line
+                                    already reaches the label, and a stub in
+                                    front of it only thickens the left margin.
+                                    The lines are `RuleMark`s spanning the first
+                                    day to the last, not `AxisGridLine`s: a
+                                    gridline spans the whole plot, gutter
+                                    included, so it overhangs the data it is
+                                    there to be read against. **X-ticks stop four
+                                    days short of the right edge**: a label
+                                    starts at its tick, runs to the right of it,
+                                    and is truncated at the chart's trailing
+                                    bound, so a tick any closer renders as `1…`
+                                    no matter how the plot is inset (tried:
+                                    padding the chart, then padding the plot area
+                                    — neither helps, the label has nowhere to
+                                    sit). Nothing is lost by it, since the right
+                                    edge of a trailing window is always today.
 
                                     Y labels come from
-                                    `DisplayFormat.costAxisLabels`, which gives
-                                    the whole column **one unit and one decimal
-                                    count**: `$1.5k / $1.0k / $0.5k / $0`, never
-                                    `$1.5k / $1k / $500 / $0`, which makes the
-                                    eye convert a label before the steps look
-                                    even. Money keeps two decimals or none
-                                    (`$2.50`, never `$2.5`); `k` keeps one, the
-                                    way `compactCost` does. **Zero goes
-                                    unlabelled** on both charts: they scale from
-                                    zero, so the bottom line is zero by
-                                    construction and the label only restates it
-                                    in the narrowest column the popover has. The
-                                    token axis follows the same rule through
-                                    `tokenAxisLabels` — `1.5G / 1.0G / 0.5G`
-                                    over an unlabelled baseline.
-                                    Not the plain `cost` format: `$50.00` on
-                                    every label spends a third of the popover's
-                                    narrowest column on zeroes.
-
-                                    "Estimated" moved from the row to the
-                                    section title, where it qualifies the chart
-                                    too, and is spelled out rather than `Est.`
-                                    because it is the word doing the work: a
-                                    curve invites reading the area under it as a
-                                    monthly bill, and this is a local estimate
-                                    from published per-token prices — on a
-                                    subscription, spend that was never charged.
-
-                                    The curve's last point *is* the `Today` row:
-                                    both count from the same local midnight on
-                                    the same calendar, and today is always
-                                    inside the retention window. Pinned by
-                                    `testTodaysPointMatchesEstimatedCostToday`,
-                                    and on the mock too, since the README
-                                    screenshots render from it.
-
-                                    **Hovering** swaps that row for the day
-                                    under the pointer — `6. Sept.` and its
-                                    figure — and marks it with a rule plus a dot
-                                    on the curve. Label and value swap together,
-                                    so a figure is never shown under the wrong
-                                    date.
-
-                                    Both charts share `PopoverChartHover`: a
-                                    `.chartOverlay` converts the pointer's x
-                                    through the chart proxy and snaps to the
-                                    nearest plotted midnight. Snapping is the
-                                    mechanism, not a refinement — 30 days over a
-                                    ~250 pt plot is about 8 pt a day, so
-                                    pointing at a day exactly is not available.
-                                    Not `.chartXSelection`, which answers to
-                                    click and drag on macOS rather than to hover.
-
-                                    **Marks, rule and ticks share one x.** Every
-                                    mark is plotted on a plain `Date`, never
-                                    `unit: .day`: binning a date draws the mark
-                                    at the *centre* of its bin, so the curve,
-                                    the bands, the rule and the dots all sat
-                                    half a day — a measured 4 pt — right of the
-                                    tick naming the day they were on.
-                                    `PopoverChartAlignmentTests` renders both
-                                    charts and measures the rule against the
-                                    tick, which is the only way to see this at
-                                    all: `ChartProxy` answers for the scale, not
-                                    for where a mark landed, and every other
-                                    test passed throughout.
-
-                                    Midnights on a plain scale land on the
-                                    plot's own edges, so the scale keeps a 3 pt
-                                    gutter at each end
-                                    (`chartXScale(range: .plotDimension(…))`,
-                                    not chart padding, which would pull the axis
-                                    out of the popover's alignment). Without it
-                                    half the hover dot on *today* — the day most
-                                    likely to be hovered — falls outside the
-                                    plot.
-
-                                    **Hover moves nothing but the highlight.**
-                                    Both marks carry values already plotted, so
-                                    no scale widens, and the hovered day is
-                                    never added to the x-axis — it belongs in
-                                    the row. This is not cosmetic: a y-scale
-                                    that grew under a stationary pointer would
-                                    redraw the curve beneath it, and until the
-                                    y-label column was fixed it would have
-                                    dragged the plot's leading edge with it,
-                                    changing the day the pointer was on under
-                                    the user's own hand.
+                                    ``DisplayFormat.tokenAxisLabels`` and
+                                    ``costAxisLabels``, which give a column **one
+                                    unit and one decimal count**: `$1.5k / $1.0k
+                                    / $0.5k`, never `$1.5k / $1k / $500`, which
+                                    makes the eye convert a label before the
+                                    steps look even. Money keeps two decimals or
+                                    none (`$2.50`, never `$2.5`); `k` keeps one,
+                                    the way `compactCost` does. **Zero goes
+                                    unlabelled** on both: they scale from zero, so
+                                    the bottom line is zero by construction and
+                                    the label only restates it in the narrowest
+                                    column the popover has.
 
                                     **Both plots start at the same x**, because
                                     the y-labels of both are set in one column,
                                     as wide as the widest label either chart is
-                                    about to draw. Left to itself a chart starts
-                                    its plot where its own widest label ends,
-                                    and `2G` is not `$2.50` wide — so the two
-                                    stacked plots, which take the same x-ticks,
-                                    disagreed about where `16. Aug.` was.
-
-                                    Measured, not reserved. A constant wide
+                                    about to draw (`chartYLabelWidth`, measured
+                                    per render from `naturalYLabelWidth`). Left
+                                    to itself a chart starts its plot where its
+                                    own widest label ends, and `2G` is not `$2.50`
+                                    wide — so two stacked plots taking the same
+                                    x-ticks disagreed about where `16. Aug.` was.
+                                    Measured, not reserved: a constant wide
                                     enough for every label the formatters can
                                     produce (`$12.5k`) cost a measured 19 pt of
                                     plot on an ordinary `$6` day, and what the
-                                    axis shows is decided by data, not by what
-                                    the formatters could print in principle.
+                                    axis shows is decided by data.
 
-                                    Measuring means knowing the strings, which
-                                    is why **both charts pick their own y-values**
-                                    (`PopoverChartAxis.yValues`) instead of
+                                    Measuring means knowing the strings, which is
+                                    why **both charts pick their own y-values**
+                                    (``PopoverChartAxis.yValues``) instead of
                                     leaving them `.automatic`: the first of
                                     1, 2, 2.5, 5 × 10ⁿ that is at least
                                     `max / chartYAxisTickCount`, with the domain
@@ -1013,65 +864,107 @@ Today                              $3.05
                                     Swift Charts was choosing anyway for spend
                                     (`$0`…`$6` in twos over a $5.20 day); the
                                     token axis lands one step finer than it did.
-
                                     The other two routes were tried and don't
                                     work: `ChartProxy` answers for the scale but
-                                    not for the labels, and a `PreferenceKey`
-                                    set inside `AxisValueLabel` never leaves the
+                                    not for the labels, and a `PreferenceKey` set
+                                    inside `AxisValueLabel` never leaves the
                                     `Chart` — measured, it arrives as zero.
 
+                                    The plot carries a small margin above and
+                                    below — it is the only element in the popover
+                                    that is a picture rather than a row of text,
+                                    and flush against the title and the table it
+                                    reads as part of them. Vertical only: it
+                                    spans the full content width like every other
+                                    row, so a sideways inset would pull its axis
+                                    out of that alignment.
+
+                                    **Hovering** draws a rule on the nearest day
+                                    and a dot on each band's top edge —
+                                    cumulative sums, since the areas stack, and
+                                    none for a band that did nothing that day,
+                                    whose edge is its neighbour's. Every dot is
+                                    plain primary ink rather than its own band's:
+                                    a dot has to read against whichever band it
+                                    lands on, and the palest shade sits at about
+                                    1.8:1 against the card. They are markers, not
+                                    more data — which is also why they are the
+                                    one thing in these charts that is not
+                                    terracotta. Two dots still merge where a band
+                                    is thin — about 330k tokens of a 4M axis —
+                                    which is the cost of asking a stacked chart
+                                    for a per-band readout.
+
+                                    Both charts share ``PopoverChartHover``: a
+                                    `.chartOverlay` converts the pointer's x
+                                    through the chart proxy and snaps to the
+                                    nearest plotted midnight. Snapping is the
+                                    mechanism, not a refinement — 30 days over a
+                                    ~250 pt plot is about 8 pt a day, so pointing
+                                    at a day exactly is not available. Not
+                                    `.chartXSelection`, which answers to click and
+                                    drag on macOS rather than to hover.
+
+                                    **Marks, rule and ticks share one x.** Every
+                                    mark is plotted on a plain `Date`, never
+                                    `unit: .day`: binning a date draws the mark at
+                                    the *centre* of its bin, so the bands, the
+                                    rule and the dots all sat half a day — a
+                                    measured 4 pt — right of the tick naming the
+                                    day they were on.
+                                    ``PopoverChartAlignmentTests`` renders both
+                                    charts and measures the rule against the tick,
+                                    which is the only way to see this at all:
+                                    `ChartProxy` answers for the scale, not for
+                                    where a mark landed, and every other test
+                                    passed throughout.
+
+                                    Midnights on a plain scale land on the plot's
+                                    own edges, so the scale keeps a 3 pt gutter at
+                                    each end (`chartXScale(range: .plotDimension(…))`,
+                                    not chart padding, which would pull the axis
+                                    out of the popover's alignment). Without it
+                                    half the hover dot on *today* — the day most
+                                    likely to be hovered — falls outside the plot.
+
                                     **Hover moves nothing but the highlight.**
-                                    Both marks carry values already plotted, so
-                                    no scale widens, and the hovered day is
-                                    never added to the x-axis — it belongs in
-                                    the row. This is not cosmetic: a y-scale
-                                    that grew under a stationary pointer would
-                                    redraw the curve beneath it, and until the
-                                    y-label column was fixed it would have
-                                    dragged the plot's leading edge with it,
-                                    changing the day the pointer was on under
-                                    the user's own hand.
+                                    Both marks carry values already plotted, so no
+                                    scale widens, and the hovered day is never
+                                    added to the x-axis — it belongs in the
+                                    caption. This is not cosmetic: a y-scale that
+                                    grew under a stationary pointer would redraw
+                                    the bands beneath it and drag the plot's
+                                    leading edge with it, changing the day the
+                                    pointer was on under the user's own hand. The
+                                    hovered day is also re-resolved against the
+                                    *current* history on every render, so a poll —
+                                    or midnight sliding the window — drops the
+                                    readout back to resting instead of stranding a
+                                    number from a window that has moved.
 
-                                    **Both plots start at the same x**, because
-                                    the y-labels are set in a column of a fixed
-                                    shared width (`chartYLabelWidth`, 32 pt).
-                                    Left to itself a chart starts its plot where
-                                    its own widest label ends, and `2G` is not
-                                    `$2.50` wide — so the two stacked plots,
-                                    which take the same x-ticks, disagreed about
-                                    where `16. Aug.` was by a couple of points.
-                                    The width holds the widest label either
-                                    formatter produces for a day that can really
-                                    happen; the cost side is the wider of the
-                                    two, since `compactCost` keeps decimals
-                                    below `$10`. Truncation there would read as
-                                    `$12.…`, so a test measures every such label
-                                    against the column.
-
-                                    The hovered day is re-resolved against the
-                                    *current* history on every render, so a poll
-                                    — or midnight sliding the window — drops the
-                                    readout back to resting instead of stranding
-                                    a number from a window that has moved. The
-                                    two charts hover independently: a legend
-                                    that rewrote itself while the pointer was in
-                                    the chart *below* it would be a surprise.
-
+                                    Drawn axes still don't make a chart legible to
+                                    VoiceOver, so each carries a real
+                                    `AXChartDescriptor` — one series per band, one
+                                    point per day, y-axis reaching the tallest
+                                    *stacked* day, titled from the metric
+                                    (`Estimated cost by model, last 30 days`).
                                     Hover is mouse-only and is not the only path
-                                    to a per-day number — both
-                                    `AXChartDescriptor`s already carry every
-                                    point, and they stay the accessible route.
+                                    to a per-day number; these are the accessible
+                                    route. Both value formatters guard the
+                                    framework's own probe values: the token one
+                                    clamps to 2^53, not to `Double(Int.max)` (which
+                                    rounds up to 2^63 and traps), and the cost one
+                                    returns `unknown` past a trillion dollars
+                                    rather than a 300-digit `%f` label that
+                                    renders. Both were live failures.
 
-                                    Deliberately not a per-model chart. That was
-                                    the original plan and it lost on two counts:
-                                    five bands (four families plus unrecognised
-                                    IDs) against a palette that then had three
-                                    shades, and placing it above the `fixed 24h`
-                                    rows would have sharpened the window
-                                    ambiguity the tag only papers over. The
-                                    first count no longer holds — the band ramp
-                                    carries five distinguishable shades now (see
-                                    "Colour").
+                                    **Cost of the restructure: 48 pt.** The
+                                    rendered showcase popover went from 675 to
+                                    723 pt tall (340 wide). A whole chart and its
+                                    row came out; two tables went in. Roughly
+                                    height-neutral was the aim and 7% is what it
+                                    came to — worth it for one window instead of
+                                    four.
 
 Refresh   Clear Quota Cache   Settings        Quit
                                   ← "Clear Quota Cache" deletes the statusline
@@ -1171,11 +1064,12 @@ hovered, under its own gate, for looking at rather than committing.
 
     CLAUDE_STATS_RENDER_HOVER=/tmp/hover swift test --filter testRenderHoverPreviews
 
-It earns its keep because hover is unreachable offscreen and the legend
-*changes content* under it — that is how the truncated `CLI 842.…` row was
-caught, which no unit test would have shown. `PopoverView` takes its two
-hovered days as init parameters purely so this (and a SwiftUI preview) can seed
-them.
+It earns its keep because hover is unreachable offscreen and the tables
+*change content* under it — every number and the caption swap together — so a
+column that truncates in that state alone is invisible to a unit test. That is
+how the truncated `CLI 842.…` row of the legend this replaced was caught.
+`PopoverView` takes its two hovered days as init parameters purely so this (and
+a SwiftUI preview) can seed them.
 
 **Why it lives in the test target.** `ClaudeStats` is an `executableTarget`, so
 no second executable can depend on it. The test target already can, and
@@ -1198,7 +1092,7 @@ image if dropped:
   it never ticks). Without it every run rewrites the countdowns and dirties
   the tree. Rendering twice must leave `git status` clean.
 - **`NSHostingView`, not `ImageRenderer`.** Originally forced: what is now
-  the "Tokens by source" section had a `.pickerStyle(.segmented)` `Picker`, i.e. an
+  what is now the "By source" block had a `.pickerStyle(.segmented)` `Picker`, i.e. an
   `NSSegmentedControl` behind an `NSViewRepresentable`, and `ImageRenderer`
   rasterizes SwiftUI's own drawing only, painting that control as its yellow
   "unsupported view" placeholder. The picker is gone (that section is a chart

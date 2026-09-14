@@ -17,12 +17,12 @@ struct PopoverView: View {
     /// only ``StatusItemController`` knows when the popover is actually visible.
     @ObservedObject var clock: PopoverClock
 
-    /// The day the pointer is on in the "Tokens by source" chart, and the one
-    /// in "Estimated cost". Two pieces of state, not one: the charts share an
-    /// x-axis, but a legend that rewrites itself while the pointer is in the
-    /// chart *below* it is a surprise, so hovering one highlights only itself.
+    /// The day the pointer is on in the "By source" chart, and the one in "By
+    /// model". Two pieces of state, not one: the charts share an x-axis, but a
+    /// table that rewrites itself while the pointer is in the block *below* it
+    /// is a surprise, so hovering one block highlights only itself.
     @State private var hoveredSourceDay: Date?
-    @State private var hoveredCostDay: Date?
+    @State private var hoveredModelDay: Date?
 
     /// Width of the y-label column both charts set their labels in: whatever
     /// the wider of the two needs.
@@ -35,25 +35,29 @@ struct PopoverView: View {
     /// every label the formatters *could* produce (`$12.5k`) cost 19 pt of plot
     /// on an ordinary `$6` day.
     private var chartYLabelWidth: CGFloat {
-        max(sourceChart(yLabelWidth: nil).naturalYLabelWidth, costChart(yLabelWidth: nil).naturalYLabelWidth)
+        max(sourceChart(yLabelWidth: nil).naturalYLabelWidth, modelChart(yLabelWidth: nil).naturalYLabelWidth)
     }
 
     private func sourceChart(yLabelWidth: CGFloat?) -> DailyUsageChart {
         DailyUsageChart(
             days: model.dailyHistory.days,
             series: sourceSeries,
+            metric: .tokens,
+            bandsName: "source",
             hoveredDay: hoveredSourceDay,
             onHover: { hoveredSourceDay = $0 },
             yLabelWidth: yLabelWidth
         )
     }
 
-    private func costChart(yLabelWidth: CGFloat?) -> DailyCostChart {
-        DailyCostChart(
+    private func modelChart(yLabelWidth: CGFloat?) -> DailyUsageChart {
+        DailyUsageChart(
             days: model.dailyHistory.days,
-            points: model.dailyHistory.total,
-            hoveredDay: hoveredCostDay,
-            onHover: { hoveredCostDay = $0 },
+            series: modelSeries,
+            metric: .cost,
+            bandsName: "model",
+            hoveredDay: hoveredModelDay,
+            onHover: { hoveredModelDay = $0 },
             yLabelWidth: yLabelWidth
         )
     }
@@ -65,12 +69,12 @@ struct PopoverView: View {
         model: AppModel,
         clock: PopoverClock,
         hoveredSourceDay: Date? = nil,
-        hoveredCostDay: Date? = nil
+        hoveredModelDay: Date? = nil
     ) {
         self.model = model
         self.clock = clock
         _hoveredSourceDay = State(initialValue: hoveredSourceDay)
-        _hoveredCostDay = State(initialValue: hoveredCostDay)
+        _hoveredModelDay = State(initialValue: hoveredModelDay)
     }
 
     private var now: Date { clock.now }
@@ -83,8 +87,6 @@ struct PopoverView: View {
             sourceSection
             Divider()
             modelSection
-            Divider()
-            costSection
             if model.usingSampleData {
                 sampleDataLine
             }
@@ -153,7 +155,7 @@ struct PopoverView: View {
     }
 
     /// The quota block's section title, plus the freshness tag on the same
-    /// line — the shape "Tokens by source" and "Costs by model" already use, so the quota
+    /// line — the shape "By source" and "By model" already use, so the quota
     /// rows read as a titled section rather than as a preamble to the popover.
     ///
     /// The title names the active Anthropic account when something on disk
@@ -505,9 +507,10 @@ struct PopoverView: View {
     }
 
     /// Explains a token total that replayed cache reads dominate, so the
-    /// headline number doesn't read as fresh work. Only "Costs by model" has one:
-    /// "Tokens by source" captions a chart spanning 30 days with legend numbers from a
-    /// five-hour window, so it has no single total for a note to describe.
+    /// headline number doesn't read as fresh work. Only "By model" has one:
+    /// it is the block a reader is most likely to take for "what the real work
+    /// cost", and the same sentence under both tables would be one sentence too
+    /// many on a card this dense.
     private func cacheReadNoteLine(_ note: String) -> some View {
         Text(note)
             .font(PopoverMetrics.captionFont)
@@ -515,45 +518,46 @@ struct PopoverView: View {
             .fixedSize(horizontal: false, vertical: true)
     }
 
-    // MARK: - By source
+    /// What both tables caption their numbers with at rest.
+    ///
+    /// Counted off the history rather than fixed at `Last 30 days`: a Mac whose
+    /// logs are younger charts fewer days (see ``DailyUsageHistory/days``), and
+    /// this caption is the one place that states which window the numbers under
+    /// it belong to — a wrong count there is worse than no caption.
+    private var chartWindowCaption: String {
+        "Last \(model.dailyHistory.days.count) days"
+    }
 
-    /// Thirty days of local usage as a stacked chart, with one legend row of
-    /// numbers under it.
+    /// One of the two symmetric usage blocks: a section title, a stacked
+    /// thirty-day chart, and a table of the same window's numbers under it.
     ///
-    /// This replaced a 3x3 table — one row per entrypoint, one column per
-    /// ``TimeWindow``. The `24h` and `7d` columns were integrals over ranges
-    /// the chart's x-axis now covers (the last point, the last seven), so they
-    /// went. `5h` did not: a daily chart has no intra-day resolution, it is the
-    /// only sub-day reading in the popover, and it is the machine-local
-    /// counterpart to the account-wide five-hour quota bar above — so it stays,
-    /// as the legend's value rather than as a column.
+    /// Written once and called twice rather than laid out twice, which is what
+    /// makes "same columns, same stack order, same hover rule" a fact instead of
+    /// a convention two pieces of code happen to agree on today. The two blocks
+    /// differ in exactly three things: the title, which field of a day the chart
+    /// plots, and which split the bands come from.
     ///
-    /// The chart covers ``AppModel/chartWindowDays``, or fewer days on a Mac
-    /// whose logs don't go back that far — which the dated x-axis says by
-    /// itself, so the section carries no window tag.
-    private var sourceSection: some View {
+    /// No window tag opposite the title, unlike the quota block: the x-axis is
+    /// dated, so it already says how far back the chart reaches and that it ends
+    /// today, and the table's caption says the same in words for the numbers.
+    @ViewBuilder
+    private func usageBlock(
+        title: String,
+        chart: DailyUsageChart,
+        series: [DailyUsageSeries],
+        hoveredDay: Date?,
+        showsCacheReadNote: Bool = false
+    ) -> some View {
+        let table = DailyUsageTable(
+            series: series,
+            total: model.dailyHistory.total,
+            days: model.dailyHistory.days,
+            hoveredDay: hoveredDay,
+            restingCaption: chartWindowCaption
+        )
         VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                // No window tag opposite the title at rest: the x-axis is
-                // dated, so it already says both how far back the chart
-                // reaches and that it ends today. "Costs by model" still needs
-                // its `fixed 24h` tag, having no axis of its own.
-                Text("Tokens by source")
-                    .font(PopoverMetrics.sectionTitleFont)
-                Spacer()
-                // The hovered date goes here rather than at the end of the
-                // legend, where the mock first put it. Measured: three source
-                // names (124 pt), their swatches and gaps (42) and a dated
-                // caption (44) leave 34 pt a column for numbers that need 42,
-                // and something has to give. This slot is empty, it is where
-                // "Costs by model" already answers "which window is this?",
-                // and it is the only option that keeps every chip's name.
-                if let hovered = hoveredSourceIndex {
-                    Text(PopoverChartHover.label(for: model.dailyHistory.days[hovered]))
-                        .font(PopoverMetrics.captionFont)
-                        .foregroundStyle(.secondary)
-                }
-            }
+            Text(title)
+                .font(PopoverMetrics.sectionTitleFont)
 
             if model.dailyHistory.isEmpty {
                 // A flat line through zero would read as "you stopped working"
@@ -562,198 +566,72 @@ struct PopoverView: View {
                     .font(PopoverMetrics.captionFont)
                     .foregroundStyle(.secondary)
             } else {
-                sourceChart(yLabelWidth: chartYLabelWidth)
-                .padding(.vertical, PopoverMetrics.chartMargin)
-                sourceLegend
-            }
-        }
-    }
-
-    private var sourceSeries: [DailyUsageSeries] {
-        DailyUsageSeries.sources(from: model.dailyHistory)
-    }
-
-    /// Where the hovered day sits in the history the chart is drawing *now*,
-    /// or `nil` for the resting state. Re-resolved every render, so a reload
-    /// that moves the window drops the readout instead of stranding it.
-    private var hoveredSourceIndex: Int? {
-        PopoverChartHover.index(of: hoveredSourceDay, in: model.dailyHistory.days)
-    }
-
-    /// One chip per source: swatch, label, and its token count — five-hour at
-    /// rest, the hovered day's while the pointer is in the chart.
-    ///
-    /// The trailing caption is where that swap is disclosed. It exists to say
-    /// *which window these numbers are for*, so swapping `5h` for `Sep 3` tells
-    /// the reader the numbers changed meaning in the one place already making
-    /// that claim — no floating tooltip over a 72 pt plot, and no second
-    /// styling vocabulary.
-    ///
-    /// Zipped against ``DailyUsageSeries/sourceKeys(in:)`` rather than against
-    /// ``Entrypoint/displayOrder``: the bands carry a trailing "Other" whenever
-    /// the window holds usage from an entrypoint this version doesn't know, and
-    /// zipping against the three known ones would drop that chip while leaving
-    /// its band in the chart. Pinned by a test, since a chip's number comes
-    /// from the entrypoint while its swatch comes from the band.
-    private var sourceLegend: some View {
-        let hovered = hoveredSourceIndex
-        let keys = DailyUsageSeries.sourceKeys(in: model.dailyHistory)
-        return HStack(spacing: 0) {
-            ForEach(Array(zip(keys, sourceSeries).enumerated()), id: \.offset) { index, pair in
-                if index > 0 { Spacer(minLength: PopoverMetrics.rowSpacing) }
-                legendChip(entrypoint: pair.0, band: pair.1, hoveredIndex: hovered)
-            }
-            // Labels every chip's number, the way the table's column headers
-            // labelled every cell under them. Gone while hovering: the numbers
-            // are a day's then, the title row says which day, and this row
-            // needs every point of the width for the names.
-            if hovered == nil {
-                Spacer(minLength: PopoverMetrics.rowSpacing)
-                Text(TimeWindow.fiveHour.displayName)
-                    .font(PopoverMetrics.captionFont)
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    /// What the legend's numbers are for: the five-hour window, or one day.
-    private func sourceWindowLabel(hoveredIndex: Int?) -> String {
-        guard let hoveredIndex else { return TimeWindow.fiveHour.displayName }
-        return PopoverChartHover.label(for: model.dailyHistory.days[hoveredIndex])
-    }
-
-    private func legendChip(entrypoint: Entrypoint?, band: DailyUsageSeries, hoveredIndex: Int?) -> some View {
-        // A band is dense over the window, but `hoveredIndex` is resolved
-        // against `days`, so guard the subscript rather than trusting the two
-        // to have the same length.
-        let hoveredPoint = hoveredIndex.flatMap { $0 < band.points.count ? band.points[$0] : nil }
-        // `nil` for the "Other" band at rest: ``EntrypointBreakdown`` still
-        // drops events whose entrypoint this version doesn't recognise, so
-        // there is no five-hour number for that band — an em dash, the
-        // popover's own "no reading", rather than a `0` contradicting the band
-        // in the chart above it. Hovering does give it a real number: the daily
-        // series carries those events.
-        let usage = hoveredPoint?.usage ?? entrypoint.map { breakdown(for: .fiveHour).usage(for: $0) }
-        let window = sourceWindowLabel(hoveredIndex: hoveredIndex)
-        return HStack(spacing: PopoverMetrics.legendSwatchSpacing) {
-            Circle()
-                .fill(band.color)
-                .frame(width: PopoverMetrics.legendSwatchSize, height: PopoverMetrics.legendSwatchSize)
-            Text(band.label)
-                .font(PopoverMetrics.bodyFont)
-            Text(usage.map { DisplayFormat.tokens($0.totalTokens) } ?? "—")
-                .font(PopoverMetrics.valueFont)
-                // Reserved only while hovering — see
-                // ``PopoverMetrics/legendTokenColumnWidth``. At rest the row is
-                // laid out exactly as it was before hover existed.
-                .frame(
-                    minWidth: hoveredPoint == nil ? 0 : PopoverMetrics.legendTokenColumnWidth,
-                    alignment: .leading
-                )
-        }
-        .lineLimit(1)
-        // One element per source, like the table's cells: a bare "298.5M"
-        // announced on its own says neither which source nor which window.
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(band.label), \(window)")
-        .accessibilityValue(usage.map { DisplayFormat.tokens($0.totalTokens) } ?? "no reading")
-        // The full input/output/cache split lived on the table's cells; it
-        // moves here rather than being dropped — and it has to follow the chip
-        // onto the hovered day, or tooltip and chip disagree on screen.
-        .help(usage.map(DisplayFormat.tokenSplit)
-            ?? "Sources this version of Claude Stats doesn't recognise. They are charted, but the five-hour breakdown doesn't carry them.")
-    }
-
-    /// The breakdown for one window, or an all-zero one before the first
-    /// reload has landed — every window is recomputed together, so a missing
-    /// key means "nothing read yet", never "this window is stale".
-    private func breakdown(for window: TimeWindow) -> EntrypointBreakdown {
-        model.breakdownsByWindow[window] ?? .empty(window: window)
-    }
-
-    // MARK: - Costs by model
-
-    private var modelSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text("Costs by model")
-                    .font(PopoverMetrics.sectionTitleFont)
-                Spacer()
-                // Fixed window on purpose, and tagged as such: the chart
-                // above spans thirty dated days, so "which window is this?" is
-                // a live question for the rows below it.
-                Text("fixed 24h")
-                    .font(PopoverMetrics.captionFont)
-                    .foregroundStyle(.secondary)
-            }
-
-            if model.modelUsage.isEmpty {
-                Text("No local model usage yet")
-                    .font(PopoverMetrics.captionFont)
-                    .foregroundStyle(.secondary)
-            } else {
-                VStack(alignment: .leading, spacing: 5) {
-                    ForEach(model.modelUsage) { usage in
-                        ModelUsageRow(usage: usage)
-                    }
-                }
-                // Every model row summed — the note is about the section's
-                // numbers as a whole, and one line reads better than one per
-                // row. The sum itself is cached on ``AppModel``.
-                if let note = DisplayFormat.cacheReadNote(model.modelUsageTotal) {
+                chart
+                    .padding(.vertical, PopoverMetrics.chartMargin)
+                table
+                // Computed from what the table is showing, not from a fixed
+                // window: hovering a day has to re-state the share for that day,
+                // or a thirty-day percentage sits under one day's numbers.
+                if showsCacheReadNote, let note = DisplayFormat.cacheReadNote(table.shownUsage) {
                     cacheReadNoteLine(note)
                 }
             }
         }
     }
 
-    // MARK: - Estimated cost
+    // MARK: - By source
 
-    /// Thirty days of spend over today's exact figure.
+    /// Where the tokens came from: thirty days of usage stacked per source,
+    /// over a table of that window's per-source counts and spend.
     ///
-    /// "Estimated" sits in the section title rather than on the row, where it
-    /// now qualifies the chart too. It has to: a curve invites reading the area
-    /// under it as a monthly bill, and this is a local estimate from published
-    /// per-token prices — on a subscription, spend that was never charged.
-    ///
-    /// Spelled out, not `Est.`: it is the word doing the qualifying, and an
-    /// abbreviation is the first thing an eye skims past.
-    ///
-    /// The chart and the row can't disagree. Both count from local midnight on
-    /// the same calendar, and today is always inside the retention window, so
-    /// the curve's last point is the row's number.
-    private var costSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Estimated cost")
-                .font(PopoverMetrics.sectionTitleFont)
-
-            if !model.dailyHistory.isEmpty {
-                costChart(yLabelWidth: chartYLabelWidth)
-                .padding(.vertical, PopoverMetrics.chartMargin)
-            }
-
-            costRow
-        }
+    /// This is what is left of a chain of redesigns — a segmented picker with
+    /// peak-relative bars, then a 3x3 table of windows, then a chart with a
+    /// five-hour legend row under it. The legend went the way the `24h` and `7d`
+    /// columns went before it: every other number in the popover is now the
+    /// chart's own window, and a five-hour reading beneath a thirty-day plot was
+    /// the last place two windows still met in one row.
+    private var sourceSection: some View {
+        usageBlock(
+            title: "By source",
+            chart: sourceChart(yLabelWidth: chartYLabelWidth),
+            series: sourceSeries,
+            hoveredDay: hoveredSourceDay
+        )
     }
 
-    /// Today's spend, or the hovered day's — the row does the disclosure the
-    /// chart has no room for, label and value swapping together so the figure
-    /// is never shown under the wrong date.
+    private var sourceSeries: [DailyUsageSeries] {
+        DailyUsageSeries.sources(from: model.dailyHistory)
+    }
+
+    // MARK: - By model
+
+    /// Where the money went: the same thirty days, stacked as estimated spend
+    /// per model family, with its own table.
     ///
-    /// Nothing else in the section moves with it: the label is leading, the
-    /// value trailing, and both are one line in either state.
-    private var costRow: some View {
-        let hovered = PopoverChartHover.index(of: hoveredCostDay, in: model.dailyHistory.days)
-        let label = hovered.map { PopoverChartHover.label(for: model.dailyHistory.days[$0]) } ?? "Today"
-        let value = hovered.map { DisplayFormat.cost(model.dailyHistory.total[$0].estimatedCostUSD) }
-            ?? model.estimatedCostToday.map(DisplayFormat.cost)
-        return HStack {
-            Text(label)
-                .font(PopoverMetrics.bodyFont)
-            Spacer()
-            Text(value ?? "—")
-                .font(PopoverMetrics.valueFont)
-        }
+    /// The top edge of this stack *is* the line the popover used to draw as a
+    /// separate "Estimated cost" section — one series with nothing under it — so
+    /// that section and its chart are gone rather than kept alongside: the same
+    /// curve now also says which models are under it. Today's spend went with
+    /// it, and is hover-only now by decision: one window and one hover rule for
+    /// every local number beats a row that was the popover's last fixed reading.
+    ///
+    /// Deliberately a per-model chart, which an earlier round rejected. It lost
+    /// then on two counts — five bands against a palette of three shades, and
+    /// sitting above rows tagged `fixed 24h` — and both are gone: the ramp
+    /// carries five distinguishable shades, and there is no second window left
+    /// to be ambiguous about.
+    private var modelSection: some View {
+        usageBlock(
+            title: "By model",
+            chart: modelChart(yLabelWidth: chartYLabelWidth),
+            series: modelSeries,
+            hoveredDay: hoveredModelDay,
+            showsCacheReadNote: true
+        )
+    }
+
+    private var modelSeries: [DailyUsageSeries] {
+        DailyUsageSeries.models(from: model.dailyHistory)
     }
 
     private var sampleDataLine: some View {

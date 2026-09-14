@@ -53,30 +53,39 @@ final class AppModelTests: XCTestCase {
         func dailyUsage(days: Int) throws -> DailyUsageHistory { throw Failure() }
     }
 
-    /// ``MockUsageStore``'s data, but counting the breakdown reads — the point
-    /// of summing all three windows in one reload is that rendering the table
-    /// makes no further read, which is only observable as a call count.
+    /// ``MockUsageStore``'s data, but counting the reads the popover's reload
+    /// actually makes. The point of the two blocks sharing one
+    /// ``DailyUsageHistory`` is that nothing else is summed per reload, and a
+    /// query that crept back in is only observable as a call count.
     /// `@unchecked Sendable` for the same reason as
     /// ``ScriptedPromoNoticeProvider``: `UsageStoring` is synchronous and only
     /// the single `@MainActor` test using one ever touches it.
     private final class CountingUsageStore: UsageStoring, @unchecked Sendable {
         private let backing = MockUsageStore()
+        private(set) var dailyUsageCallCount = 0
         private(set) var breakdownCallCount = 0
-        private(set) var requestedWindows: [TimeWindow] = []
-        /// When set, that one window throws while the other two still succeed —
-        /// the partial-failure case the one-shot assignment has to survive.
-        var failingWindow: TimeWindow?
+        private(set) var modelUsageCallCount = 0
+        private(set) var costTodayCallCount = 0
 
         func entrypointBreakdown(for window: TimeWindow) throws -> EntrypointBreakdown {
             breakdownCallCount += 1
-            requestedWindows.append(window)
-            if window == failingWindow { throw FailingUsageStore.Failure() }
             return try backing.entrypointBreakdown(for: window)
         }
 
-        func modelUsage(last24h: Bool) throws -> [ModelUsage] { try backing.modelUsage(last24h: last24h) }
-        func estimatedCostToday() throws -> Double { try backing.estimatedCostToday() }
-        func dailyUsage(days: Int) throws -> DailyUsageHistory { try backing.dailyUsage(days: days) }
+        func modelUsage(last24h: Bool) throws -> [ModelUsage] {
+            modelUsageCallCount += 1
+            return try backing.modelUsage(last24h: last24h)
+        }
+
+        func estimatedCostToday() throws -> Double {
+            costTodayCallCount += 1
+            return try backing.estimatedCostToday()
+        }
+
+        func dailyUsage(days: Int) throws -> DailyUsageHistory {
+            dailyUsageCallCount += 1
+            return try backing.dailyUsage(days: days)
+        }
     }
 
     /// Hands back whatever the test scripted, and records what the model asked
@@ -211,9 +220,8 @@ final class AppModelTests: XCTestCase {
         model.refresh(force: true)
         await waitUntil { model.quotaError != nil }
 
-        XCTAssertEqual(model.activeErrors.count, 3)
+        XCTAssertEqual(model.activeErrors.count, 2)
         XCTAssertNotNil(model.localStatsError)
-        XCTAssertNotNil(model.breakdownError)
         XCTAssertNotNil(model.quotaError)
     }
 
@@ -310,24 +318,6 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(callsAfterClear, callsBeforeClear)
     }
 
-    /// The cached total has to move with every reload — a stale sum would put
-    /// the popover's cache-read caption on the wrong numbers.
-    func testModelUsageTotalIsKeptInSyncWithTheLoadedRows() throws {
-        let store = MockUsageStore()
-        let model = makeModel(quota: ScriptedQuotaProvider(), store: store)
-        XCTAssertEqual(model.modelUsageTotal, .zero)
-
-        model.refresh(force: true)
-
-        let expected = try store.modelUsage(last24h: true).reduce(TokenUsage.zero) { $0 + $1.usage }
-        XCTAssertNotEqual(expected, .zero)
-        XCTAssertEqual(model.modelUsageTotal, expected)
-
-        model.updateUsageStore(MockUsageStore(modelUsageLast24h: []))
-
-        XCTAssertEqual(model.modelUsageTotal, .zero)
-    }
-
     func testPollAfterInstallRetriesUntilSnapshotLands() async {
         let provider = ScriptedQuotaProvider()
         await provider.setResult(.failure(ClaudeStatsError.noQuotaSourceAvailable))
@@ -342,9 +332,10 @@ final class AppModelTests: XCTestCase {
 
     // MARK: - Daily history
 
-    /// The "Tokens by source" chart reads `dailyHistory` directly, so a reload has to
-    /// fill it — an empty one is the section's "no local usage yet" state, not
-    /// a "still loading" one, and the two must not be confused.
+    /// Both popover blocks read `dailyHistory` directly — it is the only local
+    /// reading either of them has — so a reload has to fill it. An empty one is
+    /// the sections' "no local usage yet" state, not a "still loading" one, and
+    /// the two must not be confused.
     func testReloadFillsInTheDailyHistoryTheChartDraws() {
         let model = makeModel(quota: ScriptedQuotaProvider(), store: MockUsageStore())
         XCTAssertTrue(model.dailyHistory.isEmpty)
@@ -364,60 +355,25 @@ final class AppModelTests: XCTestCase {
         XCTAssertTrue(model.dailyHistory.isEmpty)
     }
 
-    // MARK: - Entrypoint breakdown
-
-    /// The popover reads its per-source numbers straight out of
-    /// `breakdownsByWindow`, so one reload has to leave a key for every window
-    /// in ``AppModel/displayedWindows`` — a missing one renders as an all-zero
-    /// reading rather than as "not loaded".
+    /// The two blocks read one history, so a reload has to make exactly one
+    /// store query — and none of the three the popover used to also make.
     ///
-    /// The call count is the other half: a window that is *not* displayed must
-    /// not be summed, and a displayed one must be summed once, not once per
-    /// render.
-    func testOneReloadFillsInEveryWindowTheChartShows() throws {
+    /// The call counts are the assertion. `entrypointBreakdown` fed the old
+    /// five-hour legend, `modelUsage(last24h:)` the `fixed 24h` rows and
+    /// `estimatedCostToday()` the `Today` row; all three walked tens of
+    /// thousands of `UsageEvent`s on the main actor for numbers nothing shows
+    /// now. Silently reinstating one would cost that walk on every FSEvents
+    /// batch with nothing failing to catch it.
+    func testAReloadQueriesTheDailyHistoryAndNothingElse() {
         let store = CountingUsageStore()
         let model = makeModel(quota: ScriptedQuotaProvider(), store: store)
-        XCTAssertTrue(model.breakdownsByWindow.isEmpty)
 
         model.refresh(force: true)
 
-        XCTAssertEqual(store.breakdownCallCount, AppModel.displayedWindows.count)
-        XCTAssertEqual(Set(store.requestedWindows), Set(AppModel.displayedWindows))
-        XCTAssertNil(model.breakdownError)
-        XCTAssertEqual(Set(model.breakdownsByWindow.keys), Set(AppModel.displayedWindows))
-        for window in AppModel.displayedWindows {
-            let expected = try store.entrypointBreakdown(for: window)
-            XCTAssertEqual(model.breakdownsByWindow[window], expected)
-            XCTAssertEqual(model.breakdownsByWindow[window]?.window, window)
-        }
-    }
-
-    func testBreakdownFailureSetsTheErrorAndLeavesNoBreakdown() {
-        let model = makeModel(quota: ScriptedQuotaProvider(), store: FailingUsageStore())
-
-        model.refresh(force: true)
-
-        XCTAssertNotNil(model.breakdownError)
-        XCTAssertTrue(model.breakdownsByWindow.isEmpty)
-    }
-
-    /// A window throwing must not leave a half-updated cache — the whole
-    /// dictionary is assigned once, or not at all. Trivial while
-    /// ``AppModel/displayedWindows`` holds one window, and deliberately kept:
-    /// that set has changed twice already, and the invariant is what makes
-    /// growing it safe.
-    func testOneWindowFailingKeepsThePreviousBreakdownsIntact() throws {
-        let store = CountingUsageStore()
-        let model = makeModel(quota: ScriptedQuotaProvider(), store: store)
-        model.refresh(force: true)
-        let loaded = model.breakdownsByWindow
-        XCTAssertEqual(loaded.count, AppModel.displayedWindows.count)
-
-        store.failingWindow = try XCTUnwrap(AppModel.displayedWindows.first)
-        model.refresh(force: true)
-
-        XCTAssertNotNil(model.breakdownError)
-        XCTAssertEqual(model.breakdownsByWindow, loaded)
+        XCTAssertEqual(store.dailyUsageCallCount, 1)
+        XCTAssertEqual(store.breakdownCallCount, 0)
+        XCTAssertEqual(store.modelUsageCallCount, 0)
+        XCTAssertEqual(store.costTodayCallCount, 0)
     }
 
     // MARK: - Usage credits

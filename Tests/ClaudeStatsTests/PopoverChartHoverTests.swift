@@ -96,50 +96,70 @@ final class PopoverChartHoverTests: XCTestCase {
     /// What a popover row has to fit into.
     private static let contentWidth = PopoverMetrics.popoverWidth - 2 * PopoverMetrics.contentPadding
 
+    private let bodyFont = NSFont.systemFont(ofSize: 11)
     private let valueFont = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)
     private let captionFont = NSFont.systemFont(ofSize: 10)
 
-    func testTheReservedTokenColumnHoldsADaysCounts() {
-        // A day is up to 4.8 five-hour windows, and cache reads push a busy
-        // one into the hundreds of millions — the widest string the formatter
-        // produces before the numbers stop being plausible.
-        let counts = [0, 840, 12_400, 40_600, 298_500, 1_100_000, 12_400_000, 298_500_000]
-        for count in counts {
+    func testTheTokenColumnHoldsAWindowsCounts() {
+        // A thirty-day sum on a cache-read-heavy corpus reaches the hundreds of
+        // millions; `G` is shorter than `M`, so `298.5M` is the widest string
+        // the formatter produces before the numbers stop being plausible.
+        for count in [0, 840, 12_400, 40_600, 298_500, 1_100_000, 12_400_000, 298_500_000] {
             let text = DisplayFormat.tokens(count)
             XCTAssertLessThanOrEqual(
                 width(text, valueFont),
-                PopoverMetrics.legendTokenColumnWidth,
-                "\(text) overflows the column the legend reserves for it"
+                PopoverMetrics.tableTokenColumnWidth,
+                "\(text) overflows the table's token column"
             )
         }
     }
 
-    func testTheHoveredLegendRowFitsThePopoverWithoutTruncating() {
-        // The failure this guards was real: the first render of this row came
-        // back as `CLI 842.…` and `VS Co…`. Every chip keeps its source name
-        // while hovering, so the row has to hold three names, three swatches
-        // and three day-sized counts — which is why the hovered date moved to
-        // the section title and the `5h` caption steps aside.
-        let bodyFont = NSFont.systemFont(ofSize: 11)
-        let chips = Entrypoint.displayOrder.map { entrypoint in
-            PopoverMetrics.legendSwatchSize
-                + PopoverMetrics.legendSwatchSpacing
-                + width(entrypoint.displayName, bodyFont)
-                + PopoverMetrics.legendSwatchSpacing
-                + PopoverMetrics.legendTokenColumnWidth
-        }
-        let row = chips.reduce(0, +) + CGFloat(chips.count - 1) * PopoverMetrics.rowSpacing
-
-        XCTAssertLessThanOrEqual(row, Self.contentWidth, "the hovered legend has to truncate to fit")
+    /// The column is sized by its *heading*, which is the point: `Estimated` is
+    /// the word qualifying every figure under it — a local estimate from
+    /// published per-token prices, on a subscription spend that was never
+    /// charged — so the column widened rather than the word shrinking to `Est.`.
+    func testTheCostColumnHoldsTheSpelledOutHeadingAndAFourDigitFigure() {
+        XCTAssertLessThanOrEqual(
+            width("Estimated cost", captionFont),
+            PopoverMetrics.tableCostColumnWidth,
+            "the heading would truncate, which is what an abbreviation would be hiding"
+        )
+        // A heavy cache-read day can push one band's estimate past $1000.
+        XCTAssertLessThanOrEqual(width(DisplayFormat.cost(1_234.56), valueFont), PopoverMetrics.tableCostColumnWidth)
     }
 
-    func testTheHoveredDateFitsBesideTheSectionTitle() {
-        let titleFont = NSFont.systemFont(ofSize: 11, weight: .semibold)
-        let widestDate = days(366).map { width(PopoverChartHover.label(for: $0), captionFont) }.max() ?? 0
+    /// Both splits' widest label, against the row that has to hold it beside a
+    /// dot and two fixed columns.
+    func testATableRowFitsThePopoverWithoutTruncating() {
+        let labels = Entrypoint.displayOrder.map(\.displayName)
+            + ModelFamily.displayOrder.map(\.displayName)
+            + [DailyUsageSeries.otherBandLabel, "Total"]
+        let widest = labels.map { width($0, bodyFont) }.max() ?? 0
 
-        XCTAssertLessThanOrEqual(
-            width("Tokens by source", titleFont) + PopoverMetrics.rowSpacing + widestDate,
-            Self.contentWidth
-        )
+        // dot, label, the minimum gap before the columns, and both columns —
+        // with four `legendSwatchSpacing` gaps between the five elements.
+        let row = PopoverMetrics.legendSwatchSize
+            + widest
+            + PopoverMetrics.rowSpacing
+            + PopoverMetrics.tableTokenColumnWidth
+            + PopoverMetrics.tableCostColumnWidth
+            + 4 * PopoverMetrics.legendSwatchSpacing
+
+        XCTAssertLessThanOrEqual(row, Self.contentWidth, "a table row has to truncate to fit")
+    }
+
+    /// The caption row carries the whole hover disclosure — the window at rest,
+    /// the day under the pointer — so neither state may truncate.
+    func testTheCaptionRowFitsInBothOfItsStates() {
+        let captions = ["Last 30 days", "Last 8 days"] + days(366).map { PopoverChartHover.label(for: $0) }
+        let widest = captions.map { width($0, captionFont) }.max() ?? 0
+
+        let row = widest
+            + PopoverMetrics.rowSpacing
+            + PopoverMetrics.tableTokenColumnWidth
+            + PopoverMetrics.tableCostColumnWidth
+            + 3 * PopoverMetrics.legendSwatchSpacing
+
+        XCTAssertLessThanOrEqual(row, Self.contentWidth)
     }
 }

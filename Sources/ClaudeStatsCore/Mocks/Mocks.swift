@@ -252,10 +252,10 @@ public struct MockUsageStore: UsageStoring {
 
     public func estimatedCostToday() throws -> Double { costToday }
 
-    /// Today's spend, taken from the same generator that draws the "Estimated cost"
-    /// chart, so the curve's last point and the `Today` row under it cannot
-    /// disagree — the invariant the real store gets for free, both of its
-    /// numbers being events since the same local midnight.
+    /// Today's spend, taken from the same generator that fills the daily
+    /// history, so ``estimatedCostToday()`` and the newest point of
+    /// ``dailyUsage(days:)`` cannot disagree — the invariant the real store gets
+    /// for free, both of its numbers being events since the same local midnight.
     ///
     /// Derived rather than written out: a literal here drifts silently the
     /// first time the fixture's token base or blended rate moves.
@@ -341,7 +341,9 @@ public struct MockUsageStore: UsageStoring {
         ),
     ]
 
-    /// Matches the "Costs by model" rows in the popover sketch in `AGENTS.md`.
+    /// Per-model fixture for ``modelUsage(last24h:)``. No longer drawn anywhere
+    /// — the popover's "By model" block stacks ``sampleDailyUsage(days:)``'s
+    /// families instead — so this exercises the query, not a layout.
     public static let sampleModelUsage: [ModelUsage] = [
         ModelUsage(
             modelID: "claude-sonnet-5",
@@ -421,7 +423,9 @@ public struct MockUsageStore: UsageStoring {
                 let usage = sampleTokenSplit(totalTokens: tokens)
                 // Roughly the blended rate the real per-model math lands on for
                 // a cache-read-heavy day; the exact figure doesn't matter for a
-                // fixture, its proportionality to the tokens does.
+                // fixture, its proportionality to the tokens does. One rate for
+                // every band, so the two blocks' `Total` rows agree by
+                // construction the way the real store's do.
                 return DailyUsagePoint(
                     day: day,
                     usage: usage,

@@ -10,7 +10,7 @@ any), filled bottom-up. Click it for the popover:
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/screenshot-popover-dark.png">
-  <img alt="Menu bar glyph and the popover below it, showing the signed-in account's 5-hour/7-day quota, a scoped weekly limit, usage credits, a second account collapsed below them, a 30-day stacked chart of tokens by source with its 5h legend, per-model totals, and a 30-day estimated-cost line over today's figure" src="assets/screenshot-popover-light.png" width="420">
+  <img alt="Menu bar glyph and the popover below it, showing the signed-in account's 5-hour/7-day quota, a scoped weekly limit, usage credits, a second account collapsed below them, and two matching 30-day blocks: a stacked chart of tokens by source and one of estimated cost by model, each over a table of that window's tokens and spend per band with a total" src="assets/screenshot-popover-light.png" width="420">
 </picture>
 
 ## Download
@@ -29,9 +29,9 @@ Pre-built releases (macOS app bundle, zipped) are available on the
 - Menu bar glyph showing 5-hour and 7-day quota usage plus a per-model weekly limit as three thin bars, tinted for light/dark mode automatically — the third bar is empty when Claude Code reports no scoped limit
 - A fourth, hatched bar for organisation usage credits, shown only while Claude Code reports any — most accounts never see it
 - Popover with per-window usage and reset countdowns, one row per per-model weekly limit Claude Code reports, and a usage-credits row showing money spent against the monthly cap (`€0.00 of €33.00`, in whatever currency the account is billed in)
-- Per-source breakdown (CLI / VS Code / SDK-agents) as a 30-day stacked chart with dated axes, each source's last 5 hours in the legend below it, and per-model token/cost totals
-- Estimated spend charted over the same 30 days, with today's figure under it — computed locally from Anthropic's published per-token prices, so on a subscription it is what the usage would have cost, not what was billed
-- Hover either chart to read one day back: the row under it swaps to that day's date and numbers, so a spike on the curve gets a figure without a tooltip covering the plot
+- Two matching 30-day blocks with dated axes — **By source** (CLI / VS Code / SDK-agents) stacking tokens, **By model** (Sonnet / Opus / Haiku / Fable) stacking estimated spend — each over a table of that window's tokens and cost per band, with a total the two blocks share
+- Estimated spend computed locally from Anthropic's published per-token prices, so on a subscription it is what the usage would have cost, not what was billed
+- Hover either chart to read one day back: that block's table swaps its caption for the day's date and every number with it, so a spike gets a figure without a tooltip covering the plot — and hovering one block leaves the other alone
 - Local session-log parsing (`~/.claude/projects/*/*.jsonl`) — token counts and cost always available, no network or credentials needed
 - Live 5-hour/7-day quota percentage straight from Claude Code's own cached reading — no setup, no hook to install; the `statusLine` hook is optional and just makes it fresher — see [Quota source](#quota-source)
 - Account-aware: the quota section is titled with the Anthropic account Claude Code is logged in as (its login email), and any other account this Mac has readings for is listed below it as a collapsed row you can open with a click anywhere on it, marked with a cross against the active account's checkmark — swapping the global login no longer mixes two accounts' numbers

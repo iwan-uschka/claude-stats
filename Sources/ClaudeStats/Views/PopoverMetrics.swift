@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 /// Shared layout constants for the popover, so the label columns of the quota
-/// rows, the "Tokens by source" legend and the "Costs by model" rows line up with each other.
+/// rows and the tables under the "By source" and "By model" charts line up with each other.
 enum PopoverMetrics {
     static let popoverWidth: CGFloat = 340
     static let contentPadding: CGFloat = 14
@@ -35,15 +35,28 @@ enum PopoverMetrics {
     /// still ends flush with the countdowns above it.
     static let percentAndCountdownColumnWidth: CGFloat =
         percentColumnWidth + rowSpacing + countdownColumnWidth
-    /// Width of the token column in the "Costs by model" section — wider than a
-    /// "Tokens by source" legend number because the counts here carry a `tok` suffix
-    /// and are all-time rather than windowed.
-    static let modelTokenColumnWidth: CGFloat = 98
-    /// Width of the cost column in the "Costs by model" section. Wide enough for
-    /// 4-digit spend (`$1234.56`) — a heavy cache-read day can push a single
-    /// model's estimate well past the `$3.15`-sized figures this used to be
-    /// sized for.
-    static let costColumnWidth: CGFloat = 76
+    /// Width of the token column in a chart's table, both blocks sharing it.
+    ///
+    /// 48: the widest count a thirty-day sum plausibly reaches is `298.5M`
+    /// (41.0 pt in the monospaced-digit ``valueFont``), and the `Tokens`
+    /// heading above it measures 33.9 at ``captionFont``. The old per-model
+    /// column was 98 because every cell carried a `tok` suffix — the heading
+    /// says it once instead, and the 50 pt that frees is what pays for the
+    /// column beside it.
+    static let tableTokenColumnWidth: CGFloat = 48
+    /// Width of the cost column in a chart's table.
+    ///
+    /// 74, and sized by the *heading* rather than by the numbers for once:
+    /// `Estimated cost` measures 71.7 pt at ``captionFont``, against 52.3 for
+    /// the widest 4-digit figure (`$1234.56`) at ``valueFont``. Widened rather
+    /// than abbreviated to `Est.` — that word is the whole qualification, and
+    /// the row had 102 pt of slack to spend on it (dot, widest label
+    /// `SDK/agents`, both columns and their gaps come to 209 of 312 pt).
+    static let tableCostColumnWidth: CGFloat = 74
+    /// Vertical gap between the rows of a chart's table, caption row included.
+    /// Tighter than ``quotaRowSpacing``: these rows are one reading each, with
+    /// no bar to separate, and two tables of them sit in one popover.
+    static let tableRowSpacing: CGFloat = 4
     /// Overall height of a popover chart, axis labels included. The plot
     /// itself gets what is left after the x-axis labels, so this is larger
     /// than the 44 pt the chart ran at while its axes were hidden.
@@ -67,7 +80,7 @@ enum PopoverMetrics {
     /// gridline at this chart's size.
     static let chartTickLength: CGFloat = 3
     /// Breathing room above and below a chart — under its section title, over
-    /// the legend beneath it. The chart is the only element in the popover that
+    /// the table beneath it. The chart is the only element in the popover that
     /// is a *picture* rather than a row of text, and run flush against those it
     /// reads as part of them.
     ///
@@ -97,33 +110,14 @@ enum PopoverMetrics {
     /// keep, and this has to inset marks and ticks by the same amount or it
     /// would reintroduce the offset it is sitting next to.
     static let chartXScaleEdgePadding: CGFloat = 3
-    /// Stroke width of a single-series chart line. Heavier than a hairline so
-    /// the curve reads as data rather than as a gridline at 72 pt, and lighter
-    /// than 2 so a spiky day keeps its shape instead of blurring into a wedge.
-    static let chartLineWidth: CGFloat = 1.5
-    /// Diameter of a legend swatch — the dot that ties a legend row to its band
-    /// in the chart.
+    /// Diameter of a table swatch — the dot that ties a table row to its band
+    /// in the chart above it.
     static let legendSwatchSize: CGFloat = 6
-    /// Gap between a legend swatch and its label.
+    /// Gap between a table swatch and its label.
     static let legendSwatchSpacing: CGFloat = 4
-    /// Area of the dot marking the hovered day on a single-line chart. Small:
-    /// it has to read as "this point", not as a marker the chart always had.
+    /// Area of a dot marking the hovered day on a band's top edge. Small: it
+    /// has to read as "this point", not as a marker the chart always had.
     static let chartHoverPointSize: CGFloat = 16
-    /// Floor under a "Tokens by source" legend number *while hovering*, so a
-    /// pointer travelling across the chart doesn't make the row reflow under
-    /// every day it crosses.
-    ///
-    /// 42, which holds the widest count the formatter produces at a length
-    /// that matters — `298.5M` measures 41.0 pt in the monospaced-digit
-    /// ``valueFont``, `40.6k` 30.3, `1.1M` 27.0. No floor at rest, where the
-    /// five-hour counts are narrower and the row also carries its `5h` caption.
-    ///
-    /// It is the whole width budget: three names (124 pt), three swatches with
-    /// their gaps (42) and three of these columns come to 292 of the 312 pt
-    /// content width, leaving the two gaps between chips their minimum and
-    /// nothing else. That is why the hovered date sits opposite the section
-    /// title instead of at the end of this row.
-    static let legendTokenColumnWidth: CGFloat = 42
     static let rowSpacing: CGFloat = 8
     static let sectionSpacing: CGFloat = 10
     /// Gap between an account's active/inactive icon and its name.
@@ -133,7 +127,7 @@ enum PopoverMetrics {
     /// Gap above each *other*-account disclosure group, and between two of
     /// them. Deliberately double ``quotaRowSpacing``: the groups carry no
     /// divider of their own any more (a `Divider()` there read as a top-level
-    /// section break, the same rule that separates "Tokens by source" from "Costs by model"),
+    /// section break, the same rule that separates "By source" from "By model"),
     /// so whitespace is the only thing left saying a collapsed row belongs to
     /// neither the bars above it nor the group below it.
     static let accountGroupSpacing: CGFloat = 12

@@ -454,8 +454,9 @@ final class DisplayFormatTests: XCTestCase {
 
     /// Every entrypoint keeps a row, including the ones with nothing in the
     /// window — an absent row would read as an entrypoint this Mac has never
-    /// used rather than an idle one. The "Tokens by source" legend is built from these
-    /// rows, so a dropped one would also cost its band's swatch its meaning.
+    /// used rather than an idle one. No view reads this breakdown any more (the
+    /// popover's "By source" block is built from `DailyUsageHistory`, which
+    /// keeps the same rule), so this pins the data layer's own contract.
     func testEmptyBreakdownStillHasARowPerEntrypoint() {
         let rows = EntrypointBreakdown.empty(window: .fiveHour).orderedRows
         XCTAssertEqual(rows.map(\.entrypoint), Entrypoint.displayOrder)

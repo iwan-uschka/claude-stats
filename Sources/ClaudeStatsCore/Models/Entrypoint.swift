@@ -20,7 +20,8 @@ public enum Entrypoint: String, Sendable, Hashable, Codable, CaseIterable {
         self.init(rawValue: rawJSONLValue)
     }
 
-    /// Legend label under the popover's "Tokens by source" chart.
+    /// Row label in the popover's "By source" table, and the name of that
+    /// row's band in the chart above it.
     public var displayName: String {
         switch self {
         case .cli: return "CLI"
@@ -33,9 +34,14 @@ public enum Entrypoint: String, Sendable, Hashable, Codable, CaseIterable {
     public static let displayOrder: [Entrypoint] = [.cli, .vscode, .sdkAgent]
 }
 
-/// One of the rolling windows `UsageStoring` sums over. The popover shows
-/// only ``fiveHour`` as a number today (the "Tokens by source" legend); the other two
-/// are still the slices its queries are expressed in.
+/// One of the rolling windows `UsageStoring` sums over.
+///
+/// The popover shows none of them as a number any more: its two blocks read one
+/// thirty-day ``DailyUsageHistory`` and nothing else, so the five-hour count
+/// that used to sit under the source chart went the way of the `24h` and `7d`
+/// columns before it. These stay as the data layer's own slices — and
+/// ``SessionCorpusIndex`` sizes its retention from the longest of them, so the
+/// set is load-bearing regardless of what any view reads.
 public enum TimeWindow: String, Sendable, Hashable, Codable, CaseIterable {
     case fiveHour = "5h"
     case twentyFourHour = "24h"
@@ -50,7 +56,8 @@ public enum TimeWindow: String, Sendable, Hashable, Codable, CaseIterable {
         }
     }
 
-    /// Column header in the popover ("5h", "24h", "7d").
+    /// Short name for the window ("5h", "24h", "7d") — a log line or a test
+    /// failure, since nothing in the UI prints one now.
     public var displayName: String { rawValue }
 
     /// Earliest timestamp still inside the window.

@@ -3,30 +3,35 @@
 ## [Unreleased]
 
 ### Added
+- The popover's usage sections are now two matching blocks, "By source" and
+  "By model": a 30-day stacked chart each — tokens per source, estimated cost
+  per model — over a table of that window's tokens and cost per band, with a
+  total.
 - Hovering either popover chart reads back the day under the pointer: a rule
-  and a dot per series mark it in the plot, the "Estimated cost" row swaps
-  `Today` for that day's date and figure, and the "Tokens by source" legend
-  swaps its 5-hour counts for that day's.
-- An "Estimated cost" chart: 30 days of estimated daily spend as a single line,
-  above today's exact figure.
+  and a dot per band mark it in the plot, and that block's table swaps its
+  caption for the day's date and every number with it.
 - Quota readings are now grouped per Anthropic account, with other accounts'
   readings shown below the current one.
 
 ### Changed
-- The "Tokens by source" chart now has an "Other" band for usage from an
-  entrypoint this version doesn't recognise, so the stacked sources add up to
-  the day's total instead of quietly falling short of it.
+- Every number below the quota bars is now the same 30-day window, or the one
+  day under the pointer: the 5-hour source counts, the fixed-24h model rows and
+  the `Today` spend figure are gone.
+- "Estimated cost" is no longer its own section — the top edge of the "By
+  model" stack is the line it used to draw, and today's spend is now read by
+  hovering the last day.
+- The "By source" chart now has an "Other" band for usage from an entrypoint
+  this version doesn't recognise, so the stacked sources add up to the day's
+  total instead of quietly falling short of it; the "By model" chart does the
+  same for unrecognised model IDs.
 - The app now has a single colour, Claude's terracotta: the warning, error and
   sample-data lines, the account markers, the Claude mark in the popover header
   and the menu bar's dev-build dot no longer use orange or red, and the charts'
   grey bands are five shades of that one colour.
-- The popover's "By model" section is now "Costs by model".
-- "Est. cost today" is now an "Estimated cost" section with the daily chart over a
-  `Today` row; the estimate caveat moved to the section title, where it covers
-  the chart as well.
-- The popover's "This Mac" table is now a "Tokens by source" chart: 30 days of
-  daily token usage stacked per source, dated x-axis and labelled y-axis, with
-  each source's 5-hour count in the legend under it.
+- The popover's "This Mac" table is now the "By source" block: 30 days of daily
+  token usage stacked per source, with dated x-axis and labelled y-axis.
+- "Est. cost today" is gone; the estimate caveat now sits over the tables' cost
+  column, where it qualifies every figure in it.
 - Quota percentages from 99% up to 100% show one decimal place (`99.4%`), so
   "almost done" no longer reads as "done".
 - The popover's "Plan" and "Burn rate" lines are gone — the plan tier was

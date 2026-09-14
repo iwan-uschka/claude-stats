@@ -225,11 +225,11 @@ final class ReadmeAssetRenderTests: XCTestCase {
     /// The popover card on its own, transparent outside the rounded body.
     ///
     /// Rendered through a real `NSHostingView` in an offscreen window rather
-    /// than `ImageRenderer`. That started as a hard requirement — the "This Mac"
-    /// section had a `.pickerStyle(.segmented)` `Picker`, an AppKit
+    /// than `ImageRenderer`. That started as a hard requirement — what is now
+    /// the "By source" block had a `.pickerStyle(.segmented)` `Picker`, an AppKit
     /// `NSSegmentedControl` behind an `NSViewRepresentable`, which
     /// `ImageRenderer` paints as SwiftUI's yellow "unsupported view"
-    /// placeholder. That picker is gone (the section is a chart now), but
+    /// placeholder. That picker is gone (the block is a chart now), but
     /// the hosting view stays: it is the same AppKit draw path the shipping
     /// popover uses, and it is what carries the `NSAppearance` the next
     /// comment depends on — `ImageRenderer` exposes a SwiftUI environment, not
@@ -366,7 +366,7 @@ final class ReadmeAssetRenderTests: XCTestCase {
 private struct PopoverCard: View {
     let model: AppModel
     let clock: PopoverClock
-    /// Seeds the popover's hover state — see ``PopoverView/init(model:clock:hoveredSourceDay:hoveredCostDay:)``.
+    /// Seeds the popover's hover state — see ``PopoverView/init(model:clock:hoveredSourceDay:hoveredModelDay:)``.
     var hoveredDay: Date?
     let colorScheme: ColorScheme
     let fill: Color
@@ -386,7 +386,7 @@ private struct PopoverCard: View {
             model: model,
             clock: clock,
             hoveredSourceDay: hoveredDay,
-            hoveredCostDay: hoveredDay
+            hoveredModelDay: hoveredDay
         )
             .padding(.top, Self.tailHeight)
             .background(shape.fill(fill))

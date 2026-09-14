@@ -53,25 +53,28 @@ final class PopoverChartAlignmentTests: XCTestCase {
     /// plot were simply clipping it.
     private func hoveredTickDay(in days: [Date]) -> Date { PopoverChartAxis.tickDays(in: days)[1] }
 
-    func testTheCostChartsHoverRuleLandsOnTheHoveredDaysAxisTick() throws {
+    /// One band of `points`, which is all any of these measurements needs —
+    /// the offsets they guard are properties of the scale, not of the stack.
+    private func band(_ points: [DailyUsagePoint]) -> [DailyUsageSeries] {
+        [DailyUsageSeries(label: "CLI", color: DailyUsageSeries.bandColor(0), points: points)]
+    }
+
+    func testTheModelChartsHoverRuleLandsOnTheHoveredDaysAxisTick() throws {
+        // The cost metric measured separately from the token one: it picks its
+        // own y-values and its own label widths, and the leading edge those put
+        // the plot at is exactly what a misaligned rule would be measured from.
         let days = self.days(30)
-        let points = days.map { DailyUsagePoint(day: $0, estimatedCostUSD: 5) }
+        let series = band(days.map { DailyUsagePoint(day: $0, estimatedCostUSD: 5) })
 
         try assertRuleSitsOnATick(
-            hovered: DailyCostChart(days: days, points: points, hoveredDay: hoveredTickDay(in: days)),
-            resting: DailyCostChart(days: days, points: points)
+            hovered: DailyUsageChart(days: days, series: series, metric: .cost, hoveredDay: hoveredTickDay(in: days)),
+            resting: DailyUsageChart(days: days, series: series, metric: .cost)
         )
     }
 
     func testTheSourceChartsHoverRuleLandsOnTheHoveredDaysAxisTick() throws {
         let days = self.days(30)
-        let series = [
-            DailyUsageSeries(
-                label: "CLI",
-                color: DailyUsageSeries.bandColor(0),
-                points: days.map { DailyUsagePoint(day: $0, usage: TokenUsage(inputTokens: 1000)) }
-            )
-        ]
+        let series = band(days.map { DailyUsagePoint(day: $0, usage: TokenUsage(inputTokens: 1000)) })
 
         try assertRuleSitsOnATick(
             hovered: DailyUsageChart(days: days, series: series, hoveredDay: hoveredTickDay(in: days)),
@@ -81,25 +84,26 @@ final class PopoverChartAlignmentTests: XCTestCase {
 
     /// The two charts the popover stacks, over the same days, with y-labels of
     /// deliberately different widths: `$2.50`-shaped against `2G`-shaped.
-    private func stackedCharts(days: [Date], yLabelWidth: CGFloat? = nil) -> (cost: DailyCostChart, source: DailyUsageChart) {
+    private func stackedCharts(days: [Date], yLabelWidth: CGFloat? = nil) -> (cost: DailyUsageChart, source: DailyUsageChart) {
         (
-            DailyCostChart(
+            DailyUsageChart(
                 days: days,
-                points: days.map { DailyUsagePoint(day: $0, estimatedCostUSD: 2.5) },
+                series: band(days.map { DailyUsagePoint(day: $0, estimatedCostUSD: 2.5) }),
+                metric: .cost,
                 yLabelWidth: yLabelWidth
             ),
             DailyUsageChart(
                 days: days,
-                series: [
-                    DailyUsageSeries(
-                        label: "CLI",
-                        color: DailyUsageSeries.bandColor(0),
-                        points: days.map { DailyUsagePoint(day: $0, usage: TokenUsage(inputTokens: 2_000_000_000)) }
-                    )
-                ],
+                series: band(days.map { DailyUsagePoint(day: $0, usage: TokenUsage(inputTokens: 2_000_000_000)) }),
                 yLabelWidth: yLabelWidth
             )
         )
+    }
+
+    /// A cost chart over `points` — the "By model" shape, the one whose ink is
+    /// the sharper measuring stick for where the plot starts and stops.
+    private func costChart(days: [Date], points: [DailyUsagePoint], hoveredDay: Date? = nil) -> DailyUsageChart {
+        DailyUsageChart(days: days, series: band(points), metric: .cost, hoveredDay: hoveredDay)
     }
 
     func testAChartsLabelColumnIsTheWidthOfItsOwnWidestLabel() {
@@ -164,11 +168,11 @@ final class PopoverChartAlignmentTests: XCTestCase {
         // rule the highlight draws is exactly where the day is.
         let days = self.days(30)
         let points = days.enumerated().map { DailyUsagePoint(day: $1, estimatedCostUSD: 3 + Double($0 % 5)) }
-        let resting = try render(DailyCostChart(days: days, points: points))
+        let resting = try render(costChart(days: days, points: points))
         let lines = try resting.horizontalLineExtent()
 
         for (day, end) in [(days.first, lines.first), (days.last, lines.last)] {
-            let hovered = try render(DailyCostChart(days: days, points: points, hoveredDay: day))
+            let hovered = try render(costChart(days: days, points: points, hoveredDay: day))
             let dayX = try XCTUnwrap(hovered.tallestDifference(from: resting), "hover drew nothing")
             XCTAssertEqual(dayX, end, accuracy: Self.tolerance, "a horizontal line overhangs the days it spans")
         }
@@ -199,8 +203,8 @@ final class PopoverChartAlignmentTests: XCTestCase {
     ) throws {
         let days = self.days(30)
         let points = days.enumerated().map { DailyUsagePoint(day: $1, estimatedCostUSD: 3 + Double($0 % 5)) }
-        let resting = try render(DailyCostChart(days: days, points: points))
-        let hovered = try render(DailyCostChart(days: days, points: points, hoveredDay: pick(days)))
+        let resting = try render(costChart(days: days, points: points))
+        let hovered = try render(costChart(days: days, points: points, hoveredDay: pick(days)))
 
         let rule = try XCTUnwrap(hovered.tallestDifference(from: resting), "hover drew nothing", file: file, line: line)
         let extent = try XCTUnwrap(hovered.differenceExtent(from: resting), "hover drew nothing", file: file, line: line)
@@ -217,11 +221,10 @@ final class PopoverChartAlignmentTests: XCTestCase {
     /// Renders the same chart hovered and at rest, and asserts the stroke hover
     /// adds sits on one of the x-axis ticks.
     ///
-    /// Two renders because the rule cannot be picked out of one. On the cost
-    /// chart it is the only tall vertical stroke, but the source chart is a
-    /// *filled* stack: every column inside the band is solid ink, so no search
-    /// for a dark column finds a line there. Differencing leaves exactly what
-    /// hover drew — the rule, and the dots on it.
+    /// Two renders because the rule cannot be picked out of one: these are
+    /// *filled* stacks, so every column inside a band is solid ink and no
+    /// search for a dark column finds a line there. Differencing leaves exactly
+    /// what hover drew — the rule, and the dots on it.
     private func assertRuleSitsOnATick(
         hovered: some View,
         resting: some View,
