@@ -153,6 +153,11 @@ public final class SessionCorpusIndex {
         let cutoff = now.addingTimeInterval(-retention)
 
         var seen = Set<String>()
+        // Scan order, retained: `sessionFileURLs` already yields paths sorted, so
+        // this *is* the deterministic assembly order the snapshot loop below needs.
+        // Re-deriving it there with `files.keys.sorted()` sorted the same 13.5k
+        // strings a second time on every rebuild.
+        var scannedPaths: [String] = []
         var reparsedCount = 0
         let statPass = Self.signposter.beginInterval("StatPass", id: Self.signposter.makeSignpostID())
         for url in SessionLogParser.sessionFileURLs(inConfigDirectory: configDirectory) {
@@ -162,6 +167,7 @@ public final class SessionCorpusIndex {
             else { continue }  // vanished mid-scan; next rebuild sees the truth
             let path = url.path
             seen.insert(path)
+            scannedPaths.append(path)
 
             if var cached = files[path],
                cached.modificationDate == modificationDate,
@@ -241,12 +247,14 @@ public final class SessionCorpusIndex {
         var skipped: [ClaudeStatsError] = []
         var historical: [String?: HistoricalModelUsage] = [:]
         var dailyCells: [DailyUsageCell: DailyUsageTotals] = [:]
-        // Sorted by path so the assembly is deterministic across launches,
-        // matching `SessionLogParser.sessionFileURLs`' ordering guarantee —
-        // Dictionary iteration order would let timestamp ties resolve
-        // differently per process.
-        for path in files.keys.sorted() {
-            let entry = files[path]!
+        // Walked in scan order, which `SessionLogParser.sessionFileURLs` already
+        // guarantees is sorted by path, so the assembly is deterministic across
+        // launches — Dictionary iteration order would let timestamp ties resolve
+        // differently per process. `files` was just filtered down to `seen`, so
+        // its keys are a subset of `scannedPaths`; a path with no entry is one
+        // that vanished mid-scan.
+        for path in scannedPaths {
+            guard let entry = files[path] else { continue }
             events.append(contentsOf: entry.recentEvents)
             skipped.append(contentsOf: entry.skippedSamples)
             for (modelID, total) in entry.foldedByModel {

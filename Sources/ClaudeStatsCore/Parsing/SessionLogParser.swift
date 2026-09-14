@@ -229,11 +229,18 @@ public struct SessionLogParser: Sendable {
             options: [.skipsHiddenFiles, .skipsPackageDescendants]
         ) else { return [] }
 
-        var urls: [URL] = []
+        // Decorate-sort-undecorate, deliberately — not `sorted { $0.path < $1.path }`.
+        // `URL.path` re-materialises a CFURL→String bridge on every access, so a
+        // comparator that reads it pays two bridges per comparison: ~370k of them
+        // for a 13.5k-file corpus, measured at 436 ms per scan against 191 ms when
+        // each path is built exactly once. `SessionCorpusIndex.rebuild()` runs this
+        // on every coalesced write, so that gap showed up as a periodic CPU spike.
+        var decorated: [(path: String, url: URL)] = []
         for case let url as URL in enumerator where url.pathExtension.lowercased() == "jsonl" {
-            urls.append(url)
+            decorated.append((url.path, url))
         }
-        return urls.sorted { $0.path < $1.path }
+        decorated.sort { $0.path < $1.path }
+        return decorated.map(\.url)
     }
 
     // MARK: - Timestamps
