@@ -13,6 +13,10 @@
   readings shown below the current one.
 
 ### Changed
+- The app now has a single colour, Claude's terracotta: the warning, error and
+  sample-data lines, the account markers, the Claude mark in the popover header
+  and the menu bar's dev-build dot no longer use orange or red, and the charts'
+  grey bands are five shades of that one colour.
 - The popover's "By model" section is now "Costs by model".
 - "Est. cost today" is now an "Estimated cost" section with the daily chart over a
   `Today` row; the estimate caveat moved to the section title, where it covers

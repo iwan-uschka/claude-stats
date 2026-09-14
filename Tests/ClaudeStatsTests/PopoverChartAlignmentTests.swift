@@ -68,7 +68,7 @@ final class PopoverChartAlignmentTests: XCTestCase {
         let series = [
             DailyUsageSeries(
                 label: "CLI",
-                shade: DailyUsageSeries.shades[0],
+                color: DailyUsageSeries.bandColor(0),
                 points: days.map { DailyUsagePoint(day: $0, usage: TokenUsage(inputTokens: 1000)) }
             )
         ]
@@ -93,7 +93,7 @@ final class PopoverChartAlignmentTests: XCTestCase {
                 series: [
                     DailyUsageSeries(
                         label: "CLI",
-                        shade: DailyUsageSeries.shades[0],
+                        color: DailyUsageSeries.bandColor(0),
                         points: days.map { DailyUsagePoint(day: $0, usage: TokenUsage(inputTokens: 2_000_000_000)) }
                     )
                 ],

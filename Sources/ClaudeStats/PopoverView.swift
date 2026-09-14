@@ -101,7 +101,11 @@ struct PopoverView: View {
     private var header: some View {
         HStack(spacing: 6) {
             ClaudeMarkView(size: 13)
-                .foregroundStyle(.primary)
+                // The one place the mark is drawn in brand ink rather than in
+                // the surrounding text's: the menu bar glyph is a template
+                // image the system tints, so this is where "Claude" can be a
+                // colour rather than a shape.
+                .foregroundStyle(PopoverMetrics.brandColor)
                 .accessibilityHidden(true)
             Text("Claude Stats")
                 .font(.system(size: 12, weight: .semibold))
@@ -127,7 +131,7 @@ struct PopoverView: View {
                 if let warning = model.quotaWarning {
                     Text(warning)
                         .font(PopoverMetrics.captionFont)
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(PopoverMetrics.brandColor)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             } else {
@@ -410,12 +414,17 @@ struct PopoverView: View {
 
     /// The active/inactive marker in front of an account name: the same
     /// checkmark Settings shows next to "Statusline hook installed", and a
-    /// cross for a login nobody is signed in as. Deliberately uncoloured —
-    /// they inherit the title's ink — because "inactive" is a state, not a
-    /// fault; the shapes alone carry the contrast. Shown only while both
-    /// kinds exist, see ``AppModel/showsAccountStateMarkers``.
+    /// cross for a login nobody is signed in as. Shown only while both kinds
+    /// exist, see ``AppModel/showsAccountStateMarkers``.
+    ///
+    /// Both in brand ink, not green and red: "inactive" is a state, not a
+    /// fault, so the two markers differ by shape alone — and a second and third
+    /// hue would break the one-colour rule ``PopoverMetrics/brandColor``
+    /// states. The name beside it keeps the row's own ink, so the marker is the
+    /// only coloured thing in the row.
     private func accountStateMarker(active: Bool) -> some View {
         Image(systemName: active ? "checkmark.circle.fill" : "xmark.circle.fill")
+            .foregroundStyle(PopoverMetrics.brandColor)
             .accessibilityLabel(active ? "Active account" : "Inactive account")
     }
 
@@ -450,7 +459,7 @@ struct PopoverView: View {
         if let label = notice.body.linkLabel, let url = notice.body.linkURL {
             var link = AttributedString(label)
             link.link = url
-            link.foregroundColor = PopoverMetrics.brandLinkColor
+            link.foregroundColor = PopoverMetrics.brandColor
             link.underlineStyle = .single
             attributed.append(link)
         }
@@ -488,11 +497,11 @@ struct PopoverView: View {
             .help(notice.body.linkURL?.absoluteString ?? notice.text)
     }
 
-    /// Orange only for a staleness warning; the cleared-cache notice is an
+    /// Brand ink only for a staleness warning; the cleared-cache notice is an
     /// expected, self-resolving state, not something to flag.
     private var quotaFallbackStyle: Color {
         if model.quotaCacheClearedNotice != nil { return Color.secondary }
-        return model.quotaWarning != nil ? Color.orange : Color.secondary
+        return model.quotaWarning != nil ? PopoverMetrics.brandColor : Color.secondary
     }
 
     /// Explains a token total that replayed cache reads dominate, so the
@@ -619,7 +628,7 @@ struct PopoverView: View {
         let window = sourceWindowLabel(hoveredIndex: hoveredIndex)
         return HStack(spacing: PopoverMetrics.legendSwatchSpacing) {
             Circle()
-                .fill(Color.primary.opacity(band.shade))
+                .fill(band.color)
                 .frame(width: PopoverMetrics.legendSwatchSize, height: PopoverMetrics.legendSwatchSize)
             Text(entrypoint.displayName)
                 .font(PopoverMetrics.bodyFont)
@@ -740,13 +749,16 @@ struct PopoverView: View {
     private var sampleDataLine: some View {
         Text("Sample data — no Claude logs found")
             .font(PopoverMetrics.captionFont)
-            .foregroundStyle(.orange)
+            .foregroundStyle(PopoverMetrics.brandColor)
     }
 
+    /// An error line, in the same brand ink as the warning and sample-data
+    /// lines — the popover has one colour, and the words say which of the three
+    /// this is. See ``PopoverMetrics/brandColor``.
     private func errorLine(_ error: String) -> some View {
         Text(error)
             .font(PopoverMetrics.captionFont)
-            .foregroundStyle(.red)
+            .foregroundStyle(PopoverMetrics.brandColor)
             .lineLimit(2)
             .fixedSize(horizontal: false, vertical: true)
     }

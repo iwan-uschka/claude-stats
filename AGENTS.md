@@ -108,7 +108,8 @@ Two independent tiers, deliberately decoupled:
        account's rows, never gated on staleness, never an error, and left out
        entirely for a group whose windows have all rolled over. Each group
        **starts collapsed**: the closed row is a cross icon
-       (`xmark.circle.fill`, uncoloured), the account name, and a trailing
+       (`xmark.circle.fill`, in brand terracotta like every other marker —
+       see "Colour"), the account name, and a trailing
        caret, with no summary number (a percentage there would be about an
        account the glyph and the bars above aren't describing). The whole row
        is a single plain `Button`, not a `DisclosureGroup` — clicking anywhere
@@ -120,7 +121,9 @@ Two independent tiers, deliberately decoupled:
        read as one list while the dimmer one is visibly not the account the
        bars describe. The active account's own section title takes the
        matching checkmark (`checkmark.circle.fill`, the icon Settings uses next
-       to "Statusline hook installed", uncoloured here), and only while such a
+       to "Statusline hook installed"), in the same terracotta as the cross —
+       the two differ by shape alone, never green against red, because
+       "inactive" is a state and not a fault — and only while such a
        group exists (`AppModel.showsAccountStateMarkers`) — with nothing to
        contrast against, the bare account name reads better. Which groups are open lives in
        `AppModel.expandedOtherAccounts` (keyed by account uuid, `"unknown"` for
@@ -377,6 +380,32 @@ Two independent tiers, deliberately decoupled:
 
 ## UI
 
+### Colour
+
+**One colour, and it is Claude's terracotta.** Everything else is ink —
+primary, secondary, the system's own control colours. The brand colour is
+`PopoverMetrics.brandColor`, a per-appearance `NSColor` (`#A85E3E` light,
+`#E88A5C` dark; one literal for both measured 3.17:1 on a light card, under the
+4.5:1 AA floor for caption-size text). It is what paints the promo link, the
+Claude mark in the popover header, the account state markers, the staleness
+warning, the sample-data line, the error lines, and the menu bar's dev-build
+dot. There is no second alert hue: `.orange` for a warning, `.red` for an error
+and terracotta for a link put three colours on a card whose vocabulary is
+"Claude" versus "ink", and the words already say which of the three a line is.
+
+**Only the chart bands and the legend dots that point at them may use a
+*shade*** — `PopoverMetrics.chartBandColors`, five steps of the same hue,
+strongest first, the first step being the brand colour itself (which is also
+the cost line's ink). The ramp is bounded rather than running to white or
+black: measured against white and the ≈`#232323` dark card it steps
+4.84 / 3.77 / 2.94 / 2.31 / 1.80 and 6.15 / 4.79 / 3.75 / 2.92 / 2.29, about a
+factor of 1.28 apart, which is what lets two touching bands be told apart while
+the palest one still reads against its own background. `PopoverColorTests`
+measures all of it; the literals are not to be nudged by eye in one appearance.
+The hover rule and the hover dots stay on `Color.primary`, since they have to
+read against every band. `MenuBarGlyph` is a **template image** — the system
+tints it, so it takes no colour of its own.
+
 `NSStatusItem` with a custom SwiftUI-hosted view:
 
 - Claude mark (see `assets/claude-mark.svg`) on the left, in place of a
@@ -431,7 +460,7 @@ Click opens a popover:
                                     never printed, both sources are. No age
                                     and no `· stale` suffix: freshness is not
                                     displayed; an over-threshold reading shows
-                                    the orange warning line instead. The title
+                                    the terracotta warning line instead. The title
                                     also carries the `disabled_reason` tooltip
                                     when the payload
                                     said why there are no usage credits — there
@@ -491,7 +520,7 @@ Usage credits ▨▨░░░░░░   €0.00 of €33.00
                                     bar each one names: the line wraps to the
                                     full content width, so one between two bars
                                     split the column of rows in half.
-<staleness warning, orange>       ← and after those, the staleness warning or,
+<staleness warning, terracotta>   ← and after those, the staleness warning or,
                                     with no snapshot at all, the "no source yet"
                                     / just-cleared-cache line.
 
@@ -558,21 +587,21 @@ Tokens by source
                                     inside one window and said nothing across
                                     windows.)
 
-                                    All three dots are drawn in the *top*
-                                    band's ink rather than each band's own. The
-                                    third band is drawn at 0.24 opacity and a
-                                    dot that pale on top of it cannot be seen;
-                                    the dots are markers, not more data, and
-                                    carry the same weight as the cost chart's
-                                    single one. Two dots still merge where a
+                                    Every dot is drawn in plain primary ink
+                                    rather than in its own band's: a dot has to
+                                    read against whichever band it lands on, and
+                                    the palest shade sits at about 1.8:1 against
+                                    the card. The dots are markers, not more
+                                    data, and carry the same weight as the cost
+                                    chart's single one — which is also why they
+                                    are the one thing in these charts that is
+                                    not terracotta. Two dots still merge where a
                                     band is thin — about 330k tokens of a 4M
                                     axis — which is the cost of asking a stacked
                                     chart for a per-band readout.
 
-                                    Monochrome — three opacities of the primary
-                                    ink, never three hues: colour in this
-                                    popover means a warning or the one brand
-                                    link. Bands are `.monotone`, never
+                                    One hue, five shades of it — never five
+                                    colours: see "Colour" above. Bands are `.monotone`, never
                                     `.catmullRom`: a spline through spiky daily
                                     counts overshoots, and on a stack an
                                     overshoot dips below the band underneath,
@@ -675,21 +704,21 @@ Tokens by source
                                     exactly as it was before hover existed —
                                     the committed screenshots did not change.
 
-                                    All three dots are drawn in the *top*
-                                    band's ink rather than each band's own. The
-                                    third band is drawn at 0.24 opacity and a
-                                    dot that pale on top of it cannot be seen;
-                                    the dots are markers, not more data, and
-                                    carry the same weight as the cost chart's
-                                    single one. Two dots still merge where a
+                                    Every dot is drawn in plain primary ink
+                                    rather than in its own band's: a dot has to
+                                    read against whichever band it lands on, and
+                                    the palest shade sits at about 1.8:1 against
+                                    the card. The dots are markers, not more
+                                    data, and carry the same weight as the cost
+                                    chart's single one — which is also why they
+                                    are the one thing in these charts that is
+                                    not terracotta. Two dots still merge where a
                                     band is thin — about 330k tokens of a 4M
                                     axis — which is the cost of asking a stacked
                                     chart for a per-band readout.
 
-                                    Monochrome — three opacities of the primary
-                                    ink, never three hues: colour in this
-                                    popover means a warning or the one brand
-                                    link. Bands are `.monotone`, never
+                                    One hue, five shades of it — never five
+                                    colours: see "Colour" above. Bands are `.monotone`, never
                                     `.catmullRom`: a spline through spiky daily
                                     counts overshoots, and on a stack an
                                     overshoot dips below the band underneath,
@@ -818,8 +847,9 @@ Today                              $3.05
                                     nothing under it, and a filled band would
                                     read as a fourth source rather than as a
                                     different question. Same ink as the source
-                                    chart's top band — one visual weight for the
-                                    popover's own data, not a second palette.
+                                    chart's first band, i.e. the brand colour —
+                                    one visual weight for the popover's own
+                                    data, not a second palette.
 
                                     `.monotone` for the reason the stacked chart
                                     uses it, only sharper here: an overshoot
@@ -994,12 +1024,15 @@ Today                              $3.05
                                     point, and they stay the accessible route.
 
                                     Deliberately not a per-model chart. That was
-                                    the original plan and it lost: five bands
-                                    (four families plus unrecognised IDs)
-                                    against a three-shade monochrome palette,
-                                    and placing it above the `fixed 24h` rows
-                                    would have sharpened the window ambiguity
-                                    the tag only papers over.
+                                    the original plan and it lost on two counts:
+                                    five bands (four families plus unrecognised
+                                    IDs) against a palette that then had three
+                                    shades, and placing it above the `fixed 24h`
+                                    rows would have sharpened the window
+                                    ambiguity the tag only papers over. The
+                                    first count no longer holds — the band ramp
+                                    carries five distinguishable shades now (see
+                                    "Colour").
 
 Refresh   Clear Quota Cache   Settings        Quit
                                   ← "Clear Quota Cache" deletes the statusline
@@ -1014,11 +1047,11 @@ The source tag names the source only when it is the backup: `cached` (Claude
 Code's own cached reading, the zero-setup default) versus nothing at all (a
 statusline capture, once that hook is installed). Both are Anthropic's own
 numbers, so the word "official" is not printed, and neither the reading's age
-nor a "stale" marker is shown — staleness surfaces only as the orange warning
-line. Settings still spells out the full `QuotaConfidence.displayLabel`. No
+nor a "stale" marker is shown — staleness surfaces only as the terracotta
+warning line. Settings still spells out the full `QuotaConfidence.displayLabel`. No
 estimate fallback: with neither
 source reporting, the popover shows an error instead of a number; a
-real-but-old reading keeps the last numbers with an orange staleness warning.
+real-but-old reading keeps the last numbers with a terracotta staleness warning.
 "Clear Quota Cache" deletes the statusline cache only — the whole per-session
 directory plus the legacy single file; `~/.claude.json` is Claude Code's, not
 ours — so the bars fall back to the cached-state numbers rather than going
@@ -1138,10 +1171,11 @@ image if dropped:
   `cacheDisplay(in:to:)` into an `NSBitmapImageRep` whose `pixelsWide/High` are
   4× its `size` — that ratio is where the 4× scale comes from.
 - **The AppKit appearance**, set on both the hosting view and its window.
-  `PopoverMetrics.brandLinkColor` is a dynamic `NSColor(name:)` resolved against
-  the *AppKit* appearance, not SwiftUI's `colorScheme`: without it the promo
-  link paints one theme's terracotta onto the other theme's card. Any other
-  `NSColor`-backed value in the tree has the same dependency.
+  `PopoverMetrics.brandColor` and every shade of `chartBandColors` are dynamic
+  `NSColor(name:)`s resolved against the *AppKit* appearance, not SwiftUI's
+  `colorScheme`: without it the promo link and the chart bands paint one
+  theme's terracotta onto the other theme's card. Any other `NSColor`-backed
+  value in the tree has the same dependency.
 
 Three things the renderer draws itself, all confined to that file:
 

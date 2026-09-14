@@ -233,7 +233,8 @@ final class ReadmeAssetRenderTests: XCTestCase {
     /// the hosting view stays: it is the same AppKit draw path the shipping
     /// popover uses, and it is what carries the `NSAppearance` the next
     /// comment depends on — `ImageRenderer` exposes a SwiftUI environment, not
-    /// an AppKit appearance, and `PopoverMetrics.brandLinkColor` resolves
+    /// an AppKit appearance, and every colour the popover has —
+    /// `PopoverMetrics.brandColor` and the band ramp under it — resolves
     /// against the latter.
     ///
     /// The 4× comes from the `NSBitmapImageRep` being allocated at
@@ -252,9 +253,9 @@ final class ReadmeAssetRenderTests: XCTestCase {
 
         let hosting = NSHostingView(rootView: card)
         // Drives both the AppKit controls and, through NSHostingView, SwiftUI's
-        // colorScheme — and resolves `PopoverMetrics.brandLinkColor`, a dynamic
-        // `NSColor(name:)` that reads the AppKit appearance rather than the
-        // SwiftUI environment.
+        // colorScheme — and resolves `PopoverMetrics.brandColor` and the chart
+        // band ramp, dynamic `NSColor(name:)`s that read the AppKit appearance
+        // rather than the SwiftUI environment.
         hosting.appearance = appearance
         hosting.frame = CGRect(origin: .zero, size: hosting.fittingSize)
 

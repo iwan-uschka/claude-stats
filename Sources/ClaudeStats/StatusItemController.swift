@@ -141,10 +141,16 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
     }
 }
 
-/// The dev-build indicator dot. `NSColor.systemOrange.cgColor` resolves once,
-/// against whatever appearance is current at the call site — a plain
-/// `NSView`'s layer would keep that light/dark snapshot forever. This
-/// re-resolves on every effective-appearance change instead.
+/// The dev-build indicator dot, in the app's one brand colour rather than
+/// `.systemOrange` — see ``PopoverMetrics/brandColor``: one alert colour
+/// everywhere, so the dot beside the glyph and the warning line inside the
+/// popover are visibly the same app speaking.
+///
+/// `.cgColor` on a dynamic `NSColor` resolves once, against whatever appearance
+/// is current at the call site — a plain `NSView`'s layer would keep that
+/// light/dark snapshot forever. This re-resolves on every effective-appearance
+/// change instead, which matters more here than it did for a system colour:
+/// the two brand literals differ by more than the system's orange pair does.
 private final class DevBuildDotView: NSView {
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
@@ -153,7 +159,7 @@ private final class DevBuildDotView: NSView {
 
     func updateBackgroundColor() {
         effectiveAppearance.performAsCurrentDrawingAppearance {
-            layer?.backgroundColor = NSColor.systemOrange.cgColor
+            layer?.backgroundColor = PopoverMetrics.brandNSColor.cgColor
         }
     }
 }

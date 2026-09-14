@@ -64,8 +64,8 @@ The statusline hook is the primary source and wins whenever it has a fresh
 reading; Claude Code's cached reading is the backup, used only when the hook is
 missing, failing, or stale. So one of them being quiet is invisible. There is
 no estimate fallback: with neither reporting, the popover shows an error rather
-than a guessed number, and a real-but-old reading stays on screen with an
-orange staleness warning. Token counts and cost (from local log parsing) work
+than a guessed number, and a real-but-old reading stays on screen with a
+terracotta staleness warning. Token counts and cost (from local log parsing) work
 regardless.
 
 This tier is account-wide — it reflects usage from other machines/containers

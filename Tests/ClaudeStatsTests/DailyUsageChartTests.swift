@@ -68,11 +68,14 @@ final class DailyUsageChartTests: XCTestCase {
         XCTAssertTrue(vscode.points.allSatisfy { $0.totalTokens == 0 })
     }
 
-    func testBandShadesAreDistinctAndDescending() throws {
-        let shades = DailyUsageSeries.sources(from: try makeHistory()).map(\.shade)
+    func testBandsTakeTheRampsShadesInStackOrder() throws {
+        let colors = DailyUsageSeries.sources(from: try makeHistory()).map(\.color)
 
-        XCTAssertEqual(Set(shades).count, shades.count, "two bands sharing a shade are unreadable")
-        XCTAssertEqual(shades, shades.sorted(by: >))
+        // Strongest shade at the bottom of the stack, one step per band up it.
+        // Which shades those are, and that they can be told apart, is measured
+        // in `PopoverColorTests`.
+        XCTAssertEqual(Set(colors).count, colors.count, "two bands sharing a shade are unreadable")
+        XCTAssertEqual(colors, colors.indices.map(DailyUsageSeries.bandColor))
     }
 
     func testEmptyHistoryStillYieldsOneBandPerSourceWithNoPoints() {

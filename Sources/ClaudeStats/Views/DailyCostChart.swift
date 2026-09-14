@@ -86,9 +86,10 @@ struct DailyCostChart: View {
                 )
                 .interpolationMethod(.monotone)
                 .lineStyle(StrokeStyle(lineWidth: PopoverMetrics.chartLineWidth, lineJoin: .round))
-                // The same ink as the source chart's top band: one visual weight
-                // for "this is the popover's own data", not a second palette.
-                .foregroundStyle(Color.primary.opacity(DailyUsageSeries.shades[0]))
+                // The same ink as the source chart's first band: one visual
+                // weight for "this is the popover's own data", not a second
+                // palette.
+                .foregroundStyle(DailyUsageSeries.bandColor(0))
             }
 
                 // The horizontal lines, drawn as marks rather than as
@@ -126,7 +127,10 @@ struct DailyCostChart: View {
                     y: .value("Estimated cost", points[index].estimatedCostUSD)
                 )
                 .symbolSize(PopoverMetrics.chartHoverPointSize)
-                .foregroundStyle(Color.primary.opacity(DailyUsageSeries.shades[0]))
+                // Primary ink, like the stacked chart's dots: a marker on top
+                // of the curve has to read against the curve's own terracotta,
+                // and both charts' highlights carry one weight.
+                .foregroundStyle(Color.primary)
             }
         }
         // Pinned to the top of ``yValues`` rather than left automatic: the axis

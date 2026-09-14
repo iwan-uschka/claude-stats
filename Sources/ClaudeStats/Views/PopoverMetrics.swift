@@ -148,18 +148,94 @@ enum PopoverMetrics {
     /// the same size as ``captionFont`` so the two can't drift apart.
     static let captionNSFont = NSFont.systemFont(ofSize: captionFontSize)
 
-    /// Claude's brand terracotta, used for the promo notice link instead of
-    /// `.accentColor` (which follows the user's system accent, usually blue,
-    /// and reads as an unrelated OS affordance rather than Claude's own
-    /// promo). Two literals switched on appearance, not one fixed color:
-    /// `#CA7C5E` measured ≈3.17:1 against a light popover background, below
-    /// the 4.5:1 WCAG 2.2 AA minimum for this caption-size text. `#A85E3E`
-    /// clears 4.5:1 on white (≈4.84:1); `#E88A5C` clears it against the dark
-    /// popover background (≈6.2:1).
-    static let brandLinkColor = Color(NSColor(name: nil) { appearance in
-        let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-        return isDark
-            ? NSColor(red: 0xE8 / 255, green: 0x8A / 255, blue: 0x5C / 255, alpha: 1)
-            : NSColor(red: 0xA8 / 255, green: 0x5E / 255, blue: 0x3E / 255, alpha: 1)
-    })
+    /// Claude's brand terracotta — the app's *only* colour.
+    ///
+    /// Everything that isn't monochrome is this one value at full strength:
+    /// the promo link, the Claude mark in the popover header, the account
+    /// markers, the staleness warning, the sample-data and error lines, and
+    /// the menu bar's dev-build dot. Not `.accentColor` (which follows the
+    /// user's system accent, usually blue, and reads as an unrelated OS
+    /// affordance rather than Claude's own), and no longer the system's
+    /// `.orange`/`.red`: a warning in orange, an error in red and a link in
+    /// terracotta put three hues on a card whose whole colour vocabulary is
+    /// "Claude" versus "ink". The severity is carried by the words, which say
+    /// what happened, rather than by a hue that has to be learned.
+    ///
+    /// Two literals switched on appearance, not one fixed color: `#CA7C5E`
+    /// measured ≈3.17:1 against a light popover background, below the 4.5:1
+    /// WCAG 2.2 AA minimum for this caption-size text. `#A85E3E` clears 4.5:1
+    /// on white (≈4.84:1); `#E88A5C` clears it against the dark popover
+    /// background (≈6.2:1).
+    ///
+    /// The only thing allowed to use anything else is a chart band — see
+    /// ``chartBandColors``, which are shades of exactly these two literals.
+    static let brandColor = Color(brandNSColor)
+
+    /// ``brandColor`` before SwiftUI wraps it, so a measuring test can resolve
+    /// it against a named `NSAppearance`.
+    static let brandNSColor = NSColor(name: nil) { appearance in
+        appearance.isDarkPopover
+            ? NSColor(srgbHex: 0xE88A5C)
+            : NSColor(srgbHex: 0xA85E3E)
+    }
+
+    /// Ink for the stacked charts' bands, strongest first — five shades, which
+    /// is what the model chart needs (four families plus "Other"; the source
+    /// chart needs four).
+    ///
+    /// Shades of one hue, never five hues. Colour in this popover means
+    /// ``brandColor``, so a chart painted in five unrelated colours would both
+    /// break that rule and make the plots shout louder than the quota bars
+    /// above them. The band a reader looks at first — the bottom of the stack,
+    /// and the ink the cost line and the hover dots borrow — *is* the brand
+    /// colour; each further band steps one notch towards its own background.
+    ///
+    /// The ramp is bounded at both ends rather than running to white or black:
+    /// the darkest shade still has to read against the dark popover and the
+    /// lightest against the light one. Measured as WCAG contrast against the
+    /// same two backgrounds the figures above use — white, and the ≈`#232323`
+    /// dark popover — the five steps come to 4.84 / 3.77 / 2.94 / 2.31 / 1.80
+    /// in light and 6.15 / 4.79 / 3.75 / 2.92 / 2.29 in dark. That is one
+    /// factor of ≈1.28 per step, enough to tell two touching bands apart, and
+    /// the pale end lands where the monochrome ramp this replaced ended
+    /// (`Color.primary` at 0.24 opacity measured 1.78:1 on white).
+    ///
+    /// Hue and saturation are not constant down the ramp: at a fixed 46% / 75%
+    /// saturation the darker dark-mode steps came out a vivid orange rather
+    /// than terracotta, so saturation eases off as the shade moves away from
+    /// the brand colour.
+    static let chartBandColors: [Color] = chartBandNSColors.map(Color.init)
+
+    /// ``chartBandColors`` before SwiftUI wraps them — see ``brandNSColor``.
+    static let chartBandNSColors: [NSColor] = [
+        (light: 0xA85E3E, dark: 0xE88A5C),
+        (light: 0xBC704F, dark: 0xD87240),
+        (light: 0xC6886D, dark: 0xBF6233),
+        (light: 0xD1A08A, dark: 0xA05733),
+        (light: 0xDCBAAB, dark: 0x844C30),
+    ].map { pair in
+        NSColor(name: nil) { appearance in
+            NSColor(srgbHex: appearance.isDarkPopover ? pair.dark : pair.light)
+        }
+    }
+}
+
+private extension NSAppearance {
+    /// Whether this appearance paints the dark popover. `bestMatch` rather than
+    /// a name compare, so a vibrant or high-contrast variant resolves to the
+    /// side of the pair it actually looks like.
+    var isDarkPopover: Bool { bestMatch(from: [.aqua, .darkAqua]) == .darkAqua }
+}
+
+private extension NSColor {
+    /// An opaque sRGB colour from a `0xRRGGBB` literal, so a ramp reads as the
+    /// hex values it was measured as.
+    convenience init(srgbHex hex: UInt32) {
+        self.init(
+            srgbRed: CGFloat((hex >> 16) & 0xFF) / 255,
+            green: CGFloat((hex >> 8) & 0xFF) / 255,
+            blue: CGFloat(hex & 0xFF) / 255,
+            alpha: 1
+        )
+    }
 }

@@ -14,28 +14,31 @@ struct DailyUsageSeries: Identifiable, Hashable {
     /// Row label, e.g. `CLI` — the same string the legend shows.
     let label: String
 
-    /// Opacity applied to the popover's primary ink. The chart is monochrome on
-    /// purpose: the rest of the popover carries colour only for warnings and
-    /// the one brand link, and three hues for three sources would make the
-    /// section shout louder than the quota bars above it.
-    let shade: Double
+    /// This band's ink — one shade of ``PopoverMetrics/brandColor``, taken from
+    /// ``PopoverMetrics/chartBandColors`` by stack position. Shades of the one
+    /// brand hue rather than a hue per source: colour anywhere else in this
+    /// popover means Claude, and a five-colour chart would make the section
+    /// shout louder than the quota bars above it.
+    let color: Color
 
     /// One point per day of ``DailyUsageChart/days``, same order.
     let points: [DailyUsagePoint]
 
-    /// The popover's chart ink, darkest first. Shared so a second chart can say
-    /// "the same weight as the source chart's top band" by construction rather
-    /// than by repeating a number.
-    static let shades: [Double] = [0.62, 0.40, 0.24]
+    /// The band ink for stack position `index`, strongest first. Clamped rather
+    /// than wrapped: a sixth band repeating the first one's colour would tie a
+    /// legend dot to the wrong band, where repeating the palest one only makes
+    /// two faint bands hard to tell apart.
+    static func bandColor(_ index: Int) -> Color {
+        PopoverMetrics.chartBandColors[Swift.min(index, PopoverMetrics.chartBandColors.count - 1)]
+    }
 
-    /// Ordered bands for the "Tokens by source" chart: display order, darkest
+    /// Ordered bands for the "Tokens by source" chart: display order, strongest
     /// band first, including sources that did nothing in the window.
     static func sources(from history: DailyUsageHistory) -> [DailyUsageSeries] {
-        let shades = Self.shades
-        return Entrypoint.displayOrder.enumerated().map { index, entrypoint in
+        Entrypoint.displayOrder.enumerated().map { index, entrypoint in
             DailyUsageSeries(
                 label: entrypoint.displayName,
-                shade: shades[index % shades.count],
+                color: bandColor(index),
                 points: history.bySource[entrypoint] ?? []
             )
         }
@@ -196,18 +199,18 @@ struct DailyUsageChart: View {
                         y: .value("Tokens", top.tokens)
                     )
                     .symbolSize(PopoverMetrics.chartHoverPointSize)
-                    // One ink for all three, not each band's own shade: the
-                    // top band is drawn at 0.24 opacity, and a dot that pale
-                    // sitting on its own band is invisible. The dots are
-                    // markers, not more data — the same weight the cost
-                    // chart's single dot carries.
-                    .foregroundStyle(Color.primary.opacity(DailyUsageSeries.shades[0]))
+                    // Plain primary ink, not any band's own shade: a dot has to
+                    // read against whichever band it lands on, and the palest
+                    // one is drawn at ≈1.8:1 against the card. The dots are
+                    // markers, not more data — which is also why they are the
+                    // one thing in these charts that is not terracotta.
+                    .foregroundStyle(Color.primary)
                 }
             }
         }
         .chartForegroundStyleScale(
             domain: series.map(\.label),
-            range: series.map { Color.primary.opacity($0.shade) }
+            range: series.map(\.color)
         )
         .chartLegend(.hidden)
         // The axis draws the values this chart measured its label column from,
