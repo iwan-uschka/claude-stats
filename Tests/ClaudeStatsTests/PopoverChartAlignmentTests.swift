@@ -102,7 +102,7 @@ final class PopoverChartAlignmentTests: XCTestCase {
         DailyUsageChart(days: days, series: band(points), metric: .cost, hoveredDay: hoveredDay)
     }
 
-    func testAChartsLabelColumnIsTheWidthOfItsOwnWidestLabel() {
+    func testAChartsLabelColumnIsTheWidthOfItsOwnWidestLabel() throws {
         // The number the popover collects from each chart. It has to be
         // measured from the strings the axis will actually draw, which is why
         // the charts pick their own y-values rather than leaving them
@@ -302,7 +302,6 @@ final class PopoverChartAlignmentTests: XCTestCase {
             .reduce(0.0) { $0 + alpha * $1 + (1 - alpha) * Self.darkCardWhite } / 3
     }
 
-    // MARK: - Measuring a rendered chart
     // MARK: - Measuring a rendered chart
 
     /// Renders the same chart hovered and at rest, and asserts the stroke hover

@@ -80,13 +80,17 @@ struct PopoverView: View {
     private var now: Date { clock.now }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: PopoverMetrics.sectionSpacing) {
+        // Read once and handed to both blocks: each read of `chartYLabelWidth`
+        // builds and measures both charts, so letting the two sections each ask
+        // for it would do that work twice per render for one identical value.
+        let yLabelWidth = chartYLabelWidth
+        return VStack(alignment: .leading, spacing: PopoverMetrics.sectionSpacing) {
             header
             quotaSection
             Divider()
-            sourceSection
+            sourceSection(yLabelWidth: yLabelWidth)
             Divider()
-            modelSection
+            modelSection(yLabelWidth: yLabelWidth)
             if model.usingSampleData {
                 sampleDataLine
             }
@@ -176,6 +180,10 @@ struct PopoverView: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
+            // Marker and title are one row, not two swipe stops: on its own the
+            // checkmark reads as a bare "Active account" image next to an
+            // unrelated name.
+            .accessibilityElement(children: .combine)
             .help(accountHelp(for: model.snapshot))
             Spacer(minLength: PopoverMetrics.rowSpacing)
             if let snapshot = model.snapshot {
@@ -211,9 +219,9 @@ struct PopoverView: View {
     /// name, nothing else — no summary percentage, which would be a number
     /// about an account the bars above aren't describing. It pairs with the
     /// checkmark ``quotaTitleRow`` takes on once these groups exist, and is set
-    /// in the same ``PopoverMetrics/sectionTitleFont`` in the same primary ink,
-    /// so the two read as one list of accounts rather than as a section and a
-    /// footnote under it.
+    /// in the same ``PopoverMetrics/sectionTitleFont`` in secondary ink, one
+    /// step dimmer than the active title, so the two read as one list of
+    /// accounts rather than as a section and a footnote under it.
     ///
     /// The whole row is one plain `Button`, not a ``DisclosureGroup``: a
     /// disclosure toggles from its chevron alone, and puts that chevron on the
@@ -229,14 +237,14 @@ struct PopoverView: View {
     ///
     /// Expanded, the content is exactly what used to render inline: the same
     /// rows and the same "no reading" rendering as the active account, each
-    /// with its own freshness tag, since these readings age independently (the
-    /// account nobody is logged in as stops being written to at all). That
-    /// includes the usage-credits row and its `disabled_reason` tooltip:
+    /// under the same ``sourceTagLine(for:)`` rule — in practice absent, since
+    /// these groups come from statusline files, which carry no `cached` marker.
+    /// That includes the usage-credits row and its `disabled_reason` tooltip:
     /// `spend` normally only reaches us for the active login, but a cache file
-    /// written just before a switch can still carry one, and a stale reading
-    /// shown with its own freshness tag beats silently dropping a reading the
-    /// other rows would have shown. Empty on a one-account machine, which is
-    /// every machine until the user switches accounts.
+    /// written just before a switch can still carry one, and showing a stale
+    /// reading beats silently dropping a reading the other rows would have
+    /// shown. Empty on a one-account machine, which is every machine until the
+    /// user switches accounts.
     ///
     /// Which groups are open lives on ``AppModel/expandedOtherAccounts`` rather
     /// than in `@State` here, so it survives the popover being closed and
@@ -397,7 +405,7 @@ struct PopoverView: View {
     /// The source tag — `cached` while Claude Code's own cached reading
     /// serves, nothing at all for a statusline capture. No age, no "stale":
     /// freshness is not displayed; an over-threshold reading surfaces as the
-    /// orange warning line under the bars instead.
+    /// terracotta warning line under the bars instead.
     ///
     /// Trailing on the active account's title row (see ``quotaTitleRow``) and
     /// at the foot of an expanded other-account group, which has no title row
@@ -593,10 +601,10 @@ struct PopoverView: View {
     /// columns went before it: every other number in the popover is now the
     /// chart's own window, and a five-hour reading beneath a thirty-day plot was
     /// the last place two windows still met in one row.
-    private var sourceSection: some View {
+    private func sourceSection(yLabelWidth: CGFloat) -> some View {
         usageBlock(
             title: "By source",
-            chart: sourceChart(yLabelWidth: chartYLabelWidth),
+            chart: sourceChart(yLabelWidth: yLabelWidth),
             series: sourceSeries,
             hoveredDay: hoveredSourceDay
         )
@@ -623,10 +631,10 @@ struct PopoverView: View {
     /// sitting above rows tagged `fixed 24h` — and both are gone: the ramp
     /// carries five distinguishable shades, and there is no second window left
     /// to be ambiguous about.
-    private var modelSection: some View {
+    private func modelSection(yLabelWidth: CGFloat) -> some View {
         usageBlock(
             title: "By model",
-            chart: modelChart(yLabelWidth: chartYLabelWidth),
+            chart: modelChart(yLabelWidth: yLabelWidth),
             series: modelSeries,
             hoveredDay: hoveredModelDay,
             showsCacheReadNote: true

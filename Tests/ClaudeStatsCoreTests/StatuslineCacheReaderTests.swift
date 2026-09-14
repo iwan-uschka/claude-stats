@@ -907,7 +907,7 @@ final class StatuslineCacheReaderTests: XCTestCase {
             windowJSON("five_hour", percent: 56, resetsAt: now.addingTimeInterval(3600)),
             account: otherOrg
         ))
-        try write(session: "Example Org", cache(
+        try write(session: "exampleOrg", cache(
             capturedAt: now.addingTimeInterval(-30),
             windowJSON("five_hour", percent: 4, resetsAt: now.addingTimeInterval(3600)),
             account: exampleOrg

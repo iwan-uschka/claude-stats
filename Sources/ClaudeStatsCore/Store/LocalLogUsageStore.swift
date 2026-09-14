@@ -89,7 +89,8 @@ public struct LocalLogUsageStore: UsageStoring {
     /// Clock, injected so windows and "today" are testable. Defaults to `Date()`.
     public let nowProvider: @Sendable () -> Date
 
-    /// Calendar used for ``estimatedCostToday()``'s local-midnight boundary.
+    /// Calendar for every local-day boundary: ``estimatedCostToday()``'s
+    /// midnight and ``dailyUsage(days:)``'s day buckets.
     /// Injected so tests don't depend on the machine's time zone.
     public let calendar: Calendar
 
@@ -311,10 +312,10 @@ public struct LocalLogUsageStore: UsageStoring {
         for (cell, totals) in historicalDailyCells where cell.day >= windowStart {
             cells[cell, default: DailyUsageTotals()].merge(totals)
         }
-        var days = LocalDayResolver(calendar: calendar)
+        var dayResolver = LocalDayResolver(calendar: calendar)
         for event in events(in: windowStart, to: now) where DailyUsageTotals.countsTowardsDailyHistory(event) {
             let cell = DailyUsageCell(
-                day: days.day(for: event.timestamp),
+                day: dayResolver.day(for: event.timestamp),
                 modelID: event.modelID,
                 entrypoint: event.entrypoint
             )

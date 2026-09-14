@@ -17,8 +17,10 @@ import os
 ///   the same way.
 /// - **Retain per-event data only inside the retention window.** Events older
 ///   than ``retention`` are folded into per-model
-///   ``HistoricalModelUsage`` totals — the only thing any query needs from
-///   deep history (see ``LocalLogUsageStore/historicalByModel``). This keeps
+///   ``HistoricalModelUsage`` totals and per-day ``DailyUsageCell`` totals —
+///   the only things any query needs from deep history (see
+///   ``LocalLogUsageStore/historicalByModel`` and
+///   ``LocalLogUsageStore/historicalDailyCells``). This keeps
 ///   the in-memory event array proportional to recent activity instead of
 ///   lifetime usage.
 ///

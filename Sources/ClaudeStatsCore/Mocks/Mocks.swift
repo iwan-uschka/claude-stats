@@ -87,11 +87,10 @@ public struct MockQuotaProvider: QuotaProviding {
         )
     }
 
-    /// The account the sample readings belong to — an organisation name, since
-    /// that is what ``QuotaAccount/displayName`` shows first.
-    /// `email` is what ``QuotaAccount/displayName`` actually renders, so it is
-    /// a parameter: two fixtures sharing one address would label both account
-    /// groups in the two-account preview identically.
+    /// The account the sample readings belong to. `email` is what
+    /// ``QuotaAccount/displayName`` actually renders, so it is a parameter:
+    /// two fixtures sharing one address would label both account groups in
+    /// the two-account preview identically.
     public static func sampleAccount(
         uuid: String = "0f9c1d3e-8a4b-4c2d-9e1f-6b7a8c9d0e1f",
         email: String? = "me@example.com",

@@ -151,7 +151,12 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
 /// light/dark snapshot forever. This re-resolves on every effective-appearance
 /// change instead, which matters more here than it did for a system colour:
 /// the two brand literals differ by more than the system's orange pair does.
-private final class DevBuildDotView: NSView {
+///
+/// Internal rather than file-private so a test can build one and read the
+/// colour back: nothing else constructs it, and the dot is never composited
+/// into ``MenuBarGlyph``'s image, so this is the only seam that can catch it
+/// drifting back to a hardcoded system colour.
+final class DevBuildDotView: NSView {
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         updateBackgroundColor()

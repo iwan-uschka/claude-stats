@@ -132,6 +132,43 @@ final class PopoverInkTests: XCTestCase {
         }
     }
 
+    // MARK: - Warning, error and sample-data lines
+
+    func testTheWarningErrorAndSampleDataLinesAreSetInTheBrandColour() throws {
+        // These three were `.orange`, `.red` and `.orange` before the popover
+        // went one-colour, and nothing else in the tree would fail if one of
+        // them went back: a `.foregroundStyle` is unreachable from a `View`
+        // value. So they are measured the way the bars are — off the pixels.
+        //
+        // Counted, not located: each fixture differs from the plain popover by
+        // exactly one line, and everything else that takes brand ink (the mark,
+        // the bars, the table dots) is drawn in the same quantity in both — a
+        // line added higher up shifts the rows below it without changing what
+        // they paint — so every extra pixel is the line's own. And counted
+        // against the brand colour rather than ``isTerracotta``, which passes
+        // anything warm: `.orange` has far more green than the brand ink and
+        // `.red` far less, so a line set in either adds nothing to this count.
+        let fixtures: [(what: String, model: AppModel)] = [
+            ("the staleness warning", AppModel.previewStaleWarning()),
+            ("an error line", AppModel.preview(error: "Quota source unavailable.")),
+            ("the sample-data line", AppModel.preview(usingSampleData: true)),
+        ]
+
+        for (name, appearance, card) in Self.cards {
+            let plain = try render(AppModel.preview(), appearance: appearance, card: card)
+            let baseline = try brandInkCount(in: plain, appearance: appearance)
+
+            for (what, model) in fixtures {
+                let drawn = try render(model, appearance: appearance, card: card)
+                XCTAssertGreaterThan(
+                    try brandInkCount(in: drawn, appearance: appearance),
+                    baseline,
+                    "\(what) drew no brand ink on the \(name) card"
+                )
+            }
+        }
+    }
+
     // MARK: - Measuring
 
     private func render(_ model: AppModel, appearance: NSAppearance.Name, card: Color) throws -> PopoverPixels.Bitmap {
@@ -149,6 +186,26 @@ final class PopoverInkTests: XCTestCase {
         for y in 0..<bitmap.height {
             for x in 0..<bitmap.width where bitmap.isTerracotta(x, y) {
                 count += 1
+            }
+        }
+        return count
+    }
+
+    /// How many pixels are the brand colour itself, rather than merely
+    /// terracotta-ish: `isTerracotta` passes anything warm, including the
+    /// `.orange` these lines used to be set in.
+    private func brandInkCount(in bitmap: PopoverPixels.Bitmap, appearance: NSAppearance.Name) throws -> Int {
+        let brand = try resolvedBrand(appearance)
+        let tolerance = 0.03
+        var count = 0
+        for y in 0..<bitmap.height {
+            for x in 0..<bitmap.width where bitmap.isTerracotta(x, y) {
+                let pixel = bitmap.rgb(x, y)
+                if abs(pixel.red - brand.redComponent) < tolerance,
+                    abs(pixel.green - brand.greenComponent) < tolerance,
+                    abs(pixel.blue - brand.blueComponent) < tolerance {
+                    count += 1
+                }
             }
         }
         return count

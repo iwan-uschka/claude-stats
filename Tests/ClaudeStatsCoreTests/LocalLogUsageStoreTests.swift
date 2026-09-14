@@ -683,12 +683,14 @@ final class LocalLogUsageStoreTests: XCTestCase {
 
     private func makeHistoricalStore(
         events: [UsageEvent] = [],
-        historical: [String?: HistoricalModelUsage]
+        historical: [String?: HistoricalModelUsage],
+        dailyCells: [DailyUsageCell: DailyUsageTotals] = [:]
     ) -> LocalLogUsageStore {
         let now = Self.referenceNow
         return LocalLogUsageStore(
             events: events,
             historicalByModel: historical,
+            historicalDailyCells: dailyCells,
             calendar: Self.utcCalendar,
             now: { now }
         )
@@ -778,7 +780,15 @@ final class LocalLogUsageStoreTests: XCTestCase {
                 latestTimestamp: date(daysAgo: 30)
             )
         ]
-        let base = makeHistoricalStore(historical: historical)
+        let foldedDay = Self.utcCalendar.startOfDay(for: date(daysAgo: 20))
+        let dailyCells: [DailyUsageCell: DailyUsageTotals] = [
+            DailyUsageCell(day: foldedDay, modelID: "claude-sonnet-5", entrypoint: .cli):
+                DailyUsageTotals(
+                    usage: TokenUsage(inputTokens: 100, outputTokens: 50),
+                    estimatedCostUSD: 1
+                )
+        ]
+        let base = makeHistoricalStore(historical: historical, dailyCells: dailyCells)
         let grown = base.adding(events: [UsageEvent(
             timestamp: date(daysAgo: 0.5),
             modelID: "claude-sonnet-5",
@@ -786,6 +796,11 @@ final class LocalLogUsageStoreTests: XCTestCase {
         )])
         XCTAssertEqual(grown.historicalByModel, historical)
         XCTAssertEqual(try grown.modelUsage(last24h: false).first?.tokens, 165)
+        // The per-day half of the folded history has to ride along too, or an
+        // incrementally-refreshed store draws a chart that starts at the
+        // newest event instead of at the oldest day anything happened.
+        XCTAssertEqual(grown.historicalDailyCells, dailyCells)
+        XCTAssertEqual(try grown.dailyUsage(days: 30).days.first, foldedDay)
     }
 
     // MARK: - Protocol conformance

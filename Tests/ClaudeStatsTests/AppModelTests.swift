@@ -343,7 +343,13 @@ final class AppModelTests: XCTestCase {
         model.refresh(force: true)
 
         XCTAssertEqual(model.dailyHistory.days.count, AppModel.chartWindowDays)
-        XCTAssertEqual(Set(model.dailyHistory.bySource.keys), Set(Entrypoint.allCases))
+        // `bySource` is keyed by `Entrypoint?` — the `nil` key is the "Other"
+        // band — so the expected set has to be optional too. The fixture fills
+        // every recognised source and nothing else, so there is no `nil` key.
+        XCTAssertEqual(
+            Set(model.dailyHistory.bySource.keys),
+            Set(Entrypoint.allCases.map { Entrypoint?.some($0) })
+        )
     }
 
     func testDailyHistoryFailureSetsTheLocalStatsErrorAndLeavesNoHistory() {
@@ -353,6 +359,29 @@ final class AppModelTests: XCTestCase {
 
         XCTAssertNotNil(model.localStatsError)
         XCTAssertTrue(model.dailyHistory.isEmpty)
+    }
+
+    /// A reload that throws must leave the last-good history on screen rather
+    /// than blanking both charts.
+    ///
+    /// The cold-start case above can't see this: with nothing loaded first,
+    /// `dailyHistory.isEmpty` holds whether or not the `catch` clears it. The
+    /// failure that matters is the later one — an FSEvents batch swapping the
+    /// store under a popover that is already drawing thirty days — where
+    /// emptying the history would replace two charts with an empty state
+    /// beside an error banner.
+    func testAFailedReloadAfterASuccessfulOneKeepsTheHistoryItAlreadyHas() {
+        let model = makeModel(quota: ScriptedQuotaProvider(), store: MockUsageStore())
+        model.refresh(force: true)
+        let loaded = model.dailyHistory
+        XCTAssertFalse(loaded.isEmpty)
+
+        // `updateUsageStore(_:)` reloads as it swaps, so this is the failing
+        // reload — no extra test double needed to script one.
+        model.updateUsageStore(FailingUsageStore())
+
+        XCTAssertNotNil(model.localStatsError)
+        XCTAssertEqual(model.dailyHistory, loaded)
     }
 
     /// The two blocks read one history, so a reload has to make exactly one

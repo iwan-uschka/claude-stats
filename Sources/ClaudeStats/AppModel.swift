@@ -28,7 +28,7 @@ final class AppModel: ObservableObject {
     /// survives the popover closing and reopening, and a poll rebuilding the
     /// rows; it is deliberately not persisted across launches, since which
     /// other accounts exist isn't either.
-    @Published var expandedOtherAccounts: Set<String> = []
+    @Published private(set) var expandedOtherAccounts: Set<String> = []
     /// Daily history behind both popover blocks — "By source" stacks its
     /// per-source token split, "By model" stacks the estimated spend of its
     /// per-family one — covering ``chartWindowDays``.
@@ -456,7 +456,8 @@ extension AppModel {
         error: String? = nil,
         warning: String? = nil,
         promoNotices: [RateLimitPromoNotice] = [],
-        otherAccounts: [QuotaSnapshot] = []
+        otherAccounts: [QuotaSnapshot] = [],
+        usingSampleData: Bool = false
     ) -> AppModel {
         let store = MockUsageStore()
         // Inlined here (not a public Core factory) so a preview-only "no
@@ -478,7 +479,8 @@ extension AppModel {
                 otherAccounts: otherAccounts
             ),
             usageStore: store,
-            promoNoticeProvider: MockPromoNoticeProvider(notices: promoNotices)
+            promoNoticeProvider: MockPromoNoticeProvider(notices: promoNotices),
+            usingSampleData: usingSampleData
         )
         model.snapshot = snapshot
         model.otherAccountSnapshots = otherAccounts

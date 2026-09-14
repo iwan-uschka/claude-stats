@@ -183,6 +183,22 @@ struct DailyUsageSeries: Identifiable, Hashable {
     }
 }
 
+extension Array where Element == DailyUsageSeries {
+    /// The tallest day across all bands, stacked — not the tallest single band,
+    /// since the bands sit on each other.
+    ///
+    /// One implementation because two consumers scale against it: the visible
+    /// y-axis and the accessibility descriptor's audio graph. Computed twice,
+    /// a change to how the height is measured could be applied to one copy and
+    /// silently leave VoiceOver reading against a ceiling the chart exceeds.
+    func stackedMaximum(metric: DailyUsageMetric) -> Double {
+        let dayCount = map(\.points.count).max() ?? 0
+        return (0..<dayCount).map { day in
+            reduce(0.0) { $0 + (day < $1.points.count ? metric.value(of: $1.points[day]) : 0) }
+        }.max() ?? 0
+    }
+}
+
 /// A stacked 30-day area chart of one daily metric, sized for the popover.
 ///
 /// Both axes are drawn: without a y-axis the bands show shape but no
@@ -333,14 +349,9 @@ struct DailyUsageChart: View {
     /// See ``PopoverChartAxis/tickDays(in:)``.
     var tickDays: [Date] { PopoverChartAxis.tickDays(in: days) }
 
-    /// The tallest day in the window — the *stack's* height, not the tallest
-    /// single band, since the bands sit on each other.
-    var stackedMaximum: Double {
-        let dayCount = series.map(\.points.count).max() ?? 0
-        return (0..<dayCount).map { day in
-            series.reduce(0.0) { $0 + (day < $1.points.count ? metric.value(of: $1.points[day]) : 0) }
-        }.max() ?? 0
-    }
+    /// The tallest day in the window — see `stackedMaximum(metric:)` on the
+    /// band array, which the accessibility descriptor scales against too.
+    var stackedMaximum: Double { series.stackedMaximum(metric: metric) }
 
     /// The values the y-axis labels, lowest first; the last is the top of the
     /// scale. See ``PopoverChartAxis/yValues(upTo:count:)``.
@@ -501,15 +512,12 @@ struct DailyUsageChartDescriptor: AXChartDescriptorRepresentable {
     var metric: DailyUsageMetric = .tokens
     var bandsName: String = "source"
 
-    /// Short, spoken-friendly day labels (`Sep 13`).
-    private static let dayFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.setLocalizedDateFormatFromTemplate("MMMd")
-        return formatter
-    }()
-
     func makeChartDescriptor() -> AXChartDescriptor {
-        let categories = days.map { Self.dayFormatter.string(from: $0) }
+        // The same spelling the axis ticks and the hover readout use — a
+        // second formatter here would let VoiceOver announce a day differently
+        // from how the chart prints it in any locale where the two APIs
+        // disagree on abbreviation, order, or separator.
+        let categories = days.map(PopoverChartHover.label(for:))
         let xAxis = AXCategoricalDataAxisDescriptor(
             title: "Day",
             categoryOrder: categories
@@ -518,10 +526,7 @@ struct DailyUsageChartDescriptor: AXChartDescriptorRepresentable {
         // The bands stack, so the axis has to reach the tallest *day*, not the
         // tallest single band — otherwise VoiceOver's audio graph scales every
         // reading against a ceiling the chart visibly exceeds.
-        let dayCount = series.map(\.points.count).max() ?? 0
-        let highest = (0..<dayCount).map { day in
-            series.reduce(0.0) { $0 + (day < $1.points.count ? metric.value(of: $1.points[day]) : 0) }
-        }.max() ?? 0
+        let highest = series.stackedMaximum(metric: metric)
         let yAxis = AXNumericDataAxisDescriptor(
             title: metric.axisTitle,
             // Never `0...0`: an empty range is a divide-by-zero waiting to

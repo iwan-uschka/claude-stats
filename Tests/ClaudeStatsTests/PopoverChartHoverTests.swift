@@ -5,7 +5,8 @@ import XCTest
 
 /// Coverage for the hover readout: which day the pointer lands on, what happens
 /// when the window moves under it, and whether the row that reads it back has
-/// the width to do so without truncating.
+/// the width to do so without truncating — and, by the same measurement, the
+/// reserved columns of the quota rows above it.
 final class PopoverChartHoverTests: XCTestCase {
 
     private static let calendar: Calendar = {
@@ -37,6 +38,17 @@ final class PopoverChartHoverTests: XCTestCase {
         // eye is aiming at.
         XCTAssertEqual(PopoverChartHover.nearestDay(to: try date("2026-07-03T02:00:00.000Z"), in: window), window[2])
         XCTAssertEqual(PopoverChartHover.nearestDay(to: try date("2026-07-03T20:00:00.000Z"), in: window), window[3])
+    }
+
+    func testAPointerExactlyBetweenTwoDaysSnapsToTheEarlierOne() {
+        let window = days(30)
+        // Noon is exactly equidistant from the midnights either side of it.
+        // Nothing about the pixel says which day it means, so the rule is the
+        // one the strict comparison in `nearestDay` gives: the first day at
+        // that distance wins, and the readout never flickers between the two.
+        let midpoint = Date(timeInterval: 12 * 3600, since: window[2])
+
+        XCTAssertEqual(PopoverChartHover.nearestDay(to: midpoint, in: window), window[2])
     }
 
     func testAPointerPastEitherEndSnapsToTheDayThere() throws {
@@ -77,12 +89,18 @@ final class PopoverChartHoverTests: XCTestCase {
 
     // MARK: - Labels
 
-    func testADayIsNamedByMonthAndDayOnly() {
-        let label = PopoverChartHover.label(for: Self.firstDay)
+    func testADayIsNamedByMonthAndDayOnly() throws {
+        // `label(for:)` formats in the machine's own time zone, so the day it
+        // names has to be built there too: a UTC midnight is the evening of the
+        // day before in every negative-offset zone, and the day-of-month
+        // asserted below would be off by one there.
+        let day = try XCTUnwrap(Calendar.current.date(from: DateComponents(year: 2026, month: 7, day: 1)))
+        let nextDay = try XCTUnwrap(Calendar.current.date(byAdding: .day, value: 1, to: day))
+        let label = PopoverChartHover.label(for: day)
 
         XCTAssertTrue(label.contains("1"), "\(label) should name the day of the month")
         XCTAssertFalse(label.contains("2026"), "\(label) spends width on a year the window can't span")
-        XCTAssertNotEqual(label, PopoverChartHover.label(for: days(2)[1]))
+        XCTAssertNotEqual(label, PopoverChartHover.label(for: nextDay))
     }
 
     // MARK: - Room to read it back
@@ -112,6 +130,16 @@ final class PopoverChartHoverTests: XCTestCase {
                 "\(text) overflows the table's token column"
             )
         }
+    }
+
+    /// The heading the caption row draws over that column has to fit it too —
+    /// the figures below it are the narrower of the two.
+    func testTheTokenColumnHoldsItsHeading() {
+        XCTAssertLessThanOrEqual(
+            width("Tokens", captionFont),
+            PopoverMetrics.tableTokenColumnWidth,
+            "the heading would truncate"
+        )
     }
 
     /// The column is sized by its *heading*, which is the point: `Estimated` is
@@ -146,6 +174,82 @@ final class PopoverChartHoverTests: XCTestCase {
             + 4 * PopoverMetrics.legendSwatchSpacing
 
         XCTAssertLessThanOrEqual(row, Self.contentWidth, "a table row has to truncate to fit")
+    }
+
+    // MARK: - Room on a quota row
+
+    /// The quota rows' three columns, measured the way the table's are. Each is
+    /// documented in ``PopoverMetrics`` by a single hand-measured point value
+    /// with a few points of margin, and every one of those rows pins its text
+    /// to one line — so a string that outgrows its column truncates silently.
+    func testTheLabelColumnHoldsEveryQuotaRowLabel() {
+        let labels = [
+            QuotaWindowKind.fiveHour.title,
+            QuotaWindowKind.sevenDay.title,
+            "Usage credits",
+            // Scoped weekly rows take their label from the payload; these are
+            // the families the payload actually names.
+            "Sonnet weekly",
+            "Opus weekly",
+            "Haiku weekly",
+        ]
+        for label in labels {
+            XCTAssertLessThanOrEqual(
+                width(label, bodyFont),
+                PopoverMetrics.labelColumnWidth,
+                "\(label) truncates in the quota rows' label column"
+            )
+        }
+    }
+
+    func testThePercentColumnHoldsEveryReadingItCanShow() {
+        // `99.9%` is the widest: the one-decimal band above 99 is a character
+        // longer than `100%`, and the em dash of an unreported window is short.
+        let readings = [
+            DisplayFormat.unknownWindowPercent,
+            DisplayFormat.percent(percentValue: 0),
+            DisplayFormat.percent(percentValue: 99.94),
+            DisplayFormat.percent(percentValue: 100),
+        ]
+        for reading in readings {
+            XCTAssertLessThanOrEqual(
+                width(reading, valueFont),
+                PopoverMetrics.percentColumnWidth,
+                "\(reading) overflows the percent column"
+            )
+        }
+    }
+
+    func testTheCountdownColumnHoldsThePlaceholdersAndTheLongestCountdown() {
+        let readings = [
+            DisplayFormat.unknownWindowCountdown,
+            DisplayFormat.resetCountdown(nil),
+            DisplayFormat.resetCountdown(6 * 86_400 + 23 * 3600),
+            DisplayFormat.resetCountdown(2 * 3600 + 14 * 60),
+        ]
+        for reading in readings {
+            XCTAssertLessThanOrEqual(
+                width(reading, captionFont),
+                PopoverMetrics.countdownColumnWidth,
+                "\(reading) overflows the countdown column"
+            )
+        }
+    }
+
+    func testTheMergedColumnHoldsACreditsValueInAWideLocale() {
+        // The value that sized the merged column, in the locale that spends the
+        // most width on it: comma separator, trailing symbol, space before it.
+        let text = DisplayFormat.moneySpend(
+            used: MoneyAmount(amountMinor: 2_087, currency: "EUR"),
+            limit: MoneyAmount(amountMinor: 3_300, currency: "EUR"),
+            locale: Locale(identifier: "de_DE")
+        )
+
+        XCTAssertLessThanOrEqual(
+            width(text, valueFont),
+            PopoverMetrics.percentAndCountdownColumnWidth,
+            "\(text) overflows the merged credits column"
+        )
     }
 
     /// The caption row carries the whole hover disclosure — the window at rest,

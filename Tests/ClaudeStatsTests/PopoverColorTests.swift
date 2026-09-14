@@ -93,6 +93,27 @@ final class PopoverColorTests: XCTestCase {
         )
     }
 
+    func testTheDevBuildDotPaintsItselfInTheBrandColour() throws {
+        // The dot is an overlay on the status-item button, never composited
+        // into ``MenuBarGlyph``'s image, so this is the only place that can
+        // catch it drifting back to `.systemOrange`. Checked per appearance
+        // because `.cgColor` resolves a dynamic colour at the call site.
+        for name in [NSAppearance.Name.aqua, .darkAqua] {
+            let appearance = try XCTUnwrap(NSAppearance(named: name))
+            let dot = DevBuildDotView(frame: CGRect(x: 0, y: 0, width: 4, height: 4))
+            dot.appearance = appearance
+            dot.wantsLayer = true
+            dot.updateBackgroundColor()
+
+            let painted = try XCTUnwrap(NSColor(cgColor: try XCTUnwrap(dot.layer?.backgroundColor)))
+            XCTAssertEqual(
+                hex(try XCTUnwrap(painted.usingColorSpace(.sRGB))),
+                hex(try resolved(PopoverMetrics.brandNSColor, name)),
+                name.rawValue
+            )
+        }
+    }
+
     // MARK: - Band ramp
 
     func testEveryStackIsLedByTheBrandColourItself() throws {

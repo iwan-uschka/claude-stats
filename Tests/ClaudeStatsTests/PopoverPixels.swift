@@ -138,7 +138,15 @@ enum PopoverPixels {
         /// since the leading y-axis labels reach into those rows too.
         func axisTickColumns() throws -> [CGFloat] {
             let plot = try plotEdges()
-            let row = plot.bottom + Int(PopoverMetrics.chartTickLength * popoverRenderScale) / 2
+            let tickRow = plot.bottom + Int(PopoverMetrics.chartTickLength * popoverRenderScale) / 2
+            // Loud rather than clamped: a layout leaving fewer rows below the
+            // baseline than half a tick would index past the bitmap and crash
+            // inside `isInk`, while sampling the last row instead would
+            // quietly measure something that is not the ticks.
+            let row = try XCTUnwrap(
+                tickRow < height ? tickRow : nil,
+                "tick row \(tickRow) is outside the \(height) px render"
+            )
             let columns = inkColumns(inRow: row).filter { $0 >= plot.left }
             return runs(in: columns).map { CGFloat($0.first! + $0.last!) / 2 }
         }

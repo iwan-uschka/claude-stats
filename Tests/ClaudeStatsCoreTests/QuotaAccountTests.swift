@@ -8,18 +8,13 @@ final class QuotaAccountTests: XCTestCase {
 
     /// The login email leads: for a personal account the organisation is
     /// auto-named "<email>'s Organization", so the org name is the email plus
-    /// noise, and the email is what the user recognises.
+    /// noise, and the email is what the user recognises. Nothing inspects the
+    /// org string's shape — an email present wins whatever it says — so one
+    /// case covers both.
     func testDisplayNamePrefersTheEmail() {
         let account = QuotaAccount(
             uuid: uuid, email: "me@example.com", organizationName: "Other Org")
         XCTAssertEqual(account.displayName, "me@example.com")
-
-        let personal = QuotaAccount(
-            uuid: uuid,
-            email: "me@example.com",
-            organizationName: "me@example.com's Organization"
-        )
-        XCTAssertEqual(personal.displayName, "me@example.com")
     }
 
     /// A real, chosen organisation name still shows when there is no email to
@@ -99,15 +94,17 @@ final class QuotaAccountTests: XCTestCase {
         XCTAssertNil(QuotaAccount(json: ["uuid": 42]))
     }
 
-    /// A blank email would otherwise win `displayName` and render a nameless
-    /// row.
+    /// A blank email — or a blank organisation name — would otherwise win
+    /// `displayName` and render a nameless row. Both fields, so a regression
+    /// that blanked only one of them can't hide behind the other.
     func testBlankFieldsAreTreatedAsAbsent() throws {
         let account = try XCTUnwrap(QuotaAccount(json: [
-            "uuid": uuid, "organization_name": "Other Org", "email": "  ",
+            "uuid": uuid, "organization_name": "  ", "email": "  ",
         ]))
 
+        XCTAssertNil(account.organizationName)
         XCTAssertNil(account.email)
-        XCTAssertEqual(account.displayName, "Other Org")
+        XCTAssertEqual(account.displayName, "0f9c1d3e")
     }
 
     func testFieldsAreTrimmed() throws {

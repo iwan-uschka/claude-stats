@@ -207,9 +207,10 @@ final class DisplayFormatTests: XCTestCase {
         XCTAssertNil(DisplayFormat.cacheReadNote(.zero))
     }
 
-    /// Mirrors `AppModel.modelUsageTotal`: the section's caption is about
-    /// every row summed, not any single model — a row that alone stays under
-    /// the threshold can still push the total over it once combined.
+    /// Mirrors the "By model" table's `shownUsage`: the note under the block is
+    /// computed from every band summed for the shown window or day, not from
+    /// any single model — a row that alone stays under the threshold can still
+    /// push the total over it once combined.
     func testCacheReadNoteOverSummedModelRows() {
         let rows = [
             ModelUsage(
@@ -253,6 +254,15 @@ final class DisplayFormatTests: XCTestCase {
         XCTAssertEqual(
             DisplayFormat.cacheReadNote(
                 TokenUsage(inputTokens: 49_000, cacheReadInputTokens: 51_000)
+            ),
+            "51% cache reads — billed at 1/10 the input rate"
+        )
+        // A hair over the threshold on a small total — 151/300 is 50.33%, which
+        // rounds to the threshold itself. The floor keeps it off that number,
+        // since a note reading "50%" would contradict the guard that drew it.
+        XCTAssertEqual(
+            DisplayFormat.cacheReadNote(
+                TokenUsage(inputTokens: 149, cacheReadInputTokens: 151)
             ),
             "51% cache reads — billed at 1/10 the input rate"
         )
@@ -310,6 +320,10 @@ final class DisplayFormatTests: XCTestCase {
         XCTAssertNil(DisplayFormat.compactCost(.infinity))
         XCTAssertNil(DisplayFormat.compactCost(-.infinity))
         XCTAssertNil(DisplayFormat.compactCost(.greatestFiniteMagnitude))
+        // The cutoff itself: a trillion is out, everything under it still
+        // formats — unreadably wide, but a number rather than a refusal.
+        XCTAssertNil(DisplayFormat.compactCost(1e12))
+        XCTAssertEqual(DisplayFormat.compactCost(999_999_999_999), "$1000000000k")
     }
 
     // MARK: - money

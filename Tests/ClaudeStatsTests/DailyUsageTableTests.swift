@@ -161,6 +161,14 @@ final class DailyUsageTableTests: XCTestCase {
             XCTAssertEqual(row.usage, band.points[index].usage)
             XCTAssertEqual(row.cost, band.points[index].estimatedCostUSD, accuracy: 1e-9)
         }
+        // The same for the model split, whose bands come out of a different
+        // dictionary in a different order — shared row code, but nothing says
+        // the two splits index their points the same way unless it is checked.
+        let hoveredModels = modelTable(history, hoveredDay: day)
+        for (row, band) in zip(hoveredModels.bandRows, DailyUsageSeries.models(from: history)) {
+            XCTAssertEqual(row.usage, band.points[index].usage)
+            XCTAssertEqual(row.cost, band.points[index].estimatedCostUSD, accuracy: 1e-9)
+        }
         XCTAssertNotEqual(hovered.totalRow.usage, resting.totalRow.usage)
     }
 

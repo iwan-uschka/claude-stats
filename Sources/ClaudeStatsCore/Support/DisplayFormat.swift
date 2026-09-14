@@ -54,8 +54,8 @@ public enum DisplayFormat {
 
     /// Countdown for a quota window: `2h 14m`, or `reset pending` once the
     /// deadline has passed / is unknown. Bare duration, no "resets in" — the
-    /// column sits to the right of a bar labelled "window", so the time alone
-    /// reads as the time until it resets.
+    /// column sits to the right of a bar labelled `5-hour`/`7-day`, so the time
+    /// alone reads as the time until it resets.
     public static func resetCountdown(_ interval: TimeInterval?) -> String {
         guard let interval, interval > 0 else { return "reset pending" }
         return duration(interval)
@@ -64,7 +64,7 @@ public enum DisplayFormat {
     /// The quota title row's source tag: `nil` for a statusline capture,
     /// `cached` for Claude Code's own cached copy. No age and no "stale"
     /// suffix — the reading's freshness is not shown; an over-threshold
-    /// reading surfaces as the orange staleness warning line instead. Every
+    /// reading surfaces as the terracotta staleness warning line instead. Every
     /// reading is Anthropic's own number, so "official" said nothing and is
     /// left out; only the coarser backup source is named — see
     /// ``QuotaConfidence/tagLabel``.
@@ -125,10 +125,11 @@ public enum DisplayFormat {
     /// The same rule for spend: one unit across the axis, and a decimal count
     /// the whole column shares.
     ///
-    /// Money keeps two decimals or none — `$2.50`, never `$2.5`, and `$0.50`
-    /// rather than `$.5`. Above a thousand the `k` carries one decimal the way
-    /// ``compactCost(_:)`` does, since `$1.50k` reads as a typo. Zero is
-    /// unlabelled here too.
+    /// In bare dollars money keeps two decimals or none — `$2.50`, never
+    /// `$2.5`, and `$0.50` rather than `$.5`. That floor is a dollars-only
+    /// rule: in the `k` unit the column takes as few decimals as render every
+    /// value exactly, capped at two, so round thousands read `$1k`/`$2k`
+    /// rather than `$1.00k`. Zero is unlabelled here too.
     public static func costAxisLabels(_ values: [Double]) -> [String] {
         let units: [(scale: Double, symbol: String)] = [(1_000, "k"), (1, "")]
         return axisLabels(values, units: units, prefix: "$", wholeDollarDecimals: 2)
@@ -165,8 +166,9 @@ public enum DisplayFormat {
         return zip(values, scaled).map { value, scaledValue in
             // Empty, not `0` — the caller draws no label for it at all, and an
             // empty string keeps the labels lined up with the values they came
-            // from so a chart can index one by the other.
-            guard value != 0 else { return "" }
+            // from so a chart can index one by the other. Non-finite values
+            // get the same empty label rather than a `"nan"`/`"inf"` string.
+            guard value != 0, value.isFinite else { return "" }
             return prefix + String(format: "%.\(decimals)f", scaledValue) + unit.symbol
         }
     }
@@ -196,13 +198,18 @@ public enum DisplayFormat {
     /// line is how much of the headline number is replayed context, and one
     /// percentage says that without restating a number already on screen.
     /// Rounded to a whole percent — tenths would imply a precision the caption
-    /// is not making a claim about.
+    /// is not making a claim about — but never down onto the threshold itself,
+    /// which is the one share this line is never shown for.
     public static func cacheReadNote(_ usage: TokenUsage) -> String? {
         let total = usage.totalTokens
         guard total > 0 else { return nil }
         let share = Double(usage.cacheReadInputTokens) / Double(total)
         guard share > cacheReadNoteThreshold else { return nil }
-        return "\(Int((share * 100).rounded()))% cache reads"
+        // A share a hair over the threshold still rounds down to the threshold
+        // itself (151/300 → `50%`), which reads as the one value the guard
+        // rules out. Floor the printed percent just above it.
+        let percent = max(Int((share * 100).rounded()), Int(cacheReadNoteThreshold * 100) + 1)
+        return "\(percent)% cache reads"
             + " — billed at \(cacheReadRateDescription) the input rate"
     }
 
