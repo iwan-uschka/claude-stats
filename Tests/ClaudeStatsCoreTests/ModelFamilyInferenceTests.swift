@@ -102,10 +102,9 @@ final class ModelFamilyInferenceTests: XCTestCase {
     /// ``UsageEvent/estimatedCostUSD`` and from both folds in
     /// `LocalLogUsageStore` — on the main thread, so its cost is popover stall.
     ///
-    /// The guard is differential rather than a nanosecond budget, for the same
-    /// reason as `testCorpusScanStaysLinearInBridgingCost`: the regression it
-    /// catches is a constant factor, and timing both implementations in one run
-    /// takes the machine out of the comparison.
+    /// The guard is differential rather than a nanosecond budget: the
+    /// regression it catches is a constant factor, and timing both
+    /// implementations in one run takes the machine out of the comparison.
     ///
     /// **Release only, and that is not a convenience.** `-Onone` does not merely
     /// dilute the ratio here, it inverts it: the hand-written scan is Swift that
@@ -118,7 +117,7 @@ final class ModelFamilyInferenceTests: XCTestCase {
     /// not build this package, because `ClaudeStatsTests` uses `AppModel`'s
     /// preview helpers and those live under `#if DEBUG`. That predates this
     /// test and is nobody's emergency, but it does mean the ratio asserted
-    /// below was taken with the standalone benchmark described in the commit
+    /// below was taken with a separate standalone release-build benchmark
     /// rather than by this test — and that fixing the release build turns
     /// this on.
     func testInferenceCostsFarLessThanTheSearchItReplaced() throws {
@@ -162,7 +161,7 @@ final class ModelFamilyInferenceTests: XCTestCase {
         ))
         XCTAssertGreaterThan(matches, 0, "the timed loops were optimised away")
 
-        // Measured release: ~35 ns/call against ~1 200, a factor of ~34. The
+        // Measured release: ~32 ns/call against ~1 206, a factor of ~38. The
         // threshold sits at 8 — far below what this change actually bought, and
         // far above the ratio of 1 that putting `lowercased().contains` back
         // would produce.
