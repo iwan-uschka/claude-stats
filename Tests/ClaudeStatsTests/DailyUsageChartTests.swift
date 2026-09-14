@@ -3,8 +3,12 @@ import XCTest
 @testable import ClaudeStats
 @testable import ClaudeStatsCore
 
-/// Coverage for the "Tokens by source" chart's data shaping and its accessibility
-/// descriptor — the two parts of the section that are logic rather than layout.
+/// Coverage for the stacked chart's data shaping and its accessibility
+/// descriptor — the parts of a usage block that are logic rather than layout.
+///
+/// One chart type draws both blocks, so most of this is asserted once and the
+/// metric-specific half (which field of a day is read, how the axis spells it,
+/// what VoiceOver says) is asserted for each of ``DailyUsageMetric``'s cases.
 final class DailyUsageChartTests: XCTestCase {
 
     static let referenceNow = SessionLogParser.parseTimestamp("2026-07-15T12:00:00.000Z")!
@@ -15,21 +19,33 @@ final class DailyUsageChartTests: XCTestCase {
         return calendar
     }()
 
-    /// Three days of usage, CLI and SDK only — VS Code deliberately silent.
+    /// Three days of usage, CLI and SDK only — VS Code deliberately silent,
+    /// Sonnet and Opus only — Haiku and Fable deliberately absent.
     ///
-    /// `unrecognisedSourceTokens` adds a fourth event on the last day whose
-    /// `entrypoint` this version doesn't know, which is what the history buckets
-    /// under `nil` and the chart draws as "Other".
-    private func makeHistory(unrecognisedSourceTokens: Int = 0) throws -> DailyUsageHistory {
+    /// `unrecognisedSourceTokens` adds an event on the last day whose
+    /// `entrypoint` this version doesn't know, and `unrecognisedModelTokens` one
+    /// whose model ID it doesn't know. Either is what the history buckets under
+    /// `nil` and the chart draws as "Other" in its own split.
+    private func makeHistory(
+        unrecognisedSourceTokens: Int = 0,
+        unrecognisedModelTokens: Int = 0
+    ) throws -> DailyUsageHistory {
         let now = Self.referenceNow
-        let unrecognised: [UsageEvent] = unrecognisedSourceTokens == 0 ? [] : [
+        let unrecognised: [UsageEvent] = (unrecognisedSourceTokens == 0 ? [] : [
             UsageEvent(
                 timestamp: try XCTUnwrap(SessionLogParser.parseTimestamp("2026-07-15T10:00:00.000Z")),
                 entrypoint: nil,
                 modelID: "claude-sonnet-5",
                 usage: TokenUsage(inputTokens: unrecognisedSourceTokens)
             )
-        ]
+        ]) + (unrecognisedModelTokens == 0 ? [] : [
+            UsageEvent(
+                timestamp: try XCTUnwrap(SessionLogParser.parseTimestamp("2026-07-15T11:00:00.000Z")),
+                entrypoint: .cli,
+                modelID: "some-model-from-the-future",
+                usage: TokenUsage(inputTokens: unrecognisedModelTokens)
+            )
+        ])
         let store = LocalLogUsageStore(
             events: [
                 UsageEvent(
@@ -64,15 +80,15 @@ final class DailyUsageChartTests: XCTestCase {
     func testSourceSeriesFollowEntrypointDisplayOrder() throws {
         let series = DailyUsageSeries.sources(from: try makeHistory())
 
-        // The legend zips these bands against `Entrypoint.displayOrder` to pair
-        // each swatch with its five-hour number, so the orders must match.
+        // Stack order is table order, bottom band first, so a reader moving
+        // from the plot to the rows meets the bands in the same sequence.
         XCTAssertEqual(series.map(\.label), Entrypoint.displayOrder.map(\.displayName))
     }
 
     func testTheOtherBandComesLastAndOnlyWhenThereIsOtherUsage() throws {
         let plain = try makeHistory()
         XCTAssertEqual(DailyUsageSeries.sourceKeys(in: plain), Entrypoint.displayOrder.map { $0 })
-        XCTAssertFalse(DailyUsageSeries.sources(from: plain).contains { $0.label == DailyUsageSeries.otherSourceLabel })
+        XCTAssertFalse(DailyUsageSeries.sources(from: plain).contains { $0.label == DailyUsageSeries.otherBandLabel })
 
         let history = try makeHistory(unrecognisedSourceTokens: 500)
         let series = DailyUsageSeries.sources(from: history)
@@ -82,16 +98,16 @@ final class DailyUsageChartTests: XCTestCase {
         // not shuffle the bands under it when it does.
         XCTAssertEqual(
             series.map(\.label),
-            Entrypoint.displayOrder.map(\.displayName) + [DailyUsageSeries.otherSourceLabel]
+            Entrypoint.displayOrder.map(\.displayName) + [DailyUsageSeries.otherBandLabel]
         )
         XCTAssertEqual(DailyUsageSeries.sourceKeys(in: history), Entrypoint.displayOrder.map { $0 } + [nil])
         XCTAssertEqual(series.last?.points.map(\.totalTokens).reduce(0, +), 500)
         XCTAssertEqual(series.last?.color, DailyUsageSeries.bandColor(3))
     }
 
-    /// The legend pairs each chip's five-hour number with a band's swatch by
-    /// zipping these two lists, so a mismatch in either direction mislabels a
-    /// colour — which is the whole point of the swatch.
+    /// Keys and bands are published separately, and anything pairing them zips
+    /// the two lists — a mismatch in either direction mislabels a colour, which
+    /// is the whole point of the dot.
     func testTheKeysAndTheBandsLineUpInBothShapesOfTheWindow() throws {
         for history in [try makeHistory(), try makeHistory(unrecognisedSourceTokens: 500)] {
             let keys = DailyUsageSeries.sourceKeys(in: history)
@@ -99,7 +115,7 @@ final class DailyUsageChartTests: XCTestCase {
 
             XCTAssertEqual(keys.count, series.count)
             XCTAssertEqual(
-                zip(keys, series).map { $0.0?.displayName ?? DailyUsageSeries.otherSourceLabel },
+                zip(keys, series).map { $0.0?.displayName ?? DailyUsageSeries.otherBandLabel },
                 series.map(\.label)
             )
         }
@@ -110,7 +126,7 @@ final class DailyUsageChartTests: XCTestCase {
         let vscode = try XCTUnwrap(series.first { $0.label == Entrypoint.vscode.displayName })
 
         // "VS Code: 0" is a reading the popover shows, not a row it drops — and
-        // a band with no points at all would leave its legend swatch meaning
+        // a band with no points at all would leave its table dot meaning
         // nothing.
         XCTAssertEqual(vscode.points.count, 3)
         XCTAssertTrue(vscode.points.allSatisfy { $0.totalTokens == 0 })
@@ -131,6 +147,125 @@ final class DailyUsageChartTests: XCTestCase {
 
         XCTAssertEqual(series.map(\.label), Entrypoint.displayOrder.map(\.displayName))
         XCTAssertTrue(series.allSatisfy { $0.points.isEmpty })
+    }
+
+    // MARK: - Model series shaping
+
+    func testModelSeriesFollowFamilyDisplayOrderAndSkipAbsentFamilies() throws {
+        let history = try makeHistory()
+        let series = DailyUsageSeries.models(from: history)
+
+        // Only the families the window holds, unlike the source split, which
+        // keeps a silent entrypoint. A zero row for a model Anthropic ships but
+        // this account never touched says nothing about this Mac.
+        XCTAssertEqual(series.map(\.label), [ModelFamily.sonnet.displayName, ModelFamily.opus.displayName])
+        XCTAssertEqual(DailyUsageSeries.modelKeys(in: history), [ModelFamily?.some(.sonnet), .some(.opus)])
+        XCTAssertFalse(series.contains { $0.label == ModelFamily.haiku.displayName })
+    }
+
+    func testTheOtherModelBandComesLastAndOnlyWhenThereIsOtherUsage() throws {
+        XCTAssertFalse(DailyUsageSeries.models(from: try makeHistory()).contains {
+            $0.label == DailyUsageSeries.otherBandLabel
+        })
+
+        let history = try makeHistory(unrecognisedModelTokens: 400)
+        let series = DailyUsageSeries.models(from: history)
+
+        // Last, i.e. the top of the stack — the same rule the source split
+        // follows, for the same reason: a bucket that can appear between two
+        // polls must not shuffle the named bands under it.
+        XCTAssertEqual(
+            series.map(\.label),
+            [ModelFamily.sonnet.displayName, ModelFamily.opus.displayName, DailyUsageSeries.otherBandLabel]
+        )
+        XCTAssertEqual(DailyUsageSeries.modelKeys(in: history).last, ModelFamily?.none)
+        XCTAssertEqual(series.last?.points.map(\.totalTokens).reduce(0, +), 400)
+    }
+
+    func testBothSplitsIndexTheRampTheSameWay() throws {
+        // One rule for both tables: the ramp is indexed by stack position, so a
+        // dot two rows down means "two bands up from the bottom" in either
+        // block. Anything else would make the same shade mean two things.
+        let history = try makeHistory(unrecognisedSourceTokens: 500, unrecognisedModelTokens: 400)
+        for series in [DailyUsageSeries.sources(from: history), DailyUsageSeries.models(from: history)] {
+            XCTAssertEqual(series.map(\.color), series.indices.map(DailyUsageSeries.bandColor))
+        }
+    }
+
+    func testTheModelBandsSumToTheWindowsTotalSpend() throws {
+        let history = try makeHistory(unrecognisedModelTokens: 400)
+        let bands = DailyUsageSeries.models(from: history)
+            .map { $0.points.summed().estimatedCostUSD }
+            .reduce(0, +)
+
+        // The top edge of this stack replaced the old single cost line, so it
+        // has to be that line: nothing dropped, nothing double-counted.
+        XCTAssertEqual(bands, history.total.summed().estimatedCostUSD, accuracy: 1e-9)
+    }
+
+    // MARK: - Metric
+
+    private func costChart(from history: DailyUsageHistory, hoveredDay: Date? = nil) -> DailyUsageChart {
+        DailyUsageChart(
+            days: history.days,
+            series: DailyUsageSeries.models(from: history),
+            metric: .cost,
+            bandsName: "model",
+            hoveredDay: hoveredDay
+        )
+    }
+
+    func testTheCostMetricPlotsSpendWhereTheTokenMetricPlotsTokens() throws {
+        let history = try makeHistory()
+        let series = DailyUsageSeries.models(from: history)
+        let tokens = DailyUsageChart(days: history.days, series: series)
+        let cost = costChart(from: history)
+
+        // Same bands, same days, two different readings off them — which is the
+        // whole of what the metric parameter decides.
+        XCTAssertEqual(tokens.stackedMaximum, Double(history.total.map(\.totalTokens).max() ?? 0))
+        XCTAssertEqual(cost.stackedMaximum, history.total.map(\.estimatedCostUSD).max() ?? 0, accuracy: 1e-9)
+        XCTAssertNotEqual(tokens.stackedMaximum, cost.stackedMaximum)
+    }
+
+    func testTheCostChartsDotsClimbTheStackInDollars() throws {
+        let history = try makeHistory()
+        let chart = costChart(from: history, hoveredDay: history.days.last)
+        let index = try XCTUnwrap(chart.highlightedIndex)
+        let bands = DailyUsageSeries.models(from: history).map { $0.points[index].estimatedCostUSD }
+
+        // Cumulative, like the token stack: a dot at a band's own spend would
+        // float inside the stack rather than sit on the edge the chart draws.
+        XCTAssertEqual(chart.stackTops(at: index).map(\.value), [bands[0], bands[0] + bands[1]])
+    }
+
+    func testEachMetricLabelsItsAxisInItsOwnUnit() {
+        // `$2.50` is not `2G` wide, which is the whole reason the popover
+        // measures a shared label column instead of reserving one.
+        let days = chart(dayCount: 30).days
+        let cost = DailyUsageChart(
+            days: days,
+            series: [DailyUsageSeries(
+                label: "Sonnet",
+                color: DailyUsageSeries.bandColor(0),
+                points: days.map { DailyUsagePoint(day: $0, estimatedCostUSD: 2.5) }
+            )],
+            metric: .cost
+        )
+        let tokens = DailyUsageChart(
+            days: days,
+            series: [DailyUsageSeries(
+                label: "CLI",
+                color: DailyUsageSeries.bandColor(0),
+                points: days.map { DailyUsagePoint(day: $0, usage: TokenUsage(inputTokens: 2_000_000_000)) }
+            )]
+        )
+
+        XCTAssertEqual(cost.yLabels, DisplayFormat.costAxisLabels(cost.yValues))
+        XCTAssertEqual(tokens.yLabels, DisplayFormat.tokenAxisLabels(tokens.yValues.map { Int($0.rounded()) }))
+        XCTAssertTrue(cost.yLabels.contains { $0.hasPrefix("$") })
+        XCTAssertFalse(tokens.yLabels.contains { $0.hasPrefix("$") })
+        XCTAssertNotEqual(cost.naturalYLabelWidth, tokens.naturalYLabelWidth)
     }
 
     // MARK: - X-axis ticks
@@ -197,7 +332,7 @@ final class DailyUsageChartTests: XCTestCase {
         // The areas stack, so the dots have to climb with them — CLI's 200 and
         // the SDK's 700 make edges at 200 and 900, not two dots at their own
         // heights. VS Code did nothing that day and gets no dot.
-        XCTAssertEqual(chart.stackTops(at: index).map(\.tokens), [200, 900])
+        XCTAssertEqual(chart.stackTops(at: index).map(\.value), [200, 900])
         XCTAssertEqual(chart.stackTops(at: index).map(\.id), ["CLI", Entrypoint.sdkAgent.displayName])
     }
 
@@ -212,7 +347,7 @@ final class DailyUsageChartTests: XCTestCase {
 
         // Only CLI ran on the first day of the fixture. A dot for each silent
         // source would stack three of them on one edge.
-        XCTAssertEqual(chart.stackTops(at: index).map(\.tokens), [100])
+        XCTAssertEqual(chart.stackTops(at: index).map(\.value), [100])
     }
 
     // MARK: - Accessibility
@@ -224,8 +359,9 @@ final class DailyUsageChartTests: XCTestCase {
             series: DailyUsageSeries.sources(from: history)
         ).makeChartDescriptor()
 
-        // Replacing the table means replacing what it announced: every source,
-        // every day, as data rather than as an image.
+        // The chart is the only place thirty days of per-band readings exist —
+        // the table beneath it reads one window — so VoiceOver gets every
+        // source and every day as data rather than an unlabelled image.
         XCTAssertEqual(descriptor.series.count, Entrypoint.displayOrder.count)
         XCTAssertEqual(descriptor.series.map(\.name), Entrypoint.displayOrder.map(\.displayName))
         for series in descriptor.series {
@@ -269,6 +405,52 @@ final class DailyUsageChartTests: XCTestCase {
         XCTAssertFalse(describe(.greatestFiniteMagnitude).isEmpty)
         XCTAssertFalse(describe(-1).isEmpty)
         XCTAssertTrue(describe(900).contains("900"))
+    }
+
+    func testTheCostDescriptorNamesItsUnitAndItsSplit() throws {
+        let history = try makeHistory()
+        let descriptor = DailyUsageChartDescriptor(
+            days: history.days,
+            series: DailyUsageSeries.models(from: history),
+            metric: .cost,
+            bandsName: "model"
+        ).makeChartDescriptor()
+
+        // VoiceOver reads this with no visual context, so neither the `$` nor
+        // the section title is available to say what the numbers are.
+        XCTAssertEqual(descriptor.title, "Estimated cost by model, last \(history.days.count) days")
+        let yAxis = try XCTUnwrap(descriptor.yAxis as? AXNumericDataAxisDescriptor)
+        XCTAssertEqual(yAxis.title, "Estimated cost in US dollars")
+        // Floored at 1 like the token axis: a fixture whose dearest day is
+        // under a dollar must not hand VoiceOver's audio graph a hair-thin
+        // range to scale every reading against.
+        XCTAssertEqual(
+            yAxis.range.upperBound,
+            max(history.total.map(\.estimatedCostUSD).max() ?? 0, 1),
+            accuracy: 1e-9
+        )
+        XCTAssertEqual(descriptor.series.map(\.name), [ModelFamily.sonnet.displayName, ModelFamily.opus.displayName])
+    }
+
+    /// The same probe-value guard the token axis needs, on the formatter the
+    /// cost axis uses: `%f` of `greatestFiniteMagnitude` is a 300-digit label
+    /// rather than a crash, which is worse — it renders.
+    func testTheCostDescriptorDescribesProbeValuesWithoutTrappingOrLying() throws {
+        let descriptor = DailyUsageChartDescriptor(
+            days: try makeHistory().days,
+            series: [],
+            metric: .cost
+        ).makeChartDescriptor()
+        let yAxis = try XCTUnwrap(descriptor.yAxis as? AXNumericDataAxisDescriptor)
+        let describe = try XCTUnwrap(yAxis.valueDescriptionProvider)
+
+        XCTAssertEqual(describe(.nan), "unknown")
+        XCTAssertEqual(describe(.infinity), "unknown")
+        XCTAssertEqual(describe(.greatestFiniteMagnitude), "unknown")
+        // Never a bare number: read out of any visual context, the estimate has
+        // to say it is one.
+        XCTAssertEqual(describe(12.25), "$12 estimated")
+        XCTAssertEqual(describe(0), "$0 estimated")
     }
 
     func testChartDescriptorSurvivesAnEmptyHistory() {

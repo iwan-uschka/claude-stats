@@ -4,19 +4,93 @@ import Charts
 import ClaudeStatsCore
 import SwiftUI
 
-/// One stacked band of a ``DailyUsageChart``.
+/// What a popover chart plots off a ``DailyUsagePoint``.
+///
+/// One chart type draws both of the popover's blocks — "By source" stacks
+/// tokens, "By model" stacks the money those tokens are estimated to have cost.
+/// The shapes are identical (thirty dense daily points per band, stacked, over
+/// one shared x-axis), and the only things that differ are which field of a
+/// point is read and how the y-axis spells it. A second 300-line chart type for
+/// that would be two places to fix every alignment bug.
+enum DailyUsageMetric {
+    case tokens
+    case cost
+
+    /// The number this metric reads out of one day of one band.
+    func value(of point: DailyUsagePoint) -> Double {
+        switch self {
+        case .tokens: return Double(point.totalTokens)
+        case .cost: return point.estimatedCostUSD
+        }
+    }
+
+    /// The y-axis labels for `values`, in order. One unit and one decimal count
+    /// for the whole column either way — see ``DisplayFormat/tokenAxisLabels(_:)``
+    /// and ``DisplayFormat/costAxisLabels(_:)``.
+    func axisLabels(_ values: [Double]) -> [String] {
+        switch self {
+        case .tokens: return DisplayFormat.tokenAxisLabels(values.map { Int($0.rounded()) })
+        case .cost: return DisplayFormat.costAxisLabels(values)
+        }
+    }
+
+    /// What the mark's y value is called inside `Chart` — the plottable's own
+    /// label, which VoiceOver falls back on.
+    var markLabel: String {
+        switch self {
+        case .tokens: return "Tokens"
+        case .cost: return "Estimated cost"
+        }
+    }
+
+    /// The ``AXNumericDataAxisDescriptor`` title. Spelled out for cost, because
+    /// VoiceOver reads it with no visual context and `$` is not spoken.
+    var axisTitle: String {
+        switch self {
+        case .tokens: return "Tokens"
+        case .cost: return "Estimated cost in US dollars"
+        }
+    }
+
+    /// The leading half of the chart's spoken title, e.g. `Token usage by
+    /// source, last 30 days`.
+    var chartTitle: String {
+        switch self {
+        case .tokens: return "Token usage"
+        case .cost: return "Estimated cost"
+        }
+    }
+
+    /// How VoiceOver reads one value off the y-axis.
+    ///
+    /// Both branches guard the framework's own probe values: `AXChartDescriptor`
+    /// calls this with numbers of its choosing, and both a non-finite `Int(_:)`
+    /// conversion and a `%f` of `greatestFiniteMagnitude` were live failures
+    /// here — the first a trap, the second a 300-digit label that renders.
+    func describe(_ value: Double) -> String {
+        switch self {
+        case .tokens:
+            guard value.isFinite else { return "unknown" }
+            return "\(DisplayFormat.tokens(Int(value.clampedToRepresentableCount()))) tokens"
+        case .cost:
+            return DisplayFormat.compactCost(value).map { "\($0) estimated" } ?? "unknown"
+        }
+    }
+}
+
+/// One stacked band of a ``DailyUsageChart``, and one row of the table under it.
 struct DailyUsageSeries: Identifiable, Hashable {
     /// Stable key, also the value the chart's style scale is keyed by. Uses the
     /// label rather than a synthetic id so `chartForegroundStyleScale` and the
-    /// legend can't drift apart.
+    /// table can't drift apart.
     var id: String { label }
 
-    /// Row label, e.g. `CLI` — the same string the legend shows.
+    /// Row label, e.g. `CLI` or `Sonnet` — the same string the table shows.
     let label: String
 
     /// This band's ink — one shade of ``PopoverMetrics/brandColor``, taken from
     /// ``PopoverMetrics/chartBandColors`` by stack position. Shades of the one
-    /// brand hue rather than a hue per source: colour anywhere else in this
+    /// brand hue rather than a hue per band: colour anywhere else in this
     /// popover means Claude, and a five-colour chart would make the section
     /// shout louder than the quota bars above it.
     let color: Color
@@ -26,24 +100,26 @@ struct DailyUsageSeries: Identifiable, Hashable {
 
     /// The band ink for stack position `index`, strongest first. Clamped rather
     /// than wrapped: a sixth band repeating the first one's colour would tie a
-    /// legend dot to the wrong band, where repeating the palest one only makes
+    /// table dot to the wrong band, where repeating the palest one only makes
     /// two faint bands hard to tell apart.
     static func bandColor(_ index: Int) -> Color {
         PopoverMetrics.chartBandColors[Swift.min(index, PopoverMetrics.chartBandColors.count - 1)]
     }
 
-    /// Label for the band carrying sources this version doesn't recognise.
-    static let otherSourceLabel = "Other"
+    /// Label for the band carrying whatever this version doesn't recognise —
+    /// an unknown `entrypoint` in "By source", an unknown model ID in "By
+    /// model". One label for both, because it is the same bucket in both: the
+    /// remainder that would otherwise make the stack fall short of the total.
+    static let otherBandLabel = "Other"
 
-    /// The sources the chart bands stand for, in stack order: display order,
-    /// then the unrecognised bucket — `nil` — when the window has one.
+    /// The sources the "By source" bands stand for, in stack order: display
+    /// order, then the unrecognised bucket — `nil` — when the window has one.
     ///
-    /// "Other" goes last, i.e. on top of the stack, for the reason it goes last
-    /// in the "Costs by model" rows: the named sources are what a reader is
-    /// looking for, and a bucket that can appear and vanish between two polls
-    /// must not shuffle the bands under it when it does.
+    /// "Other" goes last, i.e. on top of the stack: the named sources are what
+    /// a reader is looking for, and a bucket that can appear and vanish between
+    /// two polls must not shuffle the bands under it when it does.
     ///
-    /// Published separately from ``sources(from:)`` because the legend needs
+    /// Published separately from ``sources(from:)`` because a caller may need
     /// the entrypoint *and* the band, and zipping the band list against
     /// ``Entrypoint/displayOrder`` silently drops whichever of the two is
     /// shorter — which is exactly what an "Other" band makes them.
@@ -52,33 +128,73 @@ struct DailyUsageSeries: Identifiable, Hashable {
         return history.bySource[Entrypoint?.none] == nil ? known : known + [nil]
     }
 
-    /// Ordered bands for the "Tokens by source" chart: ``sourceKeys(in:)``,
-    /// strongest shade first, including sources that did nothing in the window.
+    /// Ordered bands for the "By source" chart: ``sourceKeys(in:)``, strongest
+    /// shade first, including sources that did nothing in the window.
     static func sources(from history: DailyUsageHistory) -> [DailyUsageSeries] {
-        sourceKeys(in: history).enumerated().map { index, entrypoint in
-            DailyUsageSeries(
-                label: entrypoint?.displayName ?? otherSourceLabel,
-                color: bandColor(index),
-                points: history.bySource[entrypoint] ?? []
-            )
+        bands(keys: sourceKeys(in: history)) { key in
+            (key?.displayName ?? otherBandLabel, history.bySource[key] ?? [])
+        }
+    }
+
+    /// The model families the "By model" bands stand for, in stack order.
+    ///
+    /// Filtered to the families the window actually holds, unlike
+    /// ``sourceKeys(in:)`` which keeps a silent source. The asymmetry follows
+    /// the data: ``DailyUsageHistory/bySource`` is dense over
+    /// ``Entrypoint/allCases`` because "VS Code: 0" is a reading about a tool
+    /// the user either uses or doesn't, while ``DailyUsageHistory/byModelFamily``
+    /// carries only families that appear — a zero row for a model Anthropic
+    /// ships but this account never touches says nothing.
+    static func modelKeys(in history: DailyUsageHistory) -> [ModelFamily?] {
+        let known: [ModelFamily?] = ModelFamily.displayOrder
+            .filter { history.byModelFamily[$0] != nil }
+            .map { $0 }
+        return history.byModelFamily[ModelFamily?.none] == nil ? known : known + [nil]
+    }
+
+    /// Ordered bands for the "By model" chart — ``modelKeys(in:)`` against the
+    /// same ramp, taken in the same stack order, so a dot means the same thing
+    /// in both tables.
+    static func models(from history: DailyUsageHistory) -> [DailyUsageSeries] {
+        bands(keys: modelKeys(in: history)) { key in
+            (key?.displayName ?? otherBandLabel, history.byModelFamily[key] ?? [])
+        }
+    }
+
+    /// Shared band construction: the ramp is indexed by stack position, which
+    /// is the one rule both splits have to follow identically.
+    private static func bands<Key>(
+        keys: [Key],
+        resolve: (Key) -> (label: String, points: [DailyUsagePoint])
+    ) -> [DailyUsageSeries] {
+        keys.enumerated().map { index, key in
+            let band = resolve(key)
+            return DailyUsageSeries(label: band.label, color: bandColor(index), points: band.points)
         }
     }
 }
 
-/// A stacked 30-day area chart of daily token usage, sized for the popover.
+/// A stacked 30-day area chart of one daily metric, sized for the popover.
 ///
 /// Both axes are drawn: without a y-axis the bands show shape but no
 /// magnitude, and without dated x-ticks a spike can't be tied to a day. Ticks
 /// are sparse on purpose — a label every seven days, three or four round
-/// values up the y-axis
-/// — because thirty dated labels across a 340 pt popover would be unreadable
-/// mush. Exact per-source numbers stay in the legend under the chart.
+/// values up the y-axis — because thirty dated labels across a 340 pt popover
+/// would be unreadable mush. Exact per-band numbers stay in the table under the
+/// chart.
 struct DailyUsageChart: View {
     /// Local midnights, oldest first — the x positions every series shares.
     let days: [Date]
 
     /// Stack order, bottom band first.
     let series: [DailyUsageSeries]
+
+    /// Which field of a day this chart plots, and how its axis spells it.
+    var metric: DailyUsageMetric = .tokens
+
+    /// What the bands are a split of, for the spoken chart title: `source`,
+    /// `model`. Only VoiceOver sees it — the section title says it on screen.
+    var bandsName: String = "source"
 
     /// The day the pointer is on, drawn as a rule across the stack. Ignored
     /// when it is not a day this chart plots — see
@@ -90,9 +206,8 @@ struct DailyUsageChart: View {
     var onHover: (Date?) -> Void = { _ in }
 
     /// Width of the y-label column, shared with the other popover chart so the
-    /// two plots start at the same x — see ``ChartYLabelWidthKey``. `nil` lets
-    /// each label take its own width, which is the first frame and every chart
-    /// built for a test or a preview.
+    /// two plots start at the same x. `nil` lets each label take its own width,
+    /// which is the first frame and every chart built for a test or a preview.
     var yLabelWidth: CGFloat?
 
     /// The hovered day's position in ``days``, or `nil` when the pointer is
@@ -104,13 +219,13 @@ struct DailyUsageChart: View {
         let id: String
         let series: String
         let day: Date
-        let tokens: Int
+        let value: Double
     }
 
     private var records: [Record] {
         series.flatMap { band in
             zip(days, band.points).enumerated().map { index, pair in
-                Record(id: "\(band.label)-\(index)", series: band.label, day: pair.0, tokens: pair.1.totalTokens)
+                Record(id: "\(band.label)-\(index)", series: band.label, day: pair.0, value: metric.value(of: pair.1))
             }
         }
     }
@@ -120,27 +235,27 @@ struct DailyUsageChart: View {
         /// The band's label, so `ForEach` has a stable key.
         let id: String
         /// The band's *cumulative* height, not its own.
-        let tokens: Int
+        let value: Double
     }
 
     /// Where each band ends on the hovered day, bottom band first.
     ///
-    /// Cumulative sums, because the areas stack: a dot at a band's own token
-    /// count would float somewhere inside the stack rather than sitting on the
-    /// edge the chart draws.
+    /// Cumulative sums, because the areas stack: a dot at a band's own value
+    /// would float somewhere inside the stack rather than sitting on the edge
+    /// the chart draws.
     ///
     /// A band that did nothing that day is skipped. Its edge is its
     /// neighbour's, so its dot would land exactly on top of another one and
     /// darken it for no reading — and a silent source is a case the popover
     /// shows rather than drops, so this is not hypothetical.
     func stackTops(at index: Int) -> [StackTop] {
-        var running = 0
+        var running = 0.0
         return series.compactMap { band in
             guard index < band.points.count else { return nil }
-            let tokens = band.points[index].totalTokens
-            running += tokens
-            guard tokens > 0 else { return nil }
-            return StackTop(id: band.label, tokens: running)
+            let value = metric.value(of: band.points[index])
+            running += value
+            guard value > 0 else { return nil }
+            return StackTop(id: band.label, value: running)
         }
     }
 
@@ -149,23 +264,22 @@ struct DailyUsageChart: View {
 
     /// The tallest day in the window — the *stack's* height, not the tallest
     /// single band, since the bands sit on each other.
-    var stackedMaximum: Int {
+    var stackedMaximum: Double {
         let dayCount = series.map(\.points.count).max() ?? 0
         return (0..<dayCount).map { day in
-            series.reduce(0) { $0 + (day < $1.points.count ? $1.points[day].totalTokens : 0) }
+            series.reduce(0.0) { $0 + (day < $1.points.count ? metric.value(of: $1.points[day]) : 0) }
         }.max() ?? 0
     }
 
-    /// The token counts the y-axis labels, lowest first; the last is the top of
-    /// the scale. See ``PopoverChartAxis/yValues(upTo:count:)``.
-    var yValues: [Int] { PopoverChartAxis.yValues(upTo: Double(stackedMaximum)).map { Int($0.rounded()) } }
+    /// The values the y-axis labels, lowest first; the last is the top of the
+    /// scale. See ``PopoverChartAxis/yValues(upTo:count:)``.
+    var yValues: [Double] { PopoverChartAxis.yValues(upTo: stackedMaximum) }
 
-    /// The y-axis labels, in ``yValues`` order. One unit and one decimal count
-    /// for the whole column — see ``DisplayFormat/tokenAxisLabels(_:)``.
-    var yLabels: [String] { DisplayFormat.tokenAxisLabels(yValues) }
+    /// The y-axis labels, in ``yValues`` order.
+    var yLabels: [String] { metric.axisLabels(yValues) }
 
     /// What this chart's own y-labels need, before the popover widens the
-    /// column to whatever the chart below it needs.
+    /// column to whatever the other chart needs.
     var naturalYLabelWidth: CGFloat { PopoverChartAxis.yLabelWidth(of: yLabels) }
 
     var body: some View {
@@ -178,13 +292,14 @@ struct DailyUsageChart: View {
                 // costs the alignment. Pinned by ``PopoverChartAlignmentTests``.
                 AreaMark(
                     x: .value("Day", record.day),
-                    y: .value("Tokens", record.tokens)
+                    y: .value(metric.markLabel, record.value)
                 )
-                .foregroundStyle(by: .value("Source", record.series))
+                .foregroundStyle(by: .value("Band", record.series))
                 // Monotone, not `catmullRom`: a spline through spiky daily counts
                 // overshoots, and on a stacked band an overshoot dips below the band
-                // underneath it — drawing usage that never happened. Monotone keeps
-                // every segment within its own two points.
+                // underneath it — drawing usage that never happened, or on the cost
+                // stack a day Anthropic paid you. Monotone keeps every segment
+                // within its own two points.
                 .interpolationMethod(.monotone)
             }
 
@@ -200,7 +315,7 @@ struct DailyUsageChart: View {
                     RuleMark(
                         xStart: .value("Day", days.first ?? Date()),
                         xEnd: .value("Day", days.last ?? Date()),
-                        y: .value("Tokens", value)
+                        y: .value(metric.markLabel, value)
                     )
                     .lineStyle(StrokeStyle(lineWidth: 0.5))
                     .foregroundStyle(.secondary)
@@ -209,14 +324,18 @@ struct DailyUsageChart: View {
             if let index = highlightedIndex {
                 // Every mark here carries a value the chart already plots — the
                 // day is one of `days`, each dot sits on a band edge the stack
-                // already draws — so no scale widens and no axis moves.
+                // already draws — so no scale widens and no axis moves. That is
+                // not cosmetic: a y-scale that grew under a stationary pointer
+                // would redraw the bands beneath it and drag the plot's leading
+                // edge sideways, changing the day the pointer is on under the
+                // user's own hand.
                 RuleMark(x: .value("Day", days[index]))
                     .lineStyle(StrokeStyle(lineWidth: 0.5))
                     .foregroundStyle(Color.primary.opacity(0.25))
                 ForEach(stackTops(at: index)) { top in
                     PointMark(
                         x: .value("Day", days[index]),
-                        y: .value("Tokens", top.tokens)
+                        y: .value(metric.markLabel, top.value)
                     )
                     .symbolSize(PopoverMetrics.chartHoverPointSize)
                     // Plain primary ink, not any band's own shade: a dot has to
@@ -234,7 +353,8 @@ struct DailyUsageChart: View {
         )
         .chartLegend(.hidden)
         // The axis draws the values this chart measured its label column from,
-        // so the scale has to end where they do.
+        // so the scale has to end where they do. Zero stays in the domain,
+        // which is what keeps a quiet stretch visibly above the axis.
         .chartYScale(domain: 0...(yValues.last ?? 1))
         .chartXScale(range: .plotDimension(
             startPadding: PopoverMetrics.chartXScaleEdgePadding,
@@ -261,18 +381,26 @@ struct DailyUsageChart: View {
         }
         .frame(height: PopoverMetrics.chartHeight)
         .chartHoverTracking(days: days, onHover: onHover)
-        .accessibilityChartDescriptor(DailyUsageChartDescriptor(days: days, series: series))
+        .accessibilityChartDescriptor(DailyUsageChartDescriptor(
+            days: days,
+            series: series,
+            metric: metric,
+            bandsName: bandsName
+        ))
     }
 }
 
-/// VoiceOver's model of the chart — the audio graph and per-point readout that
-/// replaces the per-cell labels the "This Mac" table used to carry.
+/// VoiceOver's model of a popover chart — the audio graph and per-point readout
+/// that replaces the numbers a table of every day would have announced.
 ///
-/// Not decorative: a chart left as an image would silently drop every number
-/// the table used to announce, which is a regression rather than a redesign.
+/// Not decorative: a chart left as an image would silently drop thirty days of
+/// readings that exist nowhere else in the popover, since the table beneath it
+/// reads one window or one day.
 struct DailyUsageChartDescriptor: AXChartDescriptorRepresentable {
     let days: [Date]
     let series: [DailyUsageSeries]
+    var metric: DailyUsageMetric = .tokens
+    var bandsName: String = "source"
 
     /// Short, spoken-friendly day labels (`Sep 13`).
     private static let dayFormatter: DateFormatter = {
@@ -293,18 +421,16 @@ struct DailyUsageChartDescriptor: AXChartDescriptorRepresentable {
         // reading against a ceiling the chart visibly exceeds.
         let dayCount = series.map(\.points.count).max() ?? 0
         let highest = (0..<dayCount).map { day in
-            series.reduce(0) { $0 + (day < $1.points.count ? $1.points[day].totalTokens : 0) }
+            series.reduce(0.0) { $0 + (day < $1.points.count ? metric.value(of: $1.points[day]) : 0) }
         }.max() ?? 0
         let yAxis = AXNumericDataAxisDescriptor(
-            title: "Tokens",
-            range: 0...Double(max(highest, 1)),
+            title: metric.axisTitle,
+            // Never `0...0`: an empty range is a divide-by-zero waiting to
+            // happen in VoiceOver's audio graph.
+            range: 0...max(highest, 1),
             gridlinePositions: []
         ) { value in
-            // The framework calls this with values of its own choosing, which
-            // can include a non-finite probe — `Int(Double)` traps on those, so
-            // this must not convert blind.
-            guard value.isFinite else { return "unknown" }
-            return "\(DisplayFormat.tokens(Int(value.clampedToRepresentableCount()))) tokens"
+            metric.describe(value)
         }
 
         let descriptors = series.map { band in
@@ -312,13 +438,13 @@ struct DailyUsageChartDescriptor: AXChartDescriptorRepresentable {
                 name: band.label,
                 isContinuous: true,
                 dataPoints: zip(categories, band.points).map { category, point in
-                    AXDataPoint(x: category, y: Double(point.totalTokens))
+                    AXDataPoint(x: category, y: metric.value(of: point))
                 }
             )
         }
 
         return AXChartDescriptor(
-            title: "Token usage by source, last \(days.count) days",
+            title: "\(metric.chartTitle) by \(bandsName), last \(days.count) days",
             summary: nil,
             xAxis: xAxis,
             yAxis: yAxis,
