@@ -79,6 +79,101 @@ final class PopoverChartAlignmentTests: XCTestCase {
         )
     }
 
+    /// The two charts the popover stacks, over the same days, with y-labels of
+    /// deliberately different widths: `$2.50`-shaped against `2G`-shaped.
+    private func stackedCharts(days: [Date], yLabelWidth: CGFloat? = nil) -> (cost: DailyCostChart, source: DailyUsageChart) {
+        (
+            DailyCostChart(
+                days: days,
+                points: days.map { DailyUsagePoint(day: $0, estimatedCostUSD: 2.5) },
+                yLabelWidth: yLabelWidth
+            ),
+            DailyUsageChart(
+                days: days,
+                series: [
+                    DailyUsageSeries(
+                        label: "CLI",
+                        shade: DailyUsageSeries.shades[0],
+                        points: days.map { DailyUsagePoint(day: $0, usage: TokenUsage(inputTokens: 2_000_000_000)) }
+                    )
+                ],
+                yLabelWidth: yLabelWidth
+            )
+        )
+    }
+
+    func testAChartsLabelColumnIsTheWidthOfItsOwnWidestLabel() {
+        // The number the popover collects from each chart. It has to be
+        // measured from the strings the axis will actually draw, which is why
+        // the charts pick their own y-values rather than leaving them
+        // automatic — see ``PopoverChartAxis/yValues(upTo:count:)``.
+        let charts = stackedCharts(days: days(30))
+        let widest = charts.cost.yLabels
+            .map { ($0 as NSString).size(withAttributes: [.font: PopoverMetrics.captionNSFont]).width }
+            .max()
+
+        XCTAssertEqual(charts.cost.naturalYLabelWidth, try XCTUnwrap(widest), accuracy: 0.01)
+        // Data-sized, not the column it replaced: 32 pt held `$12.5k`, which is
+        // the widest label the formatters can produce and not a day either of
+        // these charts plots.
+        XCTAssertLessThan(max(charts.cost.naturalYLabelWidth, charts.source.naturalYLabelWidth), 30)
+    }
+
+    func testBothChartsStartTheirPlotsAtTheSameX() throws {
+        // The two plots are stacked in one column and take the same x-ticks, so
+        // a given x has to mean one day in both — which it doesn't if each
+        // chart starts its plot wherever its own widest y-label happens to end.
+        // This is the popover's own arithmetic: measure what each chart needs,
+        // hand both the larger.
+        let days = self.days(30)
+        let natural = stackedCharts(days: days)
+        let shared = max(natural.cost.naturalYLabelWidth, natural.source.naturalYLabelWidth)
+        XCTAssertNotEqual(natural.cost.naturalYLabelWidth, natural.source.naturalYLabelWidth, "the fixture needs two different label widths to be testing anything")
+
+        let charts = stackedCharts(days: days, yLabelWidth: shared)
+        XCTAssertEqual(
+            try render(charts.cost).dataLeadingEdge(),
+            try render(charts.source).dataLeadingEdge(),
+            accuracy: Self.tolerance
+        )
+    }
+
+    func testTheSharedColumnCostsTheWiderChartNothing() throws {
+        // Sized to the data, or it is the reserved column again: the chart that
+        // needed the most room must start its plot in exactly the same place
+        // whether or not the column is applied — only the narrower one moves.
+        let days = self.days(30)
+        let natural = stackedCharts(days: days)
+        let shared = max(natural.cost.naturalYLabelWidth, natural.source.naturalYLabelWidth)
+        let wider = natural.cost.naturalYLabelWidth > natural.source.naturalYLabelWidth
+
+        let alone = wider ? try render(natural.cost) : try render(natural.source)
+        let withColumn = stackedCharts(days: days, yLabelWidth: shared)
+        let shared_ = wider ? try render(withColumn.cost) : try render(withColumn.source)
+
+        XCTAssertEqual(try alone.dataLeadingEdge(), try shared_.dataLeadingEdge(), accuracy: Self.tolerance)
+    }
+
+    func testTheHorizontalLinesStopWhereTheDaysDo() throws {
+        // They used to be `AxisGridLine`s, which span the whole plot — gutter
+        // included — so they overhung the curve they are there to be read
+        // against by the 3 pt at each end that keeps a hover dot whole. Drawn
+        // as marks now, from the first day to the last.
+        //
+        // The first and last days' own x positions come from hovering them: the
+        // rule the highlight draws is exactly where the day is.
+        let days = self.days(30)
+        let points = days.enumerated().map { DailyUsagePoint(day: $1, estimatedCostUSD: 3 + Double($0 % 5)) }
+        let resting = try render(DailyCostChart(days: days, points: points))
+        let lines = try resting.horizontalLineExtent()
+
+        for (day, end) in [(days.first, lines.first), (days.last, lines.last)] {
+            let hovered = try render(DailyCostChart(days: days, points: points, hoveredDay: day))
+            let dayX = try XCTUnwrap(hovered.tallestDifference(from: resting), "hover drew nothing")
+            XCTAssertEqual(dayX, end, accuracy: Self.tolerance, "a horizontal line overhangs the days it spans")
+        }
+    }
+
     func testTheHoverDotOnTodayIsDrawnWhole() throws {
         // Days sit on their own midnights, so the last of them is at the far
         // end of the scale and half its dot would hang outside a plot whose
@@ -213,12 +308,21 @@ final class PopoverChartAlignmentTests: XCTestCase {
             return runs(in: columns).map { CGFloat($0.first! + $0.last!) / 2 }
         }
 
+        /// Where the plotted days start — the leading end of the horizontal
+        /// lines, which run from the first day to the last.
+        func dataLeadingEdge() throws -> CGFloat { CGFloat(try plotEdges().left) }
+
+        /// Both ends of the chart's horizontal lines.
+        func horizontalLineExtent() throws -> (first: CGFloat, last: CGFloat) {
+            let edges = try plotEdges()
+            return (CGFloat(edges.left), CGFloat(edges.right))
+        }
+
         /// The plot's own edges and its baseline.
         ///
         /// All three read off the widest rows of ink in the image, which are
-        /// y-axis gridlines: a gridline spans the plot and nothing else in the
-        /// chart is that wide. The run starts at the y-axis tick rather than at
-        /// the plot, so the tick's length comes back off the leading edge.
+        /// the chart's horizontal lines: they run the length of the data and
+        /// nothing else in the chart is that wide.
         private func plotEdges() throws -> (left: Int, right: Int, bottom: Int) {
             var widest: [Int] = []
             var bottom = 0
@@ -229,8 +333,7 @@ final class PopoverChartAlignmentTests: XCTestCase {
                 bottom = max(bottom, y)
             }
             let gridline = try XCTUnwrap(runs(in: widest).max { $0.count < $1.count }, "no gridline to measure the plot by")
-            let tick = Int(PopoverMetrics.chartTickLength * renderScale)
-            return (gridline.first! + tick, gridline.last!, bottom)
+            return (gridline.first!, gridline.last!, bottom)
         }
 
         private func columnInk(_ x: Int) -> Int {

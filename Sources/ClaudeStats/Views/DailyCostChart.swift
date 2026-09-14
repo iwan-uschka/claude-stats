@@ -33,6 +33,12 @@ struct DailyCostChart: View {
     /// built for a test or a preview needs neither.
     var onHover: (Date?) -> Void = { _ in }
 
+    /// Width of the y-label column, shared with the other popover chart so the
+    /// two plots start at the same x — see ``ChartYLabelWidthKey``. `nil` lets
+    /// each label take its own width, which is the first frame and every chart
+    /// built for a test or a preview.
+    var yLabelWidth: CGFloat?
+
     /// The hovered day's position in ``days``, or `nil` when the pointer is
     /// out, or when a reload moved the window under it.
     var highlightedIndex: Int? { PopoverChartHover.index(of: hoveredDay, in: days) }
@@ -40,6 +46,18 @@ struct DailyCostChart: View {
     /// See ``PopoverChartAxis/tickDays(in:)``. Shared with the source chart
     /// above, so two plots in the same column tick on the same days.
     var tickDays: [Date] { PopoverChartAxis.tickDays(in: days) }
+
+    /// The dollar figures the y-axis labels, lowest first; the last is the top
+    /// of the scale. See ``PopoverChartAxis/yValues(upTo:count:)``.
+    var yValues: [Double] { PopoverChartAxis.yValues(upTo: points.map(\.estimatedCostUSD).max() ?? 0) }
+
+    /// The y-axis labels, in ``yValues`` order. One unit and one decimal count
+    /// for the whole column — see ``DisplayFormat/costAxisLabels(_:)``.
+    var yLabels: [String] { DisplayFormat.costAxisLabels(yValues) }
+
+    /// What this chart's own y-labels need, before the popover widens the
+    /// column to whatever the chart above it needs.
+    var naturalYLabelWidth: CGFloat { PopoverChartAxis.yLabelWidth(of: yLabels) }
 
     /// Flattened for `Chart`, which wants one record per mark.
     private struct Record: Identifiable {
@@ -73,13 +91,33 @@ struct DailyCostChart: View {
                 .foregroundStyle(Color.primary.opacity(DailyUsageSeries.shades[0]))
             }
 
+                // The horizontal lines, drawn as marks rather than as
+                // `AxisGridLine`s: a gridline spans the whole plot, including
+                // the gutter the x scale keeps at each end, so it overhangs the
+                // data it is there to be read against. These end exactly where
+                // the first and last day do.
+                //
+                // After the data and before the highlight: the same order the
+                // axis drew them in — over the bands, under the hovered day.
+                ForEach(yValues, id: \.self) { value in
+                    RuleMark(
+                        xStart: .value("Day", days.first ?? Date()),
+                        xEnd: .value("Day", days.last ?? Date()),
+                        y: .value("Estimated cost", value)
+                    )
+                    .lineStyle(StrokeStyle(lineWidth: 0.5))
+                    .foregroundStyle(.secondary)
+                }
+
             if let index = highlightedIndex {
                 // Both marks carry values the chart already plots — the day is
                 // one of `days`, the dollar figure is one of `points` — so
                 // neither widens a scale. Nothing about the plot's geometry may
-                // depend on hover: the leading edge sits wherever the widest
-                // y-label ends, so a rescale would slide the curve sideways
-                // under a stationary pointer and change the day it is on.
+                // depend on hover: a y-scale that grew under a stationary
+                // pointer would redraw the curve beneath it, and would widen
+                // the y-labels with it — which slides the plot's leading edge
+                // sideways, changing the day the pointer is on under the
+                // user's own hand.
                 RuleMark(x: .value("Day", days[index]))
                     .lineStyle(StrokeStyle(lineWidth: 0.5))
                     .foregroundStyle(Color.primary.opacity(0.25))
@@ -91,7 +129,11 @@ struct DailyCostChart: View {
                 .foregroundStyle(Color.primary.opacity(DailyUsageSeries.shades[0]))
             }
         }
-        .chartYScale(domain: .automatic(includesZero: true))
+        // Pinned to the top of ``yValues`` rather than left automatic: the axis
+        // draws the values this chart measured its label column from, so the
+        // scale has to end where they do. Zero is still in the domain, which is
+        // what keeps a flat quiet stretch visibly above the axis.
+        .chartYScale(domain: 0...(yValues.last ?? 1))
         .chartXScale(range: .plotDimension(
             startPadding: PopoverMetrics.chartXScaleEdgePadding,
             endPadding: PopoverMetrics.chartXScaleEdgePadding
@@ -99,24 +141,19 @@ struct DailyCostChart: View {
         .chartXAxis {
             AxisMarks(values: tickDays) { _ in
                 AxisTick(length: PopoverMetrics.chartTickLength, stroke: StrokeStyle(lineWidth: 0.5))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.primary)
                 AxisValueLabel(format: PopoverChartHover.dayLabelFormat)
                     .font(PopoverMetrics.captionFont)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.primary)
             }
         }
         .chartYAxis {
-            AxisMarks(position: .leading, values: .automatic(desiredCount: PopoverMetrics.chartYAxisTickCount)) { value in
-                AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5))
-                    .foregroundStyle(Color.primary.opacity(0.12))
-                AxisTick(length: PopoverMetrics.chartTickLength, stroke: StrokeStyle(lineWidth: 0.5))
-                    .foregroundStyle(.secondary)
+            AxisMarks(position: .leading, values: yValues) { value in
                 AxisValueLabel {
-                    // `compactCost`, not `cost`: `$50.00` on every tick spends a
-                    // third of the popover's narrowest label on zeroes.
-                    Text(value.as(Double.self).flatMap(DisplayFormat.compactCost) ?? "")
+                    Text(yLabels.indices.contains(value.index) ? yLabels[value.index] : "")
                         .font(PopoverMetrics.captionFont)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.primary)
+                        .frame(width: yLabelWidth, alignment: .trailing)
                 }
             }
         }

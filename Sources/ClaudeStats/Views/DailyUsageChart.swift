@@ -1,4 +1,5 @@
 import Accessibility
+import AppKit
 import Charts
 import ClaudeStatsCore
 import SwiftUI
@@ -45,7 +46,8 @@ struct DailyUsageSeries: Identifiable, Hashable {
 ///
 /// Both axes are drawn: without a y-axis the bands show shape but no
 /// magnitude, and without dated x-ticks a spike can't be tied to a day. Ticks
-/// are sparse on purpose — a label every seven days, three values up the y-axis
+/// are sparse on purpose — a label every seven days, three or four round
+/// values up the y-axis
 /// — because thirty dated labels across a 340 pt popover would be unreadable
 /// mush. Exact per-source numbers stay in the legend under the chart.
 struct DailyUsageChart: View {
@@ -63,6 +65,12 @@ struct DailyUsageChart: View {
     /// Reports the day under the pointer, `nil` on exit. Defaulted so a chart
     /// built for a test or a preview needs neither.
     var onHover: (Date?) -> Void = { _ in }
+
+    /// Width of the y-label column, shared with the other popover chart so the
+    /// two plots start at the same x — see ``ChartYLabelWidthKey``. `nil` lets
+    /// each label take its own width, which is the first frame and every chart
+    /// built for a test or a preview.
+    var yLabelWidth: CGFloat?
 
     /// The hovered day's position in ``days``, or `nil` when the pointer is
     /// out, or when a reload moved the window under it.
@@ -116,6 +124,27 @@ struct DailyUsageChart: View {
     /// See ``PopoverChartAxis/tickDays(in:)``.
     var tickDays: [Date] { PopoverChartAxis.tickDays(in: days) }
 
+    /// The tallest day in the window — the *stack's* height, not the tallest
+    /// single band, since the bands sit on each other.
+    var stackedMaximum: Int {
+        let dayCount = series.map(\.points.count).max() ?? 0
+        return (0..<dayCount).map { day in
+            series.reduce(0) { $0 + (day < $1.points.count ? $1.points[day].totalTokens : 0) }
+        }.max() ?? 0
+    }
+
+    /// The token counts the y-axis labels, lowest first; the last is the top of
+    /// the scale. See ``PopoverChartAxis/yValues(upTo:count:)``.
+    var yValues: [Int] { PopoverChartAxis.yValues(upTo: Double(stackedMaximum)).map { Int($0.rounded()) } }
+
+    /// The y-axis labels, in ``yValues`` order. One unit and one decimal count
+    /// for the whole column — see ``DisplayFormat/tokenAxisLabels(_:)``.
+    var yLabels: [String] { DisplayFormat.tokenAxisLabels(yValues) }
+
+    /// What this chart's own y-labels need, before the popover widens the
+    /// column to whatever the chart below it needs.
+    var naturalYLabelWidth: CGFloat { PopoverChartAxis.yLabelWidth(of: yLabels) }
+
     var body: some View {
         Chart {
             ForEach(records) { record in
@@ -135,6 +164,24 @@ struct DailyUsageChart: View {
                 // every segment within its own two points.
                 .interpolationMethod(.monotone)
             }
+
+                // The horizontal lines, drawn as marks rather than as
+                // `AxisGridLine`s: a gridline spans the whole plot, including
+                // the gutter the x scale keeps at each end, so it overhangs the
+                // data it is there to be read against. These end exactly where
+                // the first and last day do.
+                //
+                // After the data and before the highlight: the same order the
+                // axis drew them in — over the bands, under the hovered day.
+                ForEach(yValues, id: \.self) { value in
+                    RuleMark(
+                        xStart: .value("Day", days.first ?? Date()),
+                        xEnd: .value("Day", days.last ?? Date()),
+                        y: .value("Tokens", value)
+                    )
+                    .lineStyle(StrokeStyle(lineWidth: 0.5))
+                    .foregroundStyle(.secondary)
+                }
 
             if let index = highlightedIndex {
                 // Every mark here carries a value the chart already plots — the
@@ -163,6 +210,9 @@ struct DailyUsageChart: View {
             range: series.map { Color.primary.opacity($0.shade) }
         )
         .chartLegend(.hidden)
+        // The axis draws the values this chart measured its label column from,
+        // so the scale has to end where they do.
+        .chartYScale(domain: 0...(yValues.last ?? 1))
         .chartXScale(range: .plotDimension(
             startPadding: PopoverMetrics.chartXScaleEdgePadding,
             endPadding: PopoverMetrics.chartXScaleEdgePadding
@@ -170,24 +220,19 @@ struct DailyUsageChart: View {
         .chartXAxis {
             AxisMarks(values: tickDays) { value in
                 AxisTick(length: PopoverMetrics.chartTickLength, stroke: StrokeStyle(lineWidth: 0.5))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.primary)
                 AxisValueLabel(format: PopoverChartHover.dayLabelFormat)
                     .font(PopoverMetrics.captionFont)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.primary)
             }
         }
         .chartYAxis {
-            AxisMarks(position: .leading, values: .automatic(desiredCount: PopoverMetrics.chartYAxisTickCount)) { value in
-                // A gridline, not just a tick: a value up the left edge is only
-                // readable against the band if the eye can carry it across.
-                AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5))
-                    .foregroundStyle(Color.primary.opacity(0.12))
-                AxisTick(length: PopoverMetrics.chartTickLength, stroke: StrokeStyle(lineWidth: 0.5))
-                    .foregroundStyle(.secondary)
+            AxisMarks(position: .leading, values: yValues) { value in
                 AxisValueLabel {
-                    Text(value.as(Int.self).map(DisplayFormat.tokens) ?? "")
+                    Text(yLabels.indices.contains(value.index) ? yLabels[value.index] : "")
                         .font(PopoverMetrics.captionFont)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.primary)
+                        .frame(width: yLabelWidth, alignment: .trailing)
                 }
             }
         }
@@ -276,6 +321,43 @@ enum PopoverChartAxis {
         let last = days.count - 1 - PopoverMetrics.chartXAxisEdgeMarginDays
         guard last > 0 else { return [first] }
         return stride(from: 0, through: last, by: PopoverMetrics.chartXAxisStrideDays).map { days[$0] }
+    }
+
+    /// Round values for a y-axis running from zero up past `max`, lowest first.
+    /// The last is the domain's top, which is why it is always above the data.
+    ///
+    /// Chosen here rather than left to `.automatic(desiredCount:)` for one
+    /// reason: the popover has to *know* the labels. Both charts set their
+    /// y-labels in one shared column, sized to the widest label on screen so
+    /// the two plots start at the same x — and a width can only be measured
+    /// from strings, which means knowing the values before the chart draws
+    /// them. `ChartProxy` won't say, and a preference set inside
+    /// `AxisValueLabel` does not escape the `Chart` (tried, measured: it
+    /// arrives as zero).
+    ///
+    /// The step is the first of 1, 2, 2.5, 5 × 10ⁿ that is at least
+    /// `max / count`, and the top rounds `max` up to a multiple of it — which
+    /// is what Swift Charts was picking anyway for the spend chart (`$0` to
+    /// `$6` in twos, over a $5.20 day).
+    static func yValues(upTo max: Double, count: Int = PopoverMetrics.chartYAxisTickCount) -> [Double] {
+        // An empty window, or a day that spent nothing: label zero and one, so
+        // the axis still has a scale rather than a degenerate `0...0` domain.
+        guard max > 0, count > 0 else { return [0, 1] }
+
+        let rough = max / Double(count)
+        let magnitude = pow(10, (log10(rough)).rounded(.down))
+        let step = [1.0, 2.0, 2.5, 5.0, 10.0]
+            .map { $0 * magnitude }
+            .first { $0 >= rough } ?? magnitude * 10
+        let top = (max / step).rounded(.up) * step
+        return stride(from: 0, through: top + step / 2, by: step).map { Swift.min($0, top) }
+    }
+
+    /// Width of the widest label in `labels`, in the font the axis draws them.
+    static func yLabelWidth(of labels: [String]) -> CGFloat {
+        labels
+            .map { ($0 as NSString).size(withAttributes: [.font: PopoverMetrics.captionNSFont]).width }
+            .max() ?? 0
     }
 }
 

@@ -591,7 +591,16 @@ Tokens by source
                                     can't be tied to a day — but thirty dated
                                     labels across a 340 pt popover would be
                                     mush, so it is one label a week and three
-                                    values up the y. **Ticks stop four days
+                                    or four round values up the y. The y-axis
+                                    draws **horizontal lines but no ticks** —
+                                    the line already reaches the label, and a
+                                    stub in front of it only thickens the left
+                                    margin. The lines are `RuleMark`s spanning
+                                    the first day to the last, not
+                                    `AxisGridLine`s: a gridline spans the whole
+                                    plot, gutter included, so it overhangs the
+                                    data it is there to be read against.
+                                    **X-ticks stop four days
                                     short of the right edge**: a label starts at
                                     its tick, runs to the right of it, and is
                                     truncated at the chart's trailing bound, so
@@ -699,7 +708,16 @@ Tokens by source
                                     can't be tied to a day — but thirty dated
                                     labels across a 340 pt popover would be
                                     mush, so it is one label a week and three
-                                    values up the y. **Ticks stop four days
+                                    or four round values up the y. The y-axis
+                                    draws **horizontal lines but no ticks** —
+                                    the line already reaches the label, and a
+                                    stub in front of it only thickens the left
+                                    margin. The lines are `RuleMark`s spanning
+                                    the first day to the last, not
+                                    `AxisGridLine`s: a gridline spans the whole
+                                    plot, gutter included, so it overhangs the
+                                    data it is there to be read against.
+                                    **X-ticks stop four days
                                     short of the right edge**: a label starts at
                                     its tick, runs to the right of it, and is
                                     truncated at the chart's trailing bound, so
@@ -810,12 +828,25 @@ Today                              $3.05
                                     zero into the domain so a quiet stretch
                                     still sits visibly above the axis.
 
-                                    Y labels are `DisplayFormat.compactCost`,
-                                    not `cost` — axis ticks land on round
-                                    numbers and `$50.00` spends a third of the
-                                    popover's narrowest label on zeroes.
-                                    Decimals survive below `$10`, where `$2` and
-                                    `$2.50` are different readings.
+                                    Y labels come from
+                                    `DisplayFormat.costAxisLabels`, which gives
+                                    the whole column **one unit and one decimal
+                                    count**: `$1.5k / $1.0k / $0.5k / $0`, never
+                                    `$1.5k / $1k / $500 / $0`, which makes the
+                                    eye convert a label before the steps look
+                                    even. Money keeps two decimals or none
+                                    (`$2.50`, never `$2.5`); `k` keeps one, the
+                                    way `compactCost` does. **Zero goes
+                                    unlabelled** on both charts: they scale from
+                                    zero, so the bottom line is zero by
+                                    construction and the label only restates it
+                                    in the narrowest column the popover has. The
+                                    token axis follows the same rule through
+                                    `tokenAxisLabels` — `1.5G / 1.0G / 0.5G`
+                                    over an unlabelled baseline.
+                                    Not the plain `cost` format: `$50.00` on
+                                    every label spends a third of the popover's
+                                    narrowest column on zeroes.
 
                                     "Estimated" moved from the row to the
                                     section title, where it qualifies the chart
@@ -879,12 +910,74 @@ Today                              $3.05
                                     Both marks carry values already plotted, so
                                     no scale widens, and the hovered day is
                                     never added to the x-axis — it belongs in
-                                    the row. This is not cosmetic: the plot's
-                                    leading edge sits wherever the widest
-                                    y-label ends, so anything that rescaled an
-                                    axis would slide the curve sideways under a
-                                    stationary pointer, changing the day it is
-                                    on, under the user's own hand.
+                                    the row. This is not cosmetic: a y-scale
+                                    that grew under a stationary pointer would
+                                    redraw the curve beneath it, and until the
+                                    y-label column was fixed it would have
+                                    dragged the plot's leading edge with it,
+                                    changing the day the pointer was on under
+                                    the user's own hand.
+
+                                    **Both plots start at the same x**, because
+                                    the y-labels of both are set in one column,
+                                    as wide as the widest label either chart is
+                                    about to draw. Left to itself a chart starts
+                                    its plot where its own widest label ends,
+                                    and `2G` is not `$2.50` wide — so the two
+                                    stacked plots, which take the same x-ticks,
+                                    disagreed about where `16. Aug.` was.
+
+                                    Measured, not reserved. A constant wide
+                                    enough for every label the formatters can
+                                    produce (`$12.5k`) cost a measured 19 pt of
+                                    plot on an ordinary `$6` day, and what the
+                                    axis shows is decided by data, not by what
+                                    the formatters could print in principle.
+
+                                    Measuring means knowing the strings, which
+                                    is why **both charts pick their own y-values**
+                                    (`PopoverChartAxis.yValues`) instead of
+                                    leaving them `.automatic`: the first of
+                                    1, 2, 2.5, 5 × 10ⁿ that is at least
+                                    `max / chartYAxisTickCount`, with the domain
+                                    rounded up to a multiple of it. That is what
+                                    Swift Charts was choosing anyway for spend
+                                    (`$0`…`$6` in twos over a $5.20 day); the
+                                    token axis lands one step finer than it did.
+
+                                    The other two routes were tried and don't
+                                    work: `ChartProxy` answers for the scale but
+                                    not for the labels, and a `PreferenceKey`
+                                    set inside `AxisValueLabel` never leaves the
+                                    `Chart` — measured, it arrives as zero.
+
+                                    **Hover moves nothing but the highlight.**
+                                    Both marks carry values already plotted, so
+                                    no scale widens, and the hovered day is
+                                    never added to the x-axis — it belongs in
+                                    the row. This is not cosmetic: a y-scale
+                                    that grew under a stationary pointer would
+                                    redraw the curve beneath it, and until the
+                                    y-label column was fixed it would have
+                                    dragged the plot's leading edge with it,
+                                    changing the day the pointer was on under
+                                    the user's own hand.
+
+                                    **Both plots start at the same x**, because
+                                    the y-labels are set in a column of a fixed
+                                    shared width (`chartYLabelWidth`, 32 pt).
+                                    Left to itself a chart starts its plot where
+                                    its own widest label ends, and `2G` is not
+                                    `$2.50` wide — so the two stacked plots,
+                                    which take the same x-ticks, disagreed about
+                                    where `16. Aug.` was by a couple of points.
+                                    The width holds the widest label either
+                                    formatter produces for a day that can really
+                                    happen; the cost side is the wider of the
+                                    two, since `compactCost` keeps decimals
+                                    below `$10`. Truncation there would read as
+                                    `$12.…`, so a test measures every such label
+                                    against the column.
 
                                     The hovered day is re-resolved against the
                                     *current* history on every render, so a poll

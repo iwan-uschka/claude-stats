@@ -101,6 +101,76 @@ public enum DisplayFormat {
         return "\(count)"
     }
 
+    // MARK: - Axis labels
+
+    /// One SI unit for a whole axis, decided by its largest value.
+    ///
+    /// ``tokens(_:)`` scales every number on its own, which is right for a row
+    /// — `640k` beside `2.1G` are two different readings. On an axis it is
+    /// wrong: `1.5G / 1G / 500M / 0` makes the reader convert `500M` into
+    /// `0.5G` to see that the steps are even. One unit for the column, and the
+    /// steps read themselves: `1.5G / 1.0G / 0.5G / 0`.
+    ///
+    /// Zero is left unlabelled. Both charts start their scale there, so the
+    /// bottom line is zero by construction and the label only spends width —
+    /// in the narrowest column the popover has — restating where the axis
+    /// obviously begins.
+    public static func tokenAxisLabels(_ values: [Int]) -> [String] {
+        let units: [(scale: Double, symbol: String)] = [
+            (1_000_000_000_000, "T"), (1_000_000_000, "G"), (1_000_000, "M"), (1_000, "k"), (1, "")
+        ]
+        return axisLabels(values.map(Double.init), units: units, prefix: "")
+    }
+
+    /// The same rule for spend: one unit across the axis, and a decimal count
+    /// the whole column shares.
+    ///
+    /// Money keeps two decimals or none — `$2.50`, never `$2.5`, and `$0.50`
+    /// rather than `$.5`. Above a thousand the `k` carries one decimal the way
+    /// ``compactCost(_:)`` does, since `$1.50k` reads as a typo. Zero is
+    /// unlabelled here too.
+    public static func costAxisLabels(_ values: [Double]) -> [String] {
+        let units: [(scale: Double, symbol: String)] = [(1_000, "k"), (1, "")]
+        return axisLabels(values, units: units, prefix: "$", wholeDollarDecimals: 2)
+    }
+
+    /// Labels for `values` in the unit the largest of them takes, each with the
+    /// same number of decimals — as few as render every value exactly.
+    ///
+    /// - Parameter wholeDollarDecimals: decimals to use when the chosen unit is
+    ///   the bare one and any value needs a fraction at all. Money wants two
+    ///   there; token counts want as few as possible.
+    private static func axisLabels(
+        _ values: [Double],
+        units: [(scale: Double, symbol: String)],
+        prefix: String,
+        wholeDollarDecimals: Int? = nil
+    ) -> [String] {
+        let magnitude = values.map(abs).max() ?? 0
+        let unit = units.first { magnitude >= $0.scale } ?? (1, "")
+        let scaled = values.map { $0 / unit.scale }
+
+        // The fewest decimals that leave every value exact — a half-step axis
+        // needs one, a quarter-step two, and round numbers none.
+        func isExact(at decimals: Int) -> Bool {
+            let factor = pow(10, Double(decimals))
+            return scaled.allSatisfy { abs(($0 * factor).rounded() - $0 * factor) < 0.0001 }
+        }
+        var decimals = 0
+        while decimals < 2, !isExact(at: decimals) { decimals += 1 }
+        if decimals > 0, unit.symbol.isEmpty, let floor = wholeDollarDecimals {
+            decimals = max(decimals, floor)
+        }
+
+        return zip(values, scaled).map { value, scaledValue in
+            // Empty, not `0` — the caller draws no label for it at all, and an
+            // empty string keeps the labels lined up with the values they came
+            // from so a chart can index one by the other.
+            guard value != 0 else { return "" }
+            return prefix + String(format: "%.\(decimals)f", scaledValue) + unit.symbol
+        }
+    }
+
     // MARK: - Token splits
 
     /// The four-way breakdown behind a token total, for a tooltip:

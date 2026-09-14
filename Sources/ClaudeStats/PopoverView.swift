@@ -24,6 +24,40 @@ struct PopoverView: View {
     @State private var hoveredSourceDay: Date?
     @State private var hoveredCostDay: Date?
 
+    /// Width of the y-label column both charts set their labels in: whatever
+    /// the wider of the two needs.
+    ///
+    /// One width for the pair, because two plots stacked in one column take the
+    /// same x-ticks — left to themselves each starts where its own widest label
+    /// ends, and `2G` is not as wide as `$2.50`, so the same x would mean one
+    /// day in the upper plot and another in the lower. Measured from the labels
+    /// the charts are about to draw, not reserved: a column wide enough for
+    /// every label the formatters *could* produce (`$12.5k`) cost 19 pt of plot
+    /// on an ordinary `$6` day.
+    private var chartYLabelWidth: CGFloat {
+        max(sourceChart(yLabelWidth: nil).naturalYLabelWidth, costChart(yLabelWidth: nil).naturalYLabelWidth)
+    }
+
+    private func sourceChart(yLabelWidth: CGFloat?) -> DailyUsageChart {
+        DailyUsageChart(
+            days: model.dailyHistory.days,
+            series: sourceSeries,
+            hoveredDay: hoveredSourceDay,
+            onHover: { hoveredSourceDay = $0 },
+            yLabelWidth: yLabelWidth
+        )
+    }
+
+    private func costChart(yLabelWidth: CGFloat?) -> DailyCostChart {
+        DailyCostChart(
+            days: model.dailyHistory.days,
+            points: model.dailyHistory.total,
+            hoveredDay: hoveredCostDay,
+            onHover: { hoveredCostDay = $0 },
+            yLabelWidth: yLabelWidth
+        )
+    }
+
     /// The hover days are seeded rather than always starting empty so the
     /// README render harness and SwiftUI previews can show a hovered popover —
     /// offscreen there is no pointer to move.
@@ -519,12 +553,7 @@ struct PopoverView: View {
                     .font(PopoverMetrics.captionFont)
                     .foregroundStyle(.secondary)
             } else {
-                DailyUsageChart(
-                    days: model.dailyHistory.days,
-                    series: sourceSeries,
-                    hoveredDay: hoveredSourceDay,
-                    onHover: { hoveredSourceDay = $0 }
-                )
+                sourceChart(yLabelWidth: chartYLabelWidth)
                 .padding(.vertical, PopoverMetrics.chartMargin)
                 sourceLegend
             }
@@ -680,12 +709,7 @@ struct PopoverView: View {
                 .font(PopoverMetrics.sectionTitleFont)
 
             if !model.dailyHistory.isEmpty {
-                DailyCostChart(
-                    days: model.dailyHistory.days,
-                    points: model.dailyHistory.total,
-                    hoveredDay: hoveredCostDay,
-                    onHover: { hoveredCostDay = $0 }
-                )
+                costChart(yLabelWidth: chartYLabelWidth)
                 .padding(.vertical, PopoverMetrics.chartMargin)
             }
 

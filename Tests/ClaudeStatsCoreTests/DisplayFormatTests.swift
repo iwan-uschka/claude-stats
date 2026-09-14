@@ -461,4 +461,43 @@ final class DisplayFormatTests: XCTestCase {
         XCTAssertEqual(rows.map(\.entrypoint), Entrypoint.displayOrder)
         XCTAssertTrue(rows.allSatisfy { $0.usage.totalTokens == 0 })
     }
+
+    // MARK: - Axis labels
+
+    func testATokenAxisIsLabelledInOneUnit() {
+        // The reading this fixes: `1.5G / 1G / 500M / 0` makes the eye convert
+        // `500M` into `0.5G` before the steps look even.
+        XCTAssertEqual(
+            DisplayFormat.tokenAxisLabels([0, 500_000_000, 1_000_000_000, 1_500_000_000]),
+            ["", "0.5G", "1.0G", "1.5G"]
+        )
+        // Round steps keep their decimals off — the column is narrow.
+        XCTAssertEqual(DisplayFormat.tokenAxisLabels([0, 1_000_000, 2_000_000, 3_000_000]), ["", "1M", "2M", "3M"])
+        // The unit comes from the largest value, so a quarter-million step is
+        // still labelled in `k` rather than being pushed up to `0.25M`.
+        XCTAssertEqual(DisplayFormat.tokenAxisLabels([0, 250_000, 500_000, 750_000]), ["", "250k", "500k", "750k"])
+        // Below a thousand there is no unit to share.
+        XCTAssertEqual(DisplayFormat.tokenAxisLabels([0, 400, 800]), ["", "400", "800"])
+    }
+
+    func testACostAxisKeepsMoneysDecimals() {
+        // Two decimals or none: `$2.5` is not how money is written, and every
+        // label on the axis carries the same number of them.
+        XCTAssertEqual(DisplayFormat.costAxisLabels([0, 2.5, 5]), ["", "$2.50", "$5.00"])
+        XCTAssertEqual(DisplayFormat.costAxisLabels([0, 0.5, 1]), ["", "$0.50", "$1.00"])
+        XCTAssertEqual(DisplayFormat.costAxisLabels([0, 2, 4, 6]), ["", "$2", "$4", "$6"])
+        // `k` carries one decimal, as `compactCost` does — `$1.50k` reads as a
+        // typo where `$1.5k` reads as a number.
+        XCTAssertEqual(DisplayFormat.costAxisLabels([0, 500, 1_000, 1_500]), ["", "$0.5k", "$1.0k", "$1.5k"])
+    }
+
+    func testZeroGoesUnlabelledOnEveryAxis() {
+        // Both charts scale from zero, so the bottom line is zero by
+        // construction — the label only restates it, in the narrowest column
+        // the popover has. Empty rather than dropped, so the labels stay
+        // index-for-index with the values they came from.
+        XCTAssertEqual(DisplayFormat.tokenAxisLabels([0, 1_500_000_000]), ["", "1.5G"])
+        XCTAssertEqual(DisplayFormat.costAxisLabels([0, 1_500]), ["", "$1.5k"])
+        XCTAssertEqual(DisplayFormat.tokenAxisLabels([]), [])
+    }
 }

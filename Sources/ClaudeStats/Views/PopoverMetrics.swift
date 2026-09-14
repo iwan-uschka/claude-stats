@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Shared layout constants for the popover, so the label columns of the quota
@@ -55,11 +56,15 @@ enum PopoverMetrics {
     /// labels a week apart — five of them across a 30-day window, which is as
     /// many `Aug 16`-sized labels as fit without overlapping.
     static let chartXAxisStrideDays = 7
-    /// Number of y-axis ticks to aim for. Three (bottom, middle, top) is what
-    /// a 72 pt chart can label without the numbers touching.
+    /// How many steps the y-axis aims to take from zero to the top of the
+    /// scale — so three or four labelled values, since the top is rounded up
+    /// past the data. Three is what a 72 pt chart can label without the numbers
+    /// touching. See ``PopoverChartAxis/yValues(upTo:count:)``.
     static let chartYAxisTickCount = 3
-    /// Length of an axis tick. Short: the tick only has to attach the label to
-    /// the axis, and the default reads as a gridline at this chart's size.
+    /// Length of an x-axis tick — the only ticks a popover chart draws, since
+    /// the y-axis has gridlines that reach its labels already. Short: the tick
+    /// only has to attach the label to the axis, and the default reads as a
+    /// gridline at this chart's size.
     static let chartTickLength: CGFloat = 3
     /// Breathing room above and below a chart — under its section title, over
     /// the legend beneath it. The chart is the only element in the popover that
@@ -136,7 +141,12 @@ enum PopoverMetrics {
     static let bodyFont = Font.system(size: 11)
     static let valueFont = Font.system(size: 11).monospacedDigit()
     static let sectionTitleFont = Font.system(size: 11, weight: .semibold)
-    static let captionFont = Font.system(size: 10)
+    static let captionFontSize: CGFloat = 10
+    static let captionFont = Font.system(size: captionFontSize)
+    /// The caption font as an `NSFont`, for measuring a label before SwiftUI
+    /// has laid it out — see ``PopoverChartAxis/yLabelWidth(of:)``. Built from
+    /// the same size as ``captionFont`` so the two can't drift apart.
+    static let captionNSFont = NSFont.systemFont(ofSize: captionFontSize)
 
     /// Claude's brand terracotta, used for the promo notice link instead of
     /// `.accentColor` (which follows the user's system accent, usually blue,

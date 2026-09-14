@@ -232,4 +232,30 @@ final class DailyUsageChartTests: XCTestCase {
         XCTAssertGreaterThan(yAxis?.range.upperBound ?? 0, 0)
         XCTAssertTrue(descriptor.series.allSatisfy { $0.dataPoints.isEmpty })
     }
+
+    // MARK: - Y-axis values
+
+    func testTheYAxisStepsInRoundNumbersPastTheTallestDay() {
+        // Round steps, and a top *above* the data: the last value is the
+        // domain's ceiling, so a spike never touches the top of the plot.
+        XCTAssertEqual(PopoverChartAxis.yValues(upTo: 5.2), [0, 2, 4, 6])
+        XCTAssertEqual(PopoverChartAxis.yValues(upTo: 2_200_000), [0, 1_000_000, 2_000_000, 3_000_000])
+        XCTAssertEqual(PopoverChartAxis.yValues(upTo: 0.9), [0, 0.5, 1])
+    }
+
+    func testAWindowWithNothingInItStillHasAScale() {
+        // A `0...0` domain is a divide by zero waiting to happen, and an axis
+        // with one value on it says less than one that shows the zero line.
+        XCTAssertEqual(PopoverChartAxis.yValues(upTo: 0), [0, 1])
+    }
+
+    func testTheLabelColumnIsMeasuredInTheFontTheAxisDrawsIn() {
+        // The width the popover gives both charts comes from these strings, so
+        // it has to be measured in the font that renders them.
+        let width = PopoverChartAxis.yLabelWidth(of: ["0", "2M", "4M"])
+        let widest = ("4M" as NSString).size(withAttributes: [.font: PopoverMetrics.captionNSFont]).width
+
+        XCTAssertEqual(width, widest, accuracy: 0.01)
+        XCTAssertEqual(PopoverChartAxis.yLabelWidth(of: []), 0)
+    }
 }
