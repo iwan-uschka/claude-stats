@@ -106,6 +106,52 @@ final class SessionCorpusIndexTests: XCTestCase {
         XCTAssertEqual(store.events.count, 3)
     }
 
+    /// The snapshot is assembled in scan order rather than by re-sorting
+    /// `files.keys`, so this pins the ordering guarantee that swap relies on.
+    ///
+    /// Every line carries the *same* timestamp: `LocalLogUsageStore.init` leaves
+    /// an already-ordered event array untouched, so with all timestamps tied the
+    /// stored order is exactly the assembly order, and a Dictionary-iteration
+    /// regression would show up here as a shuffled `inputTokens` sequence.
+    func testSnapshotAssemblyFollowsSortedPathOrderWhenTimestampsTie() throws {
+        // Written back-to-front so creation order and path order disagree.
+        _ = try writeSession("c", lines: [assistantLine(hoursAgo: 1, inputTokens: 300)])
+        _ = try writeSession("a", lines: [assistantLine(hoursAgo: 1, inputTokens: 100)])
+        _ = try writeSession("b", lines: [assistantLine(hoursAgo: 1, inputTokens: 200)])
+        let clock = Clock(Self.referenceNow)
+        let index = makeIndex(clock: clock, counter: ParseCounter())
+
+        XCTAssertEqual(
+            index.rebuild().events.map(\.usage.inputTokens), [100, 200, 300],
+            "events must be assembled in sorted-path order"
+        )
+
+        // And stably across rebuilds — the second pass takes the all-cached
+        // branch, which is where a scan-order bug would diverge from a key sort.
+        XCTAssertEqual(
+            index.rebuild().events.map(\.usage.inputTokens), [100, 200, 300],
+            "a no-reparse rebuild must assemble in the same order"
+        )
+    }
+
+    /// A file that disappears between the scan and the assembly must be skipped,
+    /// not crash the rebuild — the assembly loop walks scanned paths and looks
+    /// each entry up, so a missing one has to be tolerated.
+    func testFileDeletedBetweenRebuildsLeavesAssemblyIntact() throws {
+        _ = try writeSession("a", lines: [assistantLine(hoursAgo: 1, inputTokens: 100)])
+        let urlB = try writeSession("b", lines: [assistantLine(hoursAgo: 1, inputTokens: 200)])
+        _ = try writeSession("c", lines: [assistantLine(hoursAgo: 1, inputTokens: 300)])
+        let clock = Clock(Self.referenceNow)
+        let index = makeIndex(clock: clock, counter: ParseCounter())
+        XCTAssertEqual(index.rebuild().events.count, 3)
+
+        try FileManager.default.removeItem(at: urlB)
+        XCTAssertEqual(
+            index.rebuild().events.map(\.usage.inputTokens), [100, 300],
+            "the surviving files keep their order with the deleted one gone"
+        )
+    }
+
     func testDeletedFileDropsItsEvents() throws {
         let urlA = try writeSession("a", lines: [assistantLine(hoursAgo: 1)])
         _ = try writeSession("b", lines: [assistantLine(hoursAgo: 2)])
