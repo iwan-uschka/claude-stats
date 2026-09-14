@@ -256,6 +256,43 @@ final class ChangeCoalescerTests: XCTestCase {
         XCTAssertTrue(batch.requiresFullRescan)
     }
 
+    func testBatchFlagsARemovedOrRenamedDirectory() {
+        let removed = FileChangeBatch(changes: [
+            FileChange(path: "/p/session.jsonl", flags: .modified),
+            FileChange(path: "/p/gone", flags: [.removed, .isDirectory]),
+        ])
+        XCTAssertTrue(removed.containsRemovedOrRenamedDirectory)
+
+        let renamed = FileChangeBatch(changes: [
+            FileChange(path: "/p/moved", flags: [.renamed, .isDirectory]),
+        ])
+        XCTAssertTrue(renamed.containsRemovedOrRenamedDirectory)
+
+        // A removed *file*, and a merely modified directory, are both ordinary
+        // per-path news — the flag is about losing a subtree wholesale.
+        let ordinary = FileChangeBatch(changes: [
+            FileChange(path: "/p/session.jsonl", flags: .removed),
+            FileChange(path: "/p", flags: [.modified, .isDirectory]),
+        ])
+        XCTAssertFalse(ordinary.containsRemovedOrRenamedDirectory)
+    }
+
+    func testMergingBatchesUnionsFlagsPerPathAndKeepsFirstSeenOrder() {
+        let first = FileChangeBatch(changes: [
+            FileChange(path: "/p/a.jsonl", flags: .created),
+            FileChange(path: "/p/b.jsonl", flags: .modified),
+        ])
+        let second = FileChangeBatch(changes: [
+            FileChange(path: "/p/b.jsonl", flags: .removed),
+            FileChange(path: "/p/c.jsonl", flags: .created),
+        ])
+
+        let merged = first.merging(second)
+        XCTAssertEqual(merged.paths, ["/p/a.jsonl", "/p/b.jsonl", "/p/c.jsonl"])
+        XCTAssertEqual(merged.changes[1].flags, [.modified, .removed], "both halves of b's news survive")
+        XCTAssertEqual(FileChangeBatch(changes: []).merging(second).paths, second.paths)
+    }
+
     // MARK: Helpers
 
     private func makeCoalescer(

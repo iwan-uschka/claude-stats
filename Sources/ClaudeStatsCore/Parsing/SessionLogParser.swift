@@ -233,8 +233,16 @@ public struct SessionLogParser: Sendable {
         // `URL.path` re-materialises a CFURL→String bridge on every access, so a
         // comparator that reads it pays two bridges per comparison: ~370k of them
         // for a 13.5k-file corpus, measured at 436 ms per scan against 191 ms when
-        // each path is built exactly once. `SessionCorpusIndex.rebuild()` runs this
-        // on every coalesced write, so that gap showed up as a periodic CPU spike.
+        // each path is built exactly once. `SessionCorpusIndex.rebuild(changed:)`
+        // used to run this on every coalesced write, which is how that gap showed
+        // up as a periodic CPU spike; it now only runs it for a full scan (launch,
+        // dropped events, a vanished directory), so the sort is off the hot path
+        // but still on the one that decides startup cost.
+        //
+        // Note for callers keying off these paths: the enumerator hands back
+        // *symlink-resolved* URLs even for a base path that isn't resolved, so on
+        // a `/var/folders/…` config directory these come out as `/private/var/…`.
+        // `SessionCorpusIndex` has to bridge that to match watcher paths.
         var decorated: [(path: String, url: URL)] = []
         for case let url as URL in enumerator where url.pathExtension.lowercased() == "jsonl" {
             decorated.append((url.path, url))

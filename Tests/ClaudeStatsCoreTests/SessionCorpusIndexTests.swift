@@ -59,6 +59,21 @@ final class SessionCorpusIndexTests: XCTestCase {
         return url
     }
 
+    /// Rewrite a session file with `lines`, so both its size and its mtime move.
+    private func rewrite(_ url: URL, lines: [String]) throws {
+        try Data((lines.joined(separator: "\n") + "\n").utf8).write(to: url)
+    }
+
+    /// A watcher change for one session file, in the path space the index scans
+    /// (see `testBothSpellingsOfABatchPathReachTheSameFile` for the other one).
+    private func change(_ name: String, flags: FileChange.Flags) -> FileChange {
+        FileChange(path: projectDirectory.appendingPathComponent("\(name).jsonl").path, flags: flags)
+    }
+
+    private func batch(_ changes: FileChange...) -> FileChangeBatch {
+        FileChangeBatch(changes: changes)
+    }
+
     private func makeIndex(clock: Clock, counter: ParseCounter, retention: TimeInterval = SessionCorpusIndex.defaultRetention) -> SessionCorpusIndex {
         SessionCorpusIndex(
             configDirectory: configDirectory,
@@ -441,6 +456,307 @@ final class SessionCorpusIndexTests: XCTestCase {
         let store = index.rebuild()
         XCTAssertEqual(counter.parsedPaths, ["a.jsonl"])
         XCTAssertEqual(store.events.count, 1)
+    }
+
+    // MARK: - Scoped rebuild
+
+    /// The lane's core differential guard: a rebuild handed a batch must stat
+    /// only what the batch named. A full-scan implementation finds `b`'s change
+    /// too and fails the middle assertion.
+    func testScopedRebuildIgnoresAChangeTheBatchDidNotName() throws {
+        let urlA = try writeSession("a", lines: [assistantLine(hoursAgo: 1, inputTokens: 100)])
+        let urlB = try writeSession("b", lines: [assistantLine(hoursAgo: 1, inputTokens: 200)])
+        let clock = Clock(Self.referenceNow)
+        let counter = ParseCounter()
+        let index = makeIndex(clock: clock, counter: counter)
+        XCTAssertEqual(index.rebuild().events.count, 2)
+
+        // Both files grow on disk; only `a` is reported.
+        try rewrite(urlA, lines: [assistantLine(hoursAgo: 1, inputTokens: 100), assistantLine(hoursAgo: 0.5, inputTokens: 101)])
+        try rewrite(urlB, lines: [assistantLine(hoursAgo: 1, inputTokens: 200), assistantLine(hoursAgo: 0.5, inputTokens: 201)])
+
+        counter.reset()
+        let scoped = index.rebuild(changed: batch(change("a", flags: .modified)))
+        XCTAssertEqual(counter.parsedPaths, ["a.jsonl"], "only the named file may be stat-ed and reparsed")
+        XCTAssertEqual(scoped.events.count, 3, "b's unreported change must not be picked up by a scoped rebuild")
+
+        // A batchless rebuild falls back to the full scan and catches up.
+        counter.reset()
+        let full = index.rebuild()
+        XCTAssertEqual(counter.parsedPaths, ["b.jsonl"])
+        XCTAssertEqual(full.events.count, 4)
+    }
+
+    func testScopedRemovalDropsTheFilesEvents() throws {
+        let urlA = try writeSession("a", lines: [assistantLine(hoursAgo: 1, inputTokens: 100)])
+        _ = try writeSession("b", lines: [assistantLine(hoursAgo: 1, inputTokens: 200)])
+        let clock = Clock(Self.referenceNow)
+        let counter = ParseCounter()
+        let index = makeIndex(clock: clock, counter: counter)
+        XCTAssertEqual(index.rebuild().events.count, 2)
+
+        try FileManager.default.removeItem(at: urlA)
+        counter.reset()
+        let store = index.rebuild(changed: batch(change("a", flags: .removed)))
+        XCTAssertEqual(counter.parsedPaths, [], "a gone file is dropped, never parsed")
+        XCTAssertEqual(store.events.map(\.usage.inputTokens), [200])
+    }
+
+    /// A rename fires for both paths. The old one no longer stats, so it drops
+    /// out exactly like a removal; the new one stats fine and is inserted.
+    func testRenameAwayIsTreatedAsARemovalAndTheNewPathIsPickedUp() throws {
+        let urlA = try writeSession("a", lines: [assistantLine(hoursAgo: 1, inputTokens: 100)])
+        let clock = Clock(Self.referenceNow)
+        let counter = ParseCounter()
+        let index = makeIndex(clock: clock, counter: counter)
+        XCTAssertEqual(index.rebuild().events.count, 1)
+
+        let urlC = projectDirectory.appendingPathComponent("c.jsonl")
+        try FileManager.default.moveItem(at: urlA, to: urlC)
+
+        counter.reset()
+        let store = index.rebuild(changed: batch(
+            change("a", flags: .renamed),
+            change("c", flags: .renamed)
+        ))
+        XCTAssertEqual(counter.parsedPaths, ["c.jsonl"])
+        XCTAssertEqual(store.events.map(\.usage.inputTokens), [100], "the events moved with the file, they didn't double")
+    }
+
+    /// New paths are spliced into the scan order by binary search, so the
+    /// snapshot stays sorted-by-path. An append-at-end regression shuffles this.
+    func testNewFilesLandInSortedScanOrder() throws {
+        _ = try writeSession("b", lines: [assistantLine(hoursAgo: 1, inputTokens: 200)])
+        _ = try writeSession("d", lines: [assistantLine(hoursAgo: 1, inputTokens: 400)])
+        let clock = Clock(Self.referenceNow)
+        let index = makeIndex(clock: clock, counter: ParseCounter())
+        XCTAssertEqual(index.rebuild().events.map(\.usage.inputTokens), [200, 400])
+
+        // One sorts before everything known, one into the middle — and the
+        // batch names them in the reverse of their sorted order.
+        _ = try writeSession("c", lines: [assistantLine(hoursAgo: 1, inputTokens: 300)])
+        _ = try writeSession("a", lines: [assistantLine(hoursAgo: 1, inputTokens: 100)])
+
+        let store = index.rebuild(changed: batch(
+            change("c", flags: .created),
+            change("a", flags: .created)
+        ))
+        XCTAssertEqual(store.events.map(\.usage.inputTokens), [100, 200, 300, 400])
+    }
+
+    func testRequiresFullRescanBatchForcesAFullScan() throws {
+        _ = try writeSession("a", lines: [assistantLine(hoursAgo: 1, inputTokens: 100)])
+        let urlB = try writeSession("b", lines: [assistantLine(hoursAgo: 1, inputTokens: 200)])
+        let clock = Clock(Self.referenceNow)
+        let counter = ParseCounter()
+        let index = makeIndex(clock: clock, counter: counter)
+        XCTAssertEqual(index.rebuild().events.count, 2)
+
+        try rewrite(urlB, lines: [assistantLine(hoursAgo: 1, inputTokens: 200), assistantLine(hoursAgo: 0.5, inputTokens: 201)])
+
+        // The batch names only `a`, but the OS says its list is incomplete.
+        counter.reset()
+        let store = index.rebuild(changed: batch(
+            change("a", flags: .modified),
+            FileChange(path: projectDirectory.path, flags: [.requiresRescan, .isDirectory])
+        ))
+        XCTAssertEqual(counter.parsedPaths, ["b.jsonl"], "the full scan finds the change no batch named")
+        XCTAssertEqual(store.events.count, 3)
+    }
+
+    func testFirstRebuildIsFullEvenWhenGivenABatch() throws {
+        _ = try writeSession("a", lines: [assistantLine(hoursAgo: 1, inputTokens: 100)])
+        _ = try writeSession("b", lines: [assistantLine(hoursAgo: 1, inputTokens: 200)])
+        let clock = Clock(Self.referenceNow)
+        let counter = ParseCounter()
+        let index = makeIndex(clock: clock, counter: counter)
+
+        let store = index.rebuild(changed: batch(change("a", flags: .created)))
+        XCTAssertEqual(counter.parsedPaths.sorted(), ["a.jsonl", "b.jsonl"], "no baseline yet — scope nothing")
+        XCTAssertEqual(store.events.count, 2)
+    }
+
+    /// FSEvents reports a removed or renamed directory by its own path and never
+    /// names the `.jsonl` children that went with it, so scoping to the batch
+    /// would keep serving a project that is gone.
+    func testRemovedProjectDirectoryForcesAFullScan() throws {
+        _ = try writeSession("a", lines: [assistantLine(hoursAgo: 1, inputTokens: 100)])
+        let otherProject = configDirectory.appendingPathComponent("projects/-tmp-other", isDirectory: true)
+        try FileManager.default.createDirectory(at: otherProject, withIntermediateDirectories: true)
+        try Data((assistantLine(hoursAgo: 1, inputTokens: 300) + "\n").utf8)
+            .write(to: otherProject.appendingPathComponent("c.jsonl"))
+
+        let clock = Clock(Self.referenceNow)
+        let index = makeIndex(clock: clock, counter: ParseCounter())
+        XCTAssertEqual(index.rebuild().events.count, 2)
+
+        try FileManager.default.removeItem(at: otherProject)
+        // The batch names the directory alone — no `.jsonl` content change in
+        // it at all, so a scoped rebuild would do precisely nothing.
+        let store = index.rebuild(changed: batch(
+            FileChange(path: otherProject.path, flags: [.removed, .isDirectory])
+        ))
+        XCTAssertEqual(store.events.map(\.usage.inputTokens), [100], "the vanished project's events must go with it")
+    }
+
+    /// The renamed half of the same fallback: `.renamed` alone (no `.removed`)
+    /// must also force a full scan, and the moved directory's files must still
+    /// turn up at their new path — a scoped rebuild given only the old path
+    /// would find nothing there to reparse and silently drop them.
+    func testRenamedProjectDirectoryForcesAFullScan() throws {
+        _ = try writeSession("a", lines: [assistantLine(hoursAgo: 1, inputTokens: 100)])
+        let otherProject = configDirectory.appendingPathComponent("projects/-tmp-other", isDirectory: true)
+        try FileManager.default.createDirectory(at: otherProject, withIntermediateDirectories: true)
+        try Data((assistantLine(hoursAgo: 1, inputTokens: 300) + "\n").utf8)
+            .write(to: otherProject.appendingPathComponent("c.jsonl"))
+
+        let clock = Clock(Self.referenceNow)
+        let index = makeIndex(clock: clock, counter: ParseCounter())
+        XCTAssertEqual(index.rebuild().events.count, 2)
+
+        let renamedProject = configDirectory.appendingPathComponent("projects/-tmp-renamed", isDirectory: true)
+        try FileManager.default.moveItem(at: otherProject, to: renamedProject)
+        // The batch names only the old path, flagged `.renamed` rather than
+        // `.removed` — a scoped rebuild would find nothing there to reparse.
+        let store = index.rebuild(changed: batch(
+            FileChange(path: otherProject.path, flags: [.renamed, .isDirectory])
+        ))
+        XCTAssertEqual(
+            store.events.map(\.usage.inputTokens).sorted(), [100, 300],
+            "the full scan must find the moved project's files at their new path"
+        )
+    }
+
+    func testMetadataOnlyBatchReparsesNothing() throws {
+        let urlA = try writeSession("a", lines: [assistantLine(hoursAgo: 1, inputTokens: 100)])
+        let clock = Clock(Self.referenceNow)
+        let counter = ParseCounter()
+        let index = makeIndex(clock: clock, counter: counter)
+        XCTAssertEqual(index.rebuild().events.count, 1)
+
+        // The bytes did change, but the batch only reports a metadata touch —
+        // which carries no promise that contents moved, so it is not acted on.
+        try rewrite(urlA, lines: [assistantLine(hoursAgo: 1, inputTokens: 100), assistantLine(hoursAgo: 0.5, inputTokens: 101)])
+
+        counter.reset()
+        let store = index.rebuild(changed: batch(change("a", flags: .metadata)))
+        XCTAssertEqual(counter.parsedPaths, [])
+        XCTAssertEqual(store.events.count, 1)
+    }
+
+    /// Retention is a property of the clock, not of the batch: events age out of
+    /// files nobody wrote to, so the sweep has to cover the whole index.
+    func testScopedRebuildStillFoldsRetentionOnUnnamedFiles() throws {
+        _ = try writeSession("a", lines: [assistantLine(hoursAgo: 1, inputTokens: 100, outputTokens: 50)])
+        _ = try writeSession("b", lines: [assistantLine(hoursAgo: 1, inputTokens: 200, outputTokens: 100)])
+        let clock = Clock(Self.referenceNow)
+        let counter = ParseCounter()
+        let index = makeIndex(clock: clock, counter: counter)
+        XCTAssertEqual(index.rebuild().events.count, 2)
+
+        // 10 days on, past the 8-day retention, with only `a` reported and
+        // neither file actually touched.
+        clock.now = Self.referenceNow.addingTimeInterval(10 * 86_400)
+        counter.reset()
+        let store = index.rebuild(changed: batch(change("a", flags: .modified)))
+        XCTAssertEqual(counter.parsedPaths, [])
+        XCTAssertTrue(store.events.isEmpty)
+        XCTAssertEqual(store.historicalByModel["claude-sonnet-5"]?.usage.totalTokens, 450)
+
+        // And not a second time on the next rebuild.
+        XCTAssertEqual(
+            index.rebuild(changed: batch(change("a", flags: .modified)))
+                .historicalByModel["claude-sonnet-5"]?.usage.totalTokens,
+            450
+        )
+    }
+
+    /// FSEvents reports fully symlink-resolved paths (`/private/var/…`), which
+    /// need not be the spelling the index keys by — the config directory is only
+    /// standardized (`/var/…`). Both spellings have to land on the same cache
+    /// entry; otherwise a scoped rebuild silently reparses into a second,
+    /// parallel key and double-counts the file, or matches nothing at all.
+    func testBothSpellingsOfABatchPathReachTheSameFile() throws {
+        let resolvedProject = ConfigDirectoryWatcher.resolvedPath(projectDirectory.path)
+        try XCTSkipIf(
+            resolvedProject == projectDirectory.path,
+            "temp directory is not behind a symlink on this machine — nothing to bridge"
+        )
+
+        let urlA = try writeSession("a", lines: [assistantLine(hoursAgo: 1, inputTokens: 100)])
+        let clock = Clock(Self.referenceNow)
+        let counter = ParseCounter()
+        let index = makeIndex(clock: clock, counter: counter)
+        XCTAssertEqual(index.rebuild().events.count, 1)
+
+        // Symlink-resolved, the way the watcher would report it.
+        try rewrite(urlA, lines: [assistantLine(hoursAgo: 1, inputTokens: 100), assistantLine(hoursAgo: 0.5, inputTokens: 101)])
+        counter.reset()
+        let resolved = index.rebuild(changed: batch(
+            FileChange(path: resolvedProject + "/a.jsonl", flags: .modified)
+        ))
+        XCTAssertEqual(counter.parsedPaths, ["a.jsonl"], "the watcher's path space must map onto the index's")
+        XCTAssertEqual(resolved.events.count, 2, "one entry for the file, not two under two keys")
+
+        // The unresolved spelling of the very same file.
+        try rewrite(urlA, lines: [
+            assistantLine(hoursAgo: 1, inputTokens: 100),
+            assistantLine(hoursAgo: 0.5, inputTokens: 101),
+            assistantLine(hoursAgo: 0.25, inputTokens: 102),
+        ])
+        counter.reset()
+        let declared = index.rebuild(changed: batch(change("a", flags: .modified)))
+        XCTAssertEqual(counter.parsedPaths, ["a.jsonl"])
+        XCTAssertEqual(declared.events.count, 3)
+    }
+
+    /// The one case `projectsPrefixes()` cannot read off an existing cache key:
+    /// an empty corpus (nothing scanned yet) behind a symlinked config
+    /// directory. It falls back to the enumerator's measured behaviour rather
+    /// than a confirmed key — this pins that the very first scoped rebuild
+    /// after an empty full scan still reaches a brand-new file instead of
+    /// silently dropping it.
+    func testFirstScopedRebuildAfterAnEmptyCorpusStillFindsANewFile() throws {
+        let resolvedProject = ConfigDirectoryWatcher.resolvedPath(projectDirectory.path)
+        try XCTSkipIf(
+            resolvedProject == projectDirectory.path,
+            "temp directory is not behind a symlink on this machine — nothing to bridge"
+        )
+
+        let clock = Clock(Self.referenceNow)
+        let counter = ParseCounter()
+        let index = makeIndex(clock: clock, counter: counter)
+        // Nothing written yet, so `orderedPaths.first` is nil and
+        // `projectsPrefixes()` must use its fallback guess.
+        XCTAssertEqual(index.rebuild().events.count, 0)
+
+        _ = try writeSession("a", lines: [assistantLine(hoursAgo: 1, inputTokens: 100)])
+        counter.reset()
+        let store = index.rebuild(changed: batch(
+            FileChange(path: resolvedProject + "/a.jsonl", flags: .created)
+        ))
+        XCTAssertEqual(counter.parsedPaths, ["a.jsonl"], "the empty-corpus fallback must still map the watcher's resolved path onto the corpus")
+        XCTAssertEqual(store.events.count, 1)
+    }
+
+    func testBatchPathsOutsideTheCorpusAreIgnored() throws {
+        let urlA = try writeSession("a", lines: [assistantLine(hoursAgo: 1, inputTokens: 100)])
+        let clock = Clock(Self.referenceNow)
+        let counter = ParseCounter()
+        let index = makeIndex(clock: clock, counter: counter)
+        XCTAssertEqual(index.rebuild().events.count, 1)
+
+        try rewrite(urlA, lines: [assistantLine(hoursAgo: 1, inputTokens: 100), assistantLine(hoursAgo: 0.5, inputTokens: 101)])
+
+        // A sibling directory whose name merely starts the same, and an
+        // unrelated root: neither is this corpus.
+        counter.reset()
+        let store = index.rebuild(changed: batch(
+            FileChange(path: configDirectory.path + "/projects-backup/-tmp-proj/a.jsonl", flags: .modified),
+            FileChange(path: "/tmp/somewhere-else/b.jsonl", flags: .created)
+        ))
+        XCTAssertEqual(counter.parsedPaths, [])
+        XCTAssertEqual(store.events.count, 1, "a foreign path must not disturb the index")
     }
 
     // MARK: - Skipped lines

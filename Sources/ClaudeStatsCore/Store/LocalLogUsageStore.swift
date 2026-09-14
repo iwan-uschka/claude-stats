@@ -47,7 +47,7 @@ public struct HistoricalModelUsage: Sendable, Hashable {
 /// I/O happens once, in the initialiser: the store keeps the parsed events in
 /// memory so every protocol method is pure arithmetic and safe to call from the
 /// popover's render path. The FSEvents watcher refreshes by building a new
-/// store via ``SessionCorpusIndex/rebuild()``; ``adding(events:)`` is a
+/// store via ``SessionCorpusIndex/rebuild(changed:)``; ``adding(events:)`` is a
 /// standalone merge helper that does *not* maintain the index's retention
 /// window, so it must not be used on an index-built store.
 public struct LocalLogUsageStore: UsageStoring {

@@ -105,6 +105,24 @@ public struct FileChangeBatch: Sendable, Hashable {
         changes.contains { $0.flags.contains(.requiresRescan) }
     }
 
+    /// `true` when a *directory* was removed or renamed. FSEvents reports only
+    /// the directory's own path for either — never its `.jsonl` children — so a
+    /// caller that reparsed just the named paths would keep serving files that
+    /// are gone with the directory. Treat it like ``requiresFullRescan``.
+    public var containsRemovedOrRenamedDirectory: Bool {
+        changes.contains {
+            $0.flags.contains(.isDirectory) && !$0.flags.intersection([.removed, .renamed]).isEmpty
+        }
+    }
+
+    /// Union of two batches, for a caller that has to hold changes back (a
+    /// rebuild already in flight) and deliver them together later. Entries for
+    /// the same path keep both flag sets; paths only `other` knows about are
+    /// appended, so first-seen order across the pair is preserved.
+    public func merging(_ other: FileChangeBatch) -> FileChangeBatch {
+        FileChangeBatch(changes: changes + other.changes)
+    }
+
     /// Changes whose contents may have changed — the subset worth reparsing.
     /// Excludes metadata-only touches and directory events.
     public var contentChanges: [FileChange] {
