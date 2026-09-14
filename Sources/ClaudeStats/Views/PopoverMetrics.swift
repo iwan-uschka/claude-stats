@@ -87,6 +87,24 @@ enum PopoverMetrics {
     static let legendSwatchSize: CGFloat = 6
     /// Gap between a legend swatch and its label.
     static let legendSwatchSpacing: CGFloat = 4
+    /// Area of the dot marking the hovered day on a single-line chart. Small:
+    /// it has to read as "this point", not as a marker the chart always had.
+    static let chartHoverPointSize: CGFloat = 16
+    /// Floor under a "Tokens by source" legend number *while hovering*, so a
+    /// pointer travelling across the chart doesn't make the row reflow under
+    /// every day it crosses.
+    ///
+    /// 42, which holds the widest count the formatter produces at a length
+    /// that matters — `298.5M` measures 41.0 pt in the monospaced-digit
+    /// ``valueFont``, `40.6k` 30.3, `1.1M` 27.0. No floor at rest, where the
+    /// five-hour counts are narrower and the row also carries its `5h` caption.
+    ///
+    /// It is the whole width budget: three names (124 pt), three swatches with
+    /// their gaps (42) and three of these columns come to 292 of the 312 pt
+    /// content width, leaving the two gaps between chips their minimum and
+    /// nothing else. That is why the hovered date sits opposite the section
+    /// title instead of at the end of this row.
+    static let legendTokenColumnWidth: CGFloat = 42
     static let rowSpacing: CGFloat = 8
     static let sectionSpacing: CGFloat = 10
     /// Gap between an account's active/inactive icon and its name.

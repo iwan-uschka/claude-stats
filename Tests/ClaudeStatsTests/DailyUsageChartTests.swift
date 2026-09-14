@@ -120,6 +120,50 @@ final class DailyUsageChartTests: XCTestCase {
         XCTAssertTrue(chart(dayCount: 0).tickDays.isEmpty)
     }
 
+    // MARK: - Hover highlight
+
+    func testTheHighlightMarksTheHoveredDay() {
+        let chart = self.chart(dayCount: 30)
+        let hovered = DailyUsageChart(days: chart.days, series: [], hoveredDay: chart.days[4])
+
+        XCTAssertEqual(hovered.highlightedIndex, 4)
+        XCTAssertNil(chart.highlightedIndex, "no pointer, no rule")
+    }
+
+    func testADayFromAWindowThatHasMovedIsNotHighlighted() {
+        let chart = self.chart(dayCount: 30)
+        let dropped = Self.utcCalendar.date(byAdding: .day, value: -90, to: Self.referenceNow)
+
+        XCTAssertNil(DailyUsageChart(days: chart.days, series: [], hoveredDay: dropped).highlightedIndex)
+    }
+
+    func testEachDotSitsOnTheEdgeOfItsOwnBand() throws {
+        let history = try makeHistory()
+        let series = DailyUsageSeries.sources(from: history)
+        let chart = DailyUsageChart(days: history.days, series: series, hoveredDay: history.days.last)
+        let index = try XCTUnwrap(chart.highlightedIndex)
+
+        // The areas stack, so the dots have to climb with them — CLI's 200 and
+        // the SDK's 700 make edges at 200 and 900, not two dots at their own
+        // heights. VS Code did nothing that day and gets no dot.
+        XCTAssertEqual(chart.stackTops(at: index).map(\.tokens), [200, 900])
+        XCTAssertEqual(chart.stackTops(at: index).map(\.id), ["CLI", Entrypoint.sdkAgent.displayName])
+    }
+
+    func testASilentSourceGetsNoDotOfItsOwn() throws {
+        let history = try makeHistory()
+        let chart = DailyUsageChart(
+            days: history.days,
+            series: DailyUsageSeries.sources(from: history),
+            hoveredDay: history.days.first
+        )
+        let index = try XCTUnwrap(chart.highlightedIndex)
+
+        // Only CLI ran on the first day of the fixture. A dot for each silent
+        // source would stack three of them on one edge.
+        XCTAssertEqual(chart.stackTops(at: index).map(\.tokens), [100])
+    }
+
     // MARK: - Accessibility
 
     func testChartDescriptorCarriesEverySourceAndEveryDay() throws {

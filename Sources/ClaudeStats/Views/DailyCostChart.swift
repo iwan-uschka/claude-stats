@@ -24,6 +24,19 @@ struct DailyCostChart: View {
     /// One point per day of ``days``, same order.
     let points: [DailyUsagePoint]
 
+    /// The day the pointer is on, drawn as a rule plus a dot on the curve.
+    /// Ignored when it is not a day this chart plots — see
+    /// ``PopoverChartHover/index(of:in:)``.
+    var hoveredDay: Date?
+
+    /// Reports the day under the pointer, `nil` on exit. Defaulted so a chart
+    /// built for a test or a preview needs neither.
+    var onHover: (Date?) -> Void = { _ in }
+
+    /// The hovered day's position in ``days``, or `nil` when the pointer is
+    /// out, or when a reload moved the window under it.
+    var highlightedIndex: Int? { PopoverChartHover.index(of: hoveredDay, in: days) }
+
     /// See ``PopoverChartAxis/tickDays(in:)``. Shared with the source chart
     /// above, so two plots in the same column tick on the same days.
     var tickDays: [Date] { PopoverChartAxis.tickDays(in: days) }
@@ -42,23 +55,43 @@ struct DailyCostChart: View {
     }
 
     var body: some View {
-        Chart(records) { record in
-            LineMark(
-                x: .value("Day", record.day, unit: .day),
-                y: .value("Estimated cost", record.cost)
-            )
-            .interpolationMethod(.monotone)
-            .lineStyle(StrokeStyle(lineWidth: PopoverMetrics.chartLineWidth, lineJoin: .round))
-            // The same ink as the source chart's top band: one visual weight
-            // for "this is the popover's own data", not a second palette.
-            .foregroundStyle(Color.primary.opacity(DailyUsageSeries.shades[0]))
+        Chart {
+            ForEach(records) { record in
+                LineMark(
+                    x: .value("Day", record.day, unit: .day),
+                    y: .value("Estimated cost", record.cost)
+                )
+                .interpolationMethod(.monotone)
+                .lineStyle(StrokeStyle(lineWidth: PopoverMetrics.chartLineWidth, lineJoin: .round))
+                // The same ink as the source chart's top band: one visual weight
+                // for "this is the popover's own data", not a second palette.
+                .foregroundStyle(Color.primary.opacity(DailyUsageSeries.shades[0]))
+            }
+
+            if let index = highlightedIndex {
+                // Both marks carry values the chart already plots — the day is
+                // one of `days`, the dollar figure is one of `points` — so
+                // neither widens a scale. Nothing about the plot's geometry may
+                // depend on hover: the leading edge sits wherever the widest
+                // y-label ends, so a rescale would slide the curve sideways
+                // under a stationary pointer and change the day it is on.
+                RuleMark(x: .value("Day", days[index], unit: .day))
+                    .lineStyle(StrokeStyle(lineWidth: 0.5))
+                    .foregroundStyle(Color.primary.opacity(0.25))
+                PointMark(
+                    x: .value("Day", days[index], unit: .day),
+                    y: .value("Estimated cost", points[index].estimatedCostUSD)
+                )
+                .symbolSize(PopoverMetrics.chartHoverPointSize)
+                .foregroundStyle(Color.primary.opacity(DailyUsageSeries.shades[0]))
+            }
         }
         .chartYScale(domain: .automatic(includesZero: true))
         .chartXAxis {
             AxisMarks(values: tickDays) { _ in
                 AxisTick(length: PopoverMetrics.chartTickLength, stroke: StrokeStyle(lineWidth: 0.5))
                     .foregroundStyle(.secondary)
-                AxisValueLabel(format: .dateTime.month(.abbreviated).day())
+                AxisValueLabel(format: PopoverChartHover.dayLabelFormat)
                     .font(PopoverMetrics.captionFont)
                     .foregroundStyle(.secondary)
             }
@@ -79,6 +112,7 @@ struct DailyCostChart: View {
             }
         }
         .frame(height: PopoverMetrics.chartHeight)
+        .chartHoverTracking(days: days, onHover: onHover)
         .accessibilityChartDescriptor(DailyCostChartDescriptor(days: days, points: points))
     }
 }

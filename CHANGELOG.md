@@ -3,6 +3,10 @@
 ## [Unreleased]
 
 ### Added
+- Hovering either popover chart reads back the day under the pointer: a rule
+  and a dot per series mark it in the plot, the "Estimated cost" row swaps
+  `Today` for that day's date and figure, and the "Tokens by source" legend
+  swaps its 5-hour counts for that day's.
 - An "Estimated cost" chart: 30 days of estimated daily spend as a single line,
   above today's exact figure.
 - Quota readings are now grouped per Anthropic account, with other accounts'

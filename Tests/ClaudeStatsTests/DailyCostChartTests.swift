@@ -39,6 +39,28 @@ final class DailyCostChartTests: XCTestCase {
         XCTAssertFalse(cost.tickDays.isEmpty)
     }
 
+    // MARK: - Hover highlight
+
+    func testTheHighlightMarksTheHoveredDay() {
+        let days = self.days(30)
+        let chart = DailyCostChart(days: days, points: points(Array(repeating: 1, count: 30)), hoveredDay: days[11])
+
+        XCTAssertEqual(chart.highlightedIndex, 11)
+    }
+
+    func testADayFromAWindowThatHasMovedIsNotHighlighted() {
+        // The rule and the dot are placed by index, so a day the chart no
+        // longer plots must draw nothing rather than land on a neighbour.
+        let chart = DailyCostChart(
+            days: days(30),
+            points: points(Array(repeating: 1, count: 30)),
+            hoveredDay: Self.utcCalendar.date(byAdding: .day, value: -90, to: Self.referenceNow)
+        )
+
+        XCTAssertNil(chart.highlightedIndex)
+        XCTAssertNil(DailyCostChart(days: days(30), points: points(Array(repeating: 1, count: 30))).highlightedIndex)
+    }
+
     // MARK: - Accessibility
 
     func testDescriptorCarriesEveryDayAsOneSeries() {

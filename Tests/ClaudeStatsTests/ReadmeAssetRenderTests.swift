@@ -40,6 +40,37 @@ final class ReadmeAssetRenderTests: XCTestCase {
     private static let sidePadding: CGFloat = 18
     private static let bottomPadding: CGFloat = 18
 
+    /// Renders the popover with a day hovered, for looking at rather than for
+    /// shipping. Not part of the README set: `render-readme-assets.sh` filters
+    /// on the class, and this stays skipped under its own gate.
+    ///
+    /// It earns its place because hover is unreachable offscreen and the
+    /// legend *changes content* under it — the first render of that row came
+    /// back reading `CLI 842.…` and `VS Co…`, which no unit test would have
+    /// shown. Two days: the busiest in the fixture, whose counts are the widest
+    /// strings the row ever holds, and an ordinary one.
+    ///
+    ///     CLAUDE_STATS_RENDER_HOVER=/tmp/hover swift test --filter testRenderHoverPreviews
+    func testRenderHoverPreviews() throws {
+        guard let outPath = ProcessInfo.processInfo.environment["CLAUDE_STATS_RENDER_HOVER"] else {
+            throw XCTSkip("set CLAUDE_STATS_RENDER_HOVER=<dir> to render the hovered popover")
+        }
+        let outDir = URL(fileURLWithPath: outPath, isDirectory: true)
+        try FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
+
+        let now = Self.renderDate
+        let history = AppModel.previewShowcase(now: now).dailyHistory
+        let busiest = try XCTUnwrap(history.total.max { $0.totalTokens < $1.totalTokens }?.day)
+        let ordinary = try XCTUnwrap(history.days.dropLast(8).last)
+
+        for (name, day) in [("busiest", busiest), ("ordinary", ordinary)] {
+            for theme in Theme.all {
+                let card = try renderCard(theme: theme, now: now, hoveredDay: day)
+                try write(card, to: outDir, named: "hover-\(name)-\(theme.name).png")
+            }
+        }
+    }
+
     func testRenderReadmeAssets() throws {
         guard let outPath = ProcessInfo.processInfo.environment["CLAUDE_STATS_RENDER_ASSETS"] else {
             throw XCTSkip("set CLAUDE_STATS_RENDER_ASSETS=<dir> to render the README assets")
@@ -208,10 +239,11 @@ final class ReadmeAssetRenderTests: XCTestCase {
     /// The 4× comes from the `NSBitmapImageRep` being allocated at
     /// `pixelsWide/High = points × scale` while its `size` stays in points —
     /// `cacheDisplay(in:to:)` then draws into it at that resolution.
-    private func renderCard(theme: Theme, now: Date) throws -> CGImage {
+    private func renderCard(theme: Theme, now: Date, hoveredDay: Date? = nil) throws -> CGImage {
         let card = PopoverCard(
             model: .previewShowcase(now: now),
             clock: PopoverClock(now: now),
+            hoveredDay: hoveredDay,
             colorScheme: theme.colorScheme,
             fill: theme.cardFill,
             stroke: theme.cardStroke
@@ -333,6 +365,8 @@ final class ReadmeAssetRenderTests: XCTestCase {
 private struct PopoverCard: View {
     let model: AppModel
     let clock: PopoverClock
+    /// Seeds the popover's hover state — see ``PopoverView/init(model:clock:hoveredSourceDay:hoveredCostDay:)``.
+    var hoveredDay: Date?
     let colorScheme: ColorScheme
     let fill: Color
     let stroke: Color
@@ -347,7 +381,12 @@ private struct PopoverCard: View {
             tailWidth: Self.tailWidth,
             tailHeight: Self.tailHeight
         )
-        return PopoverView(model: model, clock: clock)
+        return PopoverView(
+            model: model,
+            clock: clock,
+            hoveredSourceDay: hoveredDay,
+            hoveredCostDay: hoveredDay
+        )
             .padding(.top, Self.tailHeight)
             .background(shape.fill(fill))
             .overlay(shape.stroke(stroke, lineWidth: 1))

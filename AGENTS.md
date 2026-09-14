@@ -535,6 +535,7 @@ Tokens by source
  0 ┼──┬───────┬───────┬───────┬────
    16. Aug. 23. Aug. 30. Aug. 6. Sept.
 ● CLI 18k   ● VS Code 0   ● SDK 40.6k   5h
+      hovered: title row gains `20. Aug.`, the chips read that day, `5h` goes
                                   ← a stacked daily area chart of the last 30
                                     days, one band per entrypoint, plus one
                                     legend chip per band carrying that source's
@@ -556,6 +557,17 @@ Tokens by source
                                     peak-relative bars, which compared rows
                                     inside one window and said nothing across
                                     windows.)
+
+                                    All three dots are drawn in the *top*
+                                    band's ink rather than each band's own. The
+                                    third band is drawn at 0.24 opacity and a
+                                    dot that pale on top of it cannot be seen;
+                                    the dots are markers, not more data, and
+                                    carry the same weight as the cost chart's
+                                    single one. Two dots still merge where a
+                                    band is thin — about 330k tokens of a 4M
+                                    axis — which is the cost of asking a stacked
+                                    chart for a per-band readout.
 
                                     Monochrome — three opacities of the primary
                                     ink, never three hues: colour in this
@@ -621,6 +633,142 @@ Tokens by source
                                     every other row, so a sideways inset would
                                     pull its axis out of that alignment.
 
+                                    **Hovering** the plot draws a rule on the
+                                    nearest day, a dot on each band's top edge
+                                    — cumulative sums, since the areas stack,
+                                    and none for a band that did nothing that
+                                    day, whose edge is its neighbour's — and
+                                    swaps every chip's number for that day's
+                                    per-source count. `.help()` on a chip
+                                    follows the same day, or tooltip and chip
+                                    would contradict each other on screen.
+
+                                    **The hovered date goes opposite the
+                                    section title**, and the trailing `5h`
+                                    steps aside while it is there. The mock had
+                                    the date replacing `5h` at the end of the
+                                    legend, and it does not fit: three source
+                                    names (124 pt), their swatches and gaps (42)
+                                    and a dated caption (44) leave 34 pt a
+                                    column for counts that need 42, and the
+                                    first render of that row came back reading
+                                    `CLI 842.…` and `VS Co…`. Dropping the names
+                                    instead was tried and rejected — they are
+                                    what says which source. The title row was
+                                    empty, it is where "Costs by model" already
+                                    answers *which window is this?*, and it is
+                                    the only arrangement that keeps every name.
+                                    `testTheHoveredLegendRowFits…` pins the
+                                    budget.
+
+                                    The token column is reserved *only* while
+                                    hovering, so the resting row is laid out
+                                    exactly as it was before hover existed —
+                                    the committed screenshots did not change.
+
+                                    All three dots are drawn in the *top*
+                                    band's ink rather than each band's own. The
+                                    third band is drawn at 0.24 opacity and a
+                                    dot that pale on top of it cannot be seen;
+                                    the dots are markers, not more data, and
+                                    carry the same weight as the cost chart's
+                                    single one. Two dots still merge where a
+                                    band is thin — about 330k tokens of a 4M
+                                    axis — which is the cost of asking a stacked
+                                    chart for a per-band readout.
+
+                                    Monochrome — three opacities of the primary
+                                    ink, never three hues: colour in this
+                                    popover means a warning or the one brand
+                                    link. Bands are `.monotone`, never
+                                    `.catmullRom`: a spline through spiky daily
+                                    counts overshoots, and on a stack an
+                                    overshoot dips below the band underneath,
+                                    drawing usage that never happened.
+
+                                    Every entrypoint is always listed, at 0 if
+                                    need be — a silent source keeps a band and a
+                                    chip rather than vanishing. Hovering a chip
+                                    shows that source's full five-hour token
+                                    split, which is where the table's per-cell
+                                    tooltip went.
+
+                                    Both axes are drawn, sparsely: without a
+                                    y-axis the bands show shape but no
+                                    magnitude, and without dated x-ticks a spike
+                                    can't be tied to a day — but thirty dated
+                                    labels across a 340 pt popover would be
+                                    mush, so it is one label a week and three
+                                    values up the y. **Ticks stop four days
+                                    short of the right edge**: a label is centred
+                                    on its tick and truncated at the chart's
+                                    trailing bound, so a tick any closer renders
+                                    as `1…` no matter how the plot is inset
+                                    (tried: padding the chart, then padding the
+                                    plot area — neither helps, the label has
+                                    nowhere to sit). Nothing is lost by it, since
+                                    the right edge of a trailing window is always
+                                    today.
+
+                                    Drawn axes still don't make a chart legible
+                                    to VoiceOver, so it carries a real
+                                    `AXChartDescriptor` — one series per source,
+                                    one point per day, y-axis reaching the
+                                    tallest *stacked* day — rather than being an
+                                    unlabelled image. Its value formatter guards
+                                    non-finite input and clamps to 2^53, not to
+                                    `Double(Int.max)` (which rounds up to 2^63
+                                    and traps): the framework calls it with
+                                    probe values of its own choosing, and both
+                                    traps were live crashes.
+
+                                    **No window tag** opposite the title,
+                                    unlike every other section: the dated
+                                    x-axis already says how far back the chart
+                                    reaches and that it ends today, so a
+                                    `30 days` caption would only repeat it. A
+                                    Mac whose logs don't reach back that far
+                                    simply charts fewer days; one with no local
+                                    history at all gets `No local usage yet`
+                                    instead of a flat line through zero.
+
+                                    The plot carries a small margin above and
+                                    below — it is the only element in the
+                                    popover that is a picture rather than a row
+                                    of text, and flush against the title and
+                                    legend it reads as part of them. Vertical
+                                    only: it spans the full content width like
+                                    every other row, so a sideways inset would
+                                    pull its axis out of that alignment.
+
+                                    **Hovering** the plot draws a rule on the
+                                    nearest day, a dot on each band's top edge
+                                    — cumulative sums, since the areas stack,
+                                    and none for a band that did nothing that
+                                    day, whose edge is its neighbour's — and
+                                    swaps what the legend reads: the chips carry that day's
+                                    per-source counts, and the trailing `5h`
+                                    becomes the date. That caption already said
+                                    *which window these numbers are for*, so
+                                    swapping it is the whole disclosure — no
+                                    floating tooltip over a 72 pt plot, and no
+                                    second styling vocabulary. `.help()` on a
+                                    chip follows the same day, or tooltip and
+                                    chip would contradict each other on screen.
+
+                                    The source names drop while hovering, and
+                                    the swatches carry the tie to the bands
+                                    alone. Measured, not chosen: three names
+                                    (124 pt), three swatches with their gaps
+                                    (42) and a dated caption (44) leave 34 pt a
+                                    column for numbers that need 42, and the
+                                    first render of that row came back reading
+                                    `CLI 842.…` and `VS Co…`. The token and
+                                    caption columns are reserved *only* while
+                                    hovering, so the resting row is laid out
+                                    exactly as it was before hover existed —
+                                    the committed screenshots did not change.
+
                                     No cache-read note here: the
                                     chart's numbers are a single window's
                                     per-source split, and "Costs by model" (fixed 24h)
@@ -685,6 +833,48 @@ Today                              $3.05
                                     `testTodaysPointMatchesEstimatedCostToday`,
                                     and on the mock too, since the README
                                     screenshots render from it.
+
+                                    **Hovering** swaps that row for the day
+                                    under the pointer — `6. Sept.` and its
+                                    figure — and marks it with a rule plus a dot
+                                    on the curve. Label and value swap together,
+                                    so a figure is never shown under the wrong
+                                    date.
+
+                                    Both charts share `PopoverChartHover`: a
+                                    `.chartOverlay` converts the pointer's x
+                                    through the chart proxy and snaps to the
+                                    nearest plotted midnight. Snapping is the
+                                    mechanism, not a refinement — 30 days over a
+                                    ~250 pt plot is about 8 pt a day, so
+                                    pointing at a day exactly is not available.
+                                    Not `.chartXSelection`, which answers to
+                                    click and drag on macOS rather than to hover.
+
+                                    **Hover moves nothing but the highlight.**
+                                    Both marks carry values already plotted, so
+                                    no scale widens, and the hovered day is
+                                    never added to the x-axis — it belongs in
+                                    the row. This is not cosmetic: the plot's
+                                    leading edge sits wherever the widest
+                                    y-label ends, so anything that rescaled an
+                                    axis would slide the curve sideways under a
+                                    stationary pointer, changing the day it is
+                                    on, under the user's own hand.
+
+                                    The hovered day is re-resolved against the
+                                    *current* history on every render, so a poll
+                                    — or midnight sliding the window — drops the
+                                    readout back to resting instead of stranding
+                                    a number from a window that has moved. The
+                                    two charts hover independently: a legend
+                                    that rewrote itself while the pointer was in
+                                    the chart *below* it would be a surprise.
+
+                                    Hover is mouse-only and is not the only path
+                                    to a per-day number — both
+                                    `AXChartDescriptor`s already carry every
+                                    point, and they stay the accessible route.
 
                                     Deliberately not a per-model chart. That was
                                     the original plan and it lost: five bands
@@ -786,6 +976,17 @@ regenerating committed PNGs mid-release would break the release.
 The renderer is `Tests/ClaudeStatsTests/ReadmeAssetRenderTests.swift`, skipped
 unless `CLAUDE_STATS_RENDER_ASSETS` names an output directory, so a plain
 `swift test` neither writes files nor pays for the render.
+
+The same file renders one thing the README doesn't ship: the popover with a day
+hovered, under its own gate, for looking at rather than committing.
+
+    CLAUDE_STATS_RENDER_HOVER=/tmp/hover swift test --filter testRenderHoverPreviews
+
+It earns its keep because hover is unreachable offscreen and the legend
+*changes content* under it — that is how the truncated `CLI 842.…` row was
+caught, which no unit test would have shown. `PopoverView` takes its two
+hovered days as init parameters purely so this (and a SwiftUI preview) can seed
+them.
 
 **Why it lives in the test target.** `ClaudeStats` is an `executableTarget`, so
 no second executable can depend on it. The test target already can, and

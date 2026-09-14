@@ -55,6 +55,19 @@ struct DailyUsageChart: View {
     /// Stack order, bottom band first.
     let series: [DailyUsageSeries]
 
+    /// The day the pointer is on, drawn as a rule across the stack. Ignored
+    /// when it is not a day this chart plots — see
+    /// ``PopoverChartHover/index(of:in:)``.
+    var hoveredDay: Date?
+
+    /// Reports the day under the pointer, `nil` on exit. Defaulted so a chart
+    /// built for a test or a preview needs neither.
+    var onHover: (Date?) -> Void = { _ in }
+
+    /// The hovered day's position in ``days``, or `nil` when the pointer is
+    /// out, or when a reload moved the window under it.
+    var highlightedIndex: Int? { PopoverChartHover.index(of: hoveredDay, in: days) }
+
     /// Flattened for `Chart`, which wants one record per mark.
     private struct Record: Identifiable {
         let id: String
@@ -71,21 +84,74 @@ struct DailyUsageChart: View {
         }
     }
 
+    /// The top edge of one band on one day — where its highlight dot goes.
+    struct StackTop: Identifiable, Equatable {
+        /// The band's label, so `ForEach` has a stable key.
+        let id: String
+        /// The band's *cumulative* height, not its own.
+        let tokens: Int
+    }
+
+    /// Where each band ends on the hovered day, bottom band first.
+    ///
+    /// Cumulative sums, because the areas stack: a dot at a band's own token
+    /// count would float somewhere inside the stack rather than sitting on the
+    /// edge the chart draws.
+    ///
+    /// A band that did nothing that day is skipped. Its edge is its
+    /// neighbour's, so its dot would land exactly on top of another one and
+    /// darken it for no reading — and a silent source is a case the popover
+    /// shows rather than drops, so this is not hypothetical.
+    func stackTops(at index: Int) -> [StackTop] {
+        var running = 0
+        return series.compactMap { band in
+            guard index < band.points.count else { return nil }
+            let tokens = band.points[index].totalTokens
+            running += tokens
+            guard tokens > 0 else { return nil }
+            return StackTop(id: band.label, tokens: running)
+        }
+    }
+
     /// See ``PopoverChartAxis/tickDays(in:)``.
     var tickDays: [Date] { PopoverChartAxis.tickDays(in: days) }
 
     var body: some View {
-        Chart(records) { record in
-            AreaMark(
-                x: .value("Day", record.day, unit: .day),
-                y: .value("Tokens", record.tokens)
-            )
-            .foregroundStyle(by: .value("Source", record.series))
-            // Monotone, not `catmullRom`: a spline through spiky daily counts
-            // overshoots, and on a stacked band an overshoot dips below the band
-            // underneath it — drawing usage that never happened. Monotone keeps
-            // every segment within its own two points.
-            .interpolationMethod(.monotone)
+        Chart {
+            ForEach(records) { record in
+                AreaMark(
+                    x: .value("Day", record.day, unit: .day),
+                    y: .value("Tokens", record.tokens)
+                )
+                .foregroundStyle(by: .value("Source", record.series))
+                // Monotone, not `catmullRom`: a spline through spiky daily counts
+                // overshoots, and on a stacked band an overshoot dips below the band
+                // underneath it — drawing usage that never happened. Monotone keeps
+                // every segment within its own two points.
+                .interpolationMethod(.monotone)
+            }
+
+            if let index = highlightedIndex {
+                // Every mark here carries a value the chart already plots — the
+                // day is one of `days`, each dot sits on a band edge the stack
+                // already draws — so no scale widens and no axis moves.
+                RuleMark(x: .value("Day", days[index], unit: .day))
+                    .lineStyle(StrokeStyle(lineWidth: 0.5))
+                    .foregroundStyle(Color.primary.opacity(0.25))
+                ForEach(stackTops(at: index)) { top in
+                    PointMark(
+                        x: .value("Day", days[index], unit: .day),
+                        y: .value("Tokens", top.tokens)
+                    )
+                    .symbolSize(PopoverMetrics.chartHoverPointSize)
+                    // One ink for all three, not each band's own shade: the
+                    // top band is drawn at 0.24 opacity, and a dot that pale
+                    // sitting on its own band is invisible. The dots are
+                    // markers, not more data — the same weight the cost
+                    // chart's single dot carries.
+                    .foregroundStyle(Color.primary.opacity(DailyUsageSeries.shades[0]))
+                }
+            }
         }
         .chartForegroundStyleScale(
             domain: series.map(\.label),
@@ -96,7 +162,7 @@ struct DailyUsageChart: View {
             AxisMarks(values: tickDays) { value in
                 AxisTick(length: PopoverMetrics.chartTickLength, stroke: StrokeStyle(lineWidth: 0.5))
                     .foregroundStyle(.secondary)
-                AxisValueLabel(format: .dateTime.month(.abbreviated).day())
+                AxisValueLabel(format: PopoverChartHover.dayLabelFormat)
                     .font(PopoverMetrics.captionFont)
                     .foregroundStyle(.secondary)
             }
@@ -117,6 +183,7 @@ struct DailyUsageChart: View {
             }
         }
         .frame(height: PopoverMetrics.chartHeight)
+        .chartHoverTracking(days: days, onHover: onHover)
         .accessibilityChartDescriptor(DailyUsageChartDescriptor(days: days, series: series))
     }
 }
