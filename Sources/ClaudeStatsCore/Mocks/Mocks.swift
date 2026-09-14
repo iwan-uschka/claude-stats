@@ -341,7 +341,7 @@ public struct MockUsageStore: UsageStoring {
         ),
     ]
 
-    /// Matches the "By model" rows in the popover sketch in `AGENTS.md`.
+    /// Matches the "Costs by model" rows in the popover sketch in `AGENTS.md`.
     public static let sampleModelUsage: [ModelUsage] = [
         ModelUsage(
             modelID: "claude-sonnet-5",

@@ -212,7 +212,7 @@ public protocol UsageStoring: Sendable {
     func entrypointBreakdowns(for windows: [TimeWindow]) throws -> [TimeWindow: EntrypointBreakdown]
 
     /// Per-model tokens and cost.
-    /// - Parameter last24h: `true` for the popover's fixed 24-hour "By model"
+    /// - Parameter last24h: `true` for the popover's fixed 24-hour "Costs by model"
     ///   section; `false` for all locally-known history.
     func modelUsage(last24h: Bool) throws -> [ModelUsage]
 

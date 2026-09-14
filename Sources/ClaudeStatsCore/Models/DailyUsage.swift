@@ -122,7 +122,7 @@ public struct DailyUsagePoint: Sendable, Hashable, Identifiable {
     public var id: Date { day }
 
     /// Every token the day's requests touched, matching the counts the "This
-    /// Mac" and "By model" rows show.
+    /// Mac" and "Costs by model" rows show.
     public var totalTokens: Int { usage.totalTokens }
 }
 

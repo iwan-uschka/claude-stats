@@ -1,7 +1,7 @@
 import ClaudeStatsCore
 import SwiftUI
 
-/// One row of the "By model" section: `Sonnet   2.1M tok   $3.15`.
+/// One row of the "Costs by model" section: `Sonnet   2.1M tok   $3.15`.
 struct ModelUsageRow: View {
     var usage: ModelUsage
 

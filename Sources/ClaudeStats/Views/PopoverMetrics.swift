@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Shared layout constants for the popover, so the label columns of the quota
-/// rows, the "Tokens by source" legend and the "By model" rows line up with each other.
+/// rows, the "Tokens by source" legend and the "Costs by model" rows line up with each other.
 enum PopoverMetrics {
     static let popoverWidth: CGFloat = 340
     static let contentPadding: CGFloat = 14
@@ -34,11 +34,11 @@ enum PopoverMetrics {
     /// still ends flush with the countdowns above it.
     static let percentAndCountdownColumnWidth: CGFloat =
         percentColumnWidth + rowSpacing + countdownColumnWidth
-    /// Width of the token column in the "By model" section — wider than a
+    /// Width of the token column in the "Costs by model" section — wider than a
     /// "Tokens by source" legend number because the counts here carry a `tok` suffix
     /// and are all-time rather than windowed.
     static let modelTokenColumnWidth: CGFloat = 98
-    /// Width of the cost column in the "By model" section. Wide enough for
+    /// Width of the cost column in the "Costs by model" section. Wide enough for
     /// 4-digit spend (`$1234.56`) — a heavy cache-read day can push a single
     /// model's estimate well past the `$3.15`-sized figures this used to be
     /// sized for.
@@ -96,7 +96,7 @@ enum PopoverMetrics {
     /// Gap above each *other*-account disclosure group, and between two of
     /// them. Deliberately double ``quotaRowSpacing``: the groups carry no
     /// divider of their own any more (a `Divider()` there read as a top-level
-    /// section break, the same rule that separates "Tokens by source" from "By model"),
+    /// section break, the same rule that separates "Tokens by source" from "Costs by model"),
     /// so whitespace is the only thing left saying a collapsed row belongs to
     /// neither the bars above it nor the group below it.
     static let accountGroupSpacing: CGFloat = 12

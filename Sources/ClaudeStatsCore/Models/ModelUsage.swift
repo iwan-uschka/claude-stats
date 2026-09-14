@@ -1,6 +1,6 @@
 import Foundation
 
-/// Model family, used to group per-model usage into the popover's "By model"
+/// Model family, used to group per-model usage into the popover's "Costs by model"
 /// rows. Raw values match the family token in Anthropic model IDs
 /// (`claude-sonnet-5`, `claude-opus-5`, `claude-haiku-4-5`, `claude-fable-5`).
 public enum ModelFamily: String, Sendable, Hashable, Codable, CaseIterable {
@@ -19,7 +19,7 @@ public enum ModelFamily: String, Sendable, Hashable, Codable, CaseIterable {
         }
     }
 
-    /// Display order for the "By model" rows.
+    /// Display order for the "Costs by model" rows.
     public static let displayOrder: [ModelFamily] = [.sonnet, .opus, .haiku, .fable]
 
     /// Best-effort family for a raw model ID from the JSONL (e.g.
@@ -32,7 +32,7 @@ public enum ModelFamily: String, Sendable, Hashable, Codable, CaseIterable {
 }
 
 /// Token count and estimated spend for one model, over a fixed window
-/// (the popover's "By model" section uses a fixed 24h window, unlike the
+/// (the popover's "Costs by model" section uses a fixed 24h window, unlike the
 /// "Tokens by source" chart above it, which spans 30 days).
 public struct ModelUsage: Sendable, Hashable, Codable, Identifiable {
     /// Raw model ID as it appears in the JSONL, e.g. `claude-sonnet-5`.

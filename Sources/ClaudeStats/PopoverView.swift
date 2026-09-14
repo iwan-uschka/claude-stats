@@ -98,7 +98,7 @@ struct PopoverView: View {
     }
 
     /// The quota block's section title, plus the freshness tag on the same
-    /// line — the shape "Tokens by source" and "By model" already use, so the quota
+    /// line — the shape "Tokens by source" and "Costs by model" already use, so the quota
     /// rows read as a titled section rather than as a preamble to the popover.
     ///
     /// The title names the active Anthropic account when something on disk
@@ -445,7 +445,7 @@ struct PopoverView: View {
     }
 
     /// Explains a token total that replayed cache reads dominate, so the
-    /// headline number doesn't read as fresh work. Only "By model" has one:
+    /// headline number doesn't read as fresh work. Only "Costs by model" has one:
     /// "Tokens by source" captions a chart spanning 30 days with legend numbers from a
     /// five-hour window, so it has no single total for a note to describe.
     private func cacheReadNoteLine(_ note: String) -> some View {
@@ -475,7 +475,7 @@ struct PopoverView: View {
         VStack(alignment: .leading, spacing: 6) {
             // No window tag opposite the title: the x-axis is dated, so it
             // already says both how far back the chart reaches and that it ends
-            // today. "By model" still needs its `fixed 24h` tag, having no axis
+            // today. "Costs by model" still needs its `fixed 24h` tag, having no axis
             // of its own.
             Text("Tokens by source")
                 .font(PopoverMetrics.sectionTitleFont)
@@ -548,12 +548,12 @@ struct PopoverView: View {
         model.breakdownsByWindow[window] ?? .empty(window: window)
     }
 
-    // MARK: - By model
+    // MARK: - Costs by model
 
     private var modelSection: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text("By model")
+                Text("Costs by model")
                     .font(PopoverMetrics.sectionTitleFont)
                 Spacer()
                 // Fixed window on purpose, and tagged as such: the chart

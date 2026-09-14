@@ -9,6 +9,7 @@
   readings shown below the current one.
 
 ### Changed
+- The popover's "By model" section is now "Costs by model".
 - "Est. cost today" is now an "Estimated cost" section with the daily chart over a
   `Today` row; the estimate caveat moved to the section title, where it covers
   the chart as well.
@@ -28,7 +29,7 @@
 - Other accounts' readings are collapsed under one row per account, closed by
   default, marked with a cross icon — and the active account's title gets a
   checkmark while any of them are listed.
-- The quota block now has a title row like "This Mac" and "By model": the
+- The quota block now has a title row like "This Mac" and "Costs by model": the
   account name on the left, the freshness tag on the right instead of on its
   own line under the bars.
 - Promo notices moved below the quota bars instead of between them.

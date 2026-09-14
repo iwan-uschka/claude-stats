@@ -408,7 +408,7 @@ Click opens a popover:
 ```
 ✓ me@example.com                cached
                                   ← the quota block's section title, the same
-                                    shape as "Tokens by source" and "By model" below:
+                                    shape as "Tokens by source" and "Costs by model" below:
                                     title left, tag right. The title names the
                                     account the rows describe, from
                                     `~/.claude.json`'s `oauthAccount` (login
@@ -623,10 +623,10 @@ Tokens by source
 
                                     No cache-read note here: the
                                     chart's numbers are a single window's
-                                    per-source split, and "By model" (fixed 24h)
+                                    per-source split, and "Costs by model" (fixed 24h)
                                     keeps that explanation on screen.
 
-By model (fixed 24h window)
+Costs by model (fixed 24h window)
   Sonnet   2.1M tok   $3.15
   Opus      180k tok   $2.70
   Haiku     640k tok   $0.19

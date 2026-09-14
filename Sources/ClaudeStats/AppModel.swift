@@ -51,7 +51,7 @@ final class AppModel: ObservableObject {
         didSet { modelUsageTotal = modelUsage.reduce(TokenUsage.zero) { $0 + $1.usage } }
     }
     /// Every ``modelUsage`` row summed, folded once per reload rather than on
-    /// each popover render — the "By model" caption is about the section's
+    /// each popover render — the "Costs by model" caption is about the section's
     /// numbers as a whole, and the popover re-renders every clock tick.
     @Published private(set) var modelUsageTotal: TokenUsage = .zero
 
@@ -346,7 +346,7 @@ final class AppModel: ObservableObject {
     }
 
     /// The quota block's own section title — the counterpart of the literal
-    /// "Tokens by source" and "By model" titles next to it.
+    /// "Tokens by source" and "Costs by model" titles next to it.
     ///
     /// Names the account the bars underneath describe, so the block announces
     /// itself the way the other two sections do. Two rules decide the wording:
