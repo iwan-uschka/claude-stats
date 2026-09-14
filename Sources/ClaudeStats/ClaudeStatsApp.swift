@@ -52,21 +52,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// `rebuildQueue`.
     private let corpusIndex: SessionCorpusIndex?
 
-    /// `true` while a rebuild is queued but not yet started, guarded by
-    /// `rebuildFlagLock`. Watcher batches arriving in that window fold into
-    /// `pendingChanges` instead of enqueueing a second rebuild — without this,
-    /// batches every ~2s each queueing their own would pile up behind a slow one
-    /// indefinitely.
-    private var rebuildQueued = false
-    /// Changes accumulated for the queued rebuild to consume, guarded by
-    /// `rebuildFlagLock`. A batch arriving while a rebuild is queued used to be
-    /// dropped outright, on the grounds that the queued rebuild would stat-scan
-    /// the whole corpus anyway and find its files regardless. That stopped being
-    /// true when rebuilds became scoped to the batch they're given: a dropped
-    /// batch is now a set of paths nothing would ever look at. So they merge
-    /// (see `FileChangeBatch.merging`) and drain together.
-    private var pendingChanges: FileChangeBatch?
-    private let rebuildFlagLock = NSLock()
+    /// Merges watcher batches that arrive while a rebuild is already queued —
+    /// without this, batches every ~2s each queueing their own would pile up
+    /// behind a slow one indefinitely. A batch arriving while one is queued
+    /// used to be dropped outright, on the grounds that the queued rebuild
+    /// would stat-scan the whole corpus anyway and find its files regardless.
+    /// That stopped being true when rebuilds became scoped to the batch
+    /// they're given: a dropped batch is now a set of paths nothing would
+    /// ever look at. So they merge (see `FileChangeBatch.merging`) and drain
+    /// together.
+    private let rebuildCoalescer = RebuildCoalescer()
 
     override init() {
         // Real local-log store when `~/.claude` (or `$CLAUDE_CONFIG_DIR`) is
@@ -132,6 +127,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.watcher = watcher
         do {
             try watcher.start()
+            // The watcher only reports events from this point on
+            // (`kFSEventStreamEventIdSinceNow`), so anything created or
+            // modified between the launch scan above and here would
+            // otherwise sit unreported until the app relaunches. Route a
+            // synthetic full-rescan batch through the normal path so it
+            // merges correctly with any real batch the watcher delivers in
+            // the same window.
+            rebuildUsageStore(changed: FileChangeBatch(changes: [FileChange(path: "", flags: [.requiresRescan])]))
         } catch {
             print("[ClaudeStats] Failed to start config-directory watcher: \(error)")
         }
@@ -151,32 +154,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// which is what keeps a lost event or a vanished project directory from
     /// leaving stale data behind indefinitely.
     ///
-    /// Bursts collapse via `rebuildQueued` — at most one rebuild runs and one
-    /// waits — with the waiting one's changes accumulating in `pendingChanges`.
+    /// Bursts collapse via `rebuildCoalescer` — at most one rebuild runs and
+    /// one waits, with the waiting one's changes accumulating for it to drain.
     private func rebuildUsageStore(changed batch: FileChangeBatch) {
         guard batch.requiresFullRescan
                 || batch.containsRemovedOrRenamedDirectory
                 || !batch.contentChanges(withExtension: "jsonl").isEmpty
         else { return }
 
-        rebuildFlagLock.lock()
-        let alreadyQueued = rebuildQueued
-        rebuildQueued = true
-        pendingChanges = pendingChanges.map { $0.merging(batch) } ?? batch
-        rebuildFlagLock.unlock()
-        guard !alreadyQueued else { return }
+        guard rebuildCoalescer.enqueue(batch) else { return }
 
         rebuildQueue.async { [weak self] in
             guard let self else { return }
-            // Drain flag and changes together, before any early exit or
-            // rebuild: changes that land mid-rebuild must queue a follow-up
-            // carrying their own paths, and a `nil` index (sample-data mode)
-            // must not latch the flag forever.
-            self.rebuildFlagLock.lock()
-            self.rebuildQueued = false
-            let changes = self.pendingChanges
-            self.pendingChanges = nil
-            self.rebuildFlagLock.unlock()
+            // Draining before any early exit or rebuild: changes that land
+            // mid-rebuild must queue a follow-up carrying their own paths,
+            // and a `nil` index (sample-data mode) must not latch the queued
+            // flag forever.
+            let changes = self.rebuildCoalescer.drain()
 
             guard let index = self.corpusIndex else { return }
             let fresh = index.rebuild(changed: changes)

@@ -60,12 +60,12 @@ final class SessionCorpusIndexTests: XCTestCase {
     }
 
     /// Rewrite a session file with `lines`, so both its size and its mtime move.
-    private func append(to url: URL, lines: [String]) throws {
+    private func rewrite(_ url: URL, lines: [String]) throws {
         try Data((lines.joined(separator: "\n") + "\n").utf8).write(to: url)
     }
 
     /// A watcher change for one session file, in the path space the index scans
-    /// (see `testBatchPathsInFSEventsResolvedFormAreMatched` for the other one).
+    /// (see `testBothSpellingsOfABatchPathReachTheSameFile` for the other one).
     private func change(_ name: String, flags: FileChange.Flags) -> FileChange {
         FileChange(path: projectDirectory.appendingPathComponent("\(name).jsonl").path, flags: flags)
     }
@@ -472,8 +472,8 @@ final class SessionCorpusIndexTests: XCTestCase {
         XCTAssertEqual(index.rebuild().events.count, 2)
 
         // Both files grow on disk; only `a` is reported.
-        try append(to: urlA, lines: [assistantLine(hoursAgo: 1, inputTokens: 100), assistantLine(hoursAgo: 0.5, inputTokens: 101)])
-        try append(to: urlB, lines: [assistantLine(hoursAgo: 1, inputTokens: 200), assistantLine(hoursAgo: 0.5, inputTokens: 201)])
+        try rewrite(urlA, lines: [assistantLine(hoursAgo: 1, inputTokens: 100), assistantLine(hoursAgo: 0.5, inputTokens: 101)])
+        try rewrite(urlB, lines: [assistantLine(hoursAgo: 1, inputTokens: 200), assistantLine(hoursAgo: 0.5, inputTokens: 201)])
 
         counter.reset()
         let scoped = index.rebuild(changed: batch(change("a", flags: .modified)))
@@ -552,7 +552,7 @@ final class SessionCorpusIndexTests: XCTestCase {
         let index = makeIndex(clock: clock, counter: counter)
         XCTAssertEqual(index.rebuild().events.count, 2)
 
-        try append(to: urlB, lines: [assistantLine(hoursAgo: 1, inputTokens: 200), assistantLine(hoursAgo: 0.5, inputTokens: 201)])
+        try rewrite(urlB, lines: [assistantLine(hoursAgo: 1, inputTokens: 200), assistantLine(hoursAgo: 0.5, inputTokens: 201)])
 
         // The batch names only `a`, but the OS says its list is incomplete.
         counter.reset()
@@ -599,6 +599,34 @@ final class SessionCorpusIndexTests: XCTestCase {
         XCTAssertEqual(store.events.map(\.usage.inputTokens), [100], "the vanished project's events must go with it")
     }
 
+    /// The renamed half of the same fallback: `.renamed` alone (no `.removed`)
+    /// must also force a full scan, and the moved directory's files must still
+    /// turn up at their new path — a scoped rebuild given only the old path
+    /// would find nothing there to reparse and silently drop them.
+    func testRenamedProjectDirectoryForcesAFullScan() throws {
+        _ = try writeSession("a", lines: [assistantLine(hoursAgo: 1, inputTokens: 100)])
+        let otherProject = configDirectory.appendingPathComponent("projects/-tmp-other", isDirectory: true)
+        try FileManager.default.createDirectory(at: otherProject, withIntermediateDirectories: true)
+        try Data((assistantLine(hoursAgo: 1, inputTokens: 300) + "\n").utf8)
+            .write(to: otherProject.appendingPathComponent("c.jsonl"))
+
+        let clock = Clock(Self.referenceNow)
+        let index = makeIndex(clock: clock, counter: ParseCounter())
+        XCTAssertEqual(index.rebuild().events.count, 2)
+
+        let renamedProject = configDirectory.appendingPathComponent("projects/-tmp-renamed", isDirectory: true)
+        try FileManager.default.moveItem(at: otherProject, to: renamedProject)
+        // The batch names only the old path, flagged `.renamed` rather than
+        // `.removed` — a scoped rebuild would find nothing there to reparse.
+        let store = index.rebuild(changed: batch(
+            FileChange(path: otherProject.path, flags: [.renamed, .isDirectory])
+        ))
+        XCTAssertEqual(
+            store.events.map(\.usage.inputTokens).sorted(), [100, 300],
+            "the full scan must find the moved project's files at their new path"
+        )
+    }
+
     func testMetadataOnlyBatchReparsesNothing() throws {
         let urlA = try writeSession("a", lines: [assistantLine(hoursAgo: 1, inputTokens: 100)])
         let clock = Clock(Self.referenceNow)
@@ -608,7 +636,7 @@ final class SessionCorpusIndexTests: XCTestCase {
 
         // The bytes did change, but the batch only reports a metadata touch —
         // which carries no promise that contents moved, so it is not acted on.
-        try append(to: urlA, lines: [assistantLine(hoursAgo: 1, inputTokens: 100), assistantLine(hoursAgo: 0.5, inputTokens: 101)])
+        try rewrite(urlA, lines: [assistantLine(hoursAgo: 1, inputTokens: 100), assistantLine(hoursAgo: 0.5, inputTokens: 101)])
 
         counter.reset()
         let store = index.rebuild(changed: batch(change("a", flags: .metadata)))
@@ -662,7 +690,7 @@ final class SessionCorpusIndexTests: XCTestCase {
         XCTAssertEqual(index.rebuild().events.count, 1)
 
         // Symlink-resolved, the way the watcher would report it.
-        try append(to: urlA, lines: [assistantLine(hoursAgo: 1, inputTokens: 100), assistantLine(hoursAgo: 0.5, inputTokens: 101)])
+        try rewrite(urlA, lines: [assistantLine(hoursAgo: 1, inputTokens: 100), assistantLine(hoursAgo: 0.5, inputTokens: 101)])
         counter.reset()
         let resolved = index.rebuild(changed: batch(
             FileChange(path: resolvedProject + "/a.jsonl", flags: .modified)
@@ -671,7 +699,7 @@ final class SessionCorpusIndexTests: XCTestCase {
         XCTAssertEqual(resolved.events.count, 2, "one entry for the file, not two under two keys")
 
         // The unresolved spelling of the very same file.
-        try append(to: urlA, lines: [
+        try rewrite(urlA, lines: [
             assistantLine(hoursAgo: 1, inputTokens: 100),
             assistantLine(hoursAgo: 0.5, inputTokens: 101),
             assistantLine(hoursAgo: 0.25, inputTokens: 102),
@@ -682,6 +710,35 @@ final class SessionCorpusIndexTests: XCTestCase {
         XCTAssertEqual(declared.events.count, 3)
     }
 
+    /// The one case `projectsPrefixes()` cannot read off an existing cache key:
+    /// an empty corpus (nothing scanned yet) behind a symlinked config
+    /// directory. It falls back to the enumerator's measured behaviour rather
+    /// than a confirmed key — this pins that the very first scoped rebuild
+    /// after an empty full scan still reaches a brand-new file instead of
+    /// silently dropping it.
+    func testFirstScopedRebuildAfterAnEmptyCorpusStillFindsANewFile() throws {
+        let resolvedProject = ConfigDirectoryWatcher.resolvedPath(projectDirectory.path)
+        try XCTSkipIf(
+            resolvedProject == projectDirectory.path,
+            "temp directory is not behind a symlink on this machine — nothing to bridge"
+        )
+
+        let clock = Clock(Self.referenceNow)
+        let counter = ParseCounter()
+        let index = makeIndex(clock: clock, counter: counter)
+        // Nothing written yet, so `orderedPaths.first` is nil and
+        // `projectsPrefixes()` must use its fallback guess.
+        XCTAssertEqual(index.rebuild().events.count, 0)
+
+        _ = try writeSession("a", lines: [assistantLine(hoursAgo: 1, inputTokens: 100)])
+        counter.reset()
+        let store = index.rebuild(changed: batch(
+            FileChange(path: resolvedProject + "/a.jsonl", flags: .created)
+        ))
+        XCTAssertEqual(counter.parsedPaths, ["a.jsonl"], "the empty-corpus fallback must still map the watcher's resolved path onto the corpus")
+        XCTAssertEqual(store.events.count, 1)
+    }
+
     func testBatchPathsOutsideTheCorpusAreIgnored() throws {
         let urlA = try writeSession("a", lines: [assistantLine(hoursAgo: 1, inputTokens: 100)])
         let clock = Clock(Self.referenceNow)
@@ -689,7 +746,7 @@ final class SessionCorpusIndexTests: XCTestCase {
         let index = makeIndex(clock: clock, counter: counter)
         XCTAssertEqual(index.rebuild().events.count, 1)
 
-        try append(to: urlA, lines: [assistantLine(hoursAgo: 1, inputTokens: 100), assistantLine(hoursAgo: 0.5, inputTokens: 101)])
+        try rewrite(urlA, lines: [assistantLine(hoursAgo: 1, inputTokens: 100), assistantLine(hoursAgo: 0.5, inputTokens: 101)])
 
         // A sibling directory whose name merely starts the same, and an
         // unrelated root: neither is this corpus.
