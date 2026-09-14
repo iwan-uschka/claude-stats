@@ -77,8 +77,9 @@ public struct UsageEvent: Sendable, Hashable {
 
     /// Mapped `entrypoint`. `nil` when the field is absent or holds a value
     /// this version doesn't know (forward compatibility — unknown sources are
-    /// excluded from ``EntrypointBreakdown`` but still counted in token, cost,
-    /// and burn-rate totals).
+    /// excluded from ``EntrypointBreakdown`` but still counted in token and
+    /// cost totals, and carried as their own `nil` bucket by
+    /// ``DailyUsageHistory/bySource``).
     public let entrypoint: Entrypoint?
 
     /// Raw `message.model`, e.g. `claude-sonnet-5`. `nil` when absent.

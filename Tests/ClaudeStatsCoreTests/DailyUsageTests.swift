@@ -159,22 +159,48 @@ final class DailyUsageTests: XCTestCase {
         XCTAssertEqual(tokens(history.bySource[.cli]), [100, 0])
         XCTAssertEqual(tokens(history.bySource[.vscode]), [0, 0])
         XCTAssertEqual(tokens(history.bySource[.sdkAgent]), [0, 300])
+        // No "Other" band over nothing: every event here carries an entrypoint
+        // this version knows, so the bucket is absent rather than all-zero.
+        XCTAssertNil(history.bySource[Entrypoint?.none])
     }
 
-    func testUnknownEntrypointCountsInTotalButInNoSourceSeries() throws {
+    func testUnrecognisedEntrypointsGetTheirOwnOtherSeries() throws {
         let store = makeStore(events: [
-            try event("2026-07-15T09:00:00.000Z", tokens: 100, entrypoint: .cli),
+            try event("2026-07-14T09:00:00.000Z", tokens: 100, entrypoint: .cli),
             try event("2026-07-15T10:00:00.000Z", tokens: 900, entrypoint: nil),
         ])
 
         let history = try store.dailyUsage(days: 30)
 
-        XCTAssertEqual(tokens(history.total), [1_000])
-        XCTAssertEqual(
-            Entrypoint.allCases.reduce(0) { $0 + (history.bySource[$1]?.first?.totalTokens ?? 0) },
-            100,
-            "an unrecognised source must not silently join a known row"
-        )
+        // The `nil` key is the same bucket `byModelFamily` gives an
+        // unrecognised model ID: the tokens are real, only the label is
+        // missing, and dropping them made a stacked chart of the sources fall
+        // short of the total drawn beside it.
+        XCTAssertEqual(tokens(history.bySource[Entrypoint?.none]), [0, 900])
+        XCTAssertEqual(tokens(history.bySource[.cli]), [100, 0])
+        XCTAssertEqual(Set(history.bySource.keys), Set(Entrypoint.allCases.map { $0 } + [nil]))
+    }
+
+    func testEverySourceSeriesTogetherSumsToTheTotalOnEveryDay() throws {
+        let store = makeStore(events: [
+            try event("2026-07-14T09:00:00.000Z", tokens: 100, entrypoint: .cli),
+            try event("2026-07-14T10:00:00.000Z", tokens: 40, entrypoint: nil),
+            try event("2026-07-15T09:00:00.000Z", tokens: 300, entrypoint: .sdkAgent),
+            try event("2026-07-15T10:00:00.000Z", tokens: 900, entrypoint: nil),
+        ])
+
+        let history = try store.dailyUsage(days: 30)
+
+        // The invariant the "Other" bucket exists for: the bands of the source
+        // chart reach exactly the height the cost chart's day does, so a total
+        // may be drawn over the stack.
+        for (index, point) in history.total.enumerated() {
+            XCTAssertEqual(
+                history.bySource.values.reduce(0) { $0 + $1[index].totalTokens },
+                point.totalTokens,
+                "day \(point.day)"
+            )
+        }
     }
 
     func testModelSeriesCoverEveryTokenIncludingUnknownIDs() throws {
@@ -331,6 +357,60 @@ final class DailyUsageTests: XCTestCase {
 
         XCTAssertTrue(DailyUsageTotals.countsTowardsDailyHistory(real))
         XCTAssertFalse(DailyUsageTotals.countsTowardsDailyHistory(synthetic))
+    }
+
+    // MARK: - Summing a series
+
+    func testSummingASeriesAddsUpItsTokensAndItsCost() throws {
+        let store = makeStore(events: [
+            UsageEvent(
+                timestamp: try date("2026-07-14T09:00:00.000Z"),
+                entrypoint: .cli,
+                modelID: "claude-sonnet-5",
+                usage: TokenUsage(inputTokens: 1_000_000, outputTokens: 2_000)
+            ),
+            UsageEvent(
+                timestamp: try date("2026-07-15T09:00:00.000Z"),
+                entrypoint: .cli,
+                modelID: "claude-sonnet-5",
+                usage: TokenUsage(inputTokens: 500_000, cacheReadInputTokens: 7)
+            ),
+        ])
+        let history = try store.dailyUsage(days: 30)
+
+        // What a table under a 30-day chart reads out for one band: the window's
+        // whole reading, split kept, not just a token count.
+        let summed = history.total.summed()
+        XCTAssertEqual(summed.usage.inputTokens, 1_500_000)
+        XCTAssertEqual(summed.usage.outputTokens, 2_000)
+        XCTAssertEqual(summed.usage.cacheReadInputTokens, 7)
+        XCTAssertEqual(summed.usage.totalTokens, history.total.reduce(0) { $0 + $1.totalTokens })
+        XCTAssertEqual(
+            summed.estimatedCostUSD,
+            history.total.reduce(0) { $0 + $1.estimatedCostUSD },
+            accuracy: 0.000_001
+        )
+        XCTAssertGreaterThan(summed.estimatedCostUSD, 0)
+    }
+
+    func testSummingAnEmptySeriesIsTheZeroReading() {
+        // The state a table renders while a band has no points at all — a row
+        // of zeroes, never a crash and never a missing row.
+        let summed = [DailyUsagePoint]().summed()
+
+        XCTAssertEqual(summed.usage, .zero)
+        XCTAssertEqual(summed.estimatedCostUSD, 0)
+    }
+
+    func testSummingASliceOfASeriesCoversOnlyThatSlice() throws {
+        let store = makeStore(events: [
+            try event("2026-07-13T09:00:00.000Z", tokens: 100),
+            try event("2026-07-14T09:00:00.000Z", tokens: 20),
+            try event("2026-07-15T09:00:00.000Z", tokens: 3),
+        ])
+        let history = try store.dailyUsage(days: 30)
+
+        XCTAssertEqual(history.total.suffix(2).summed().usage.totalTokens, 23)
     }
 
     // MARK: - Day resolver

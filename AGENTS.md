@@ -362,6 +362,19 @@ Two independent tiers, deliberately decoupled:
      point, never a gap, or a line chart connects across it and draws usage
      that never happened — and the window is **shortened, never zero-padded**,
      when the corpus is younger than it was asked for.
+   - **Neither split drops anything.** `DailyUsageHistory.bySource` and
+     `.byModelFamily` are both keyed by an *optional* — `nil` for an
+     `entrypoint` or a model ID this version doesn't recognise — so either set
+     of series sums to `total` and a stack of them may be drawn against it.
+     `bySource` is additionally dense over `Entrypoint.allCases` (a silent
+     source is a `0` row the popover shows), while the `nil` key of either is
+     present **only** when such usage exists, so the chart's "Other" band never
+     appears over nothing. `bySource` used to drop unrecognised entrypoints, the
+     rule `EntrypointBreakdown` (the 5h numbers) still follows; that is why the
+     source stack fell short of the total beside it.
+   - `[DailyUsagePoint].summed()` folds a series back into one
+     `DailyUsageTotals` — the whole-window reading a table under a chart shows,
+     tokens split and cost, without a second pass over the corpus.
    - A cell carries **tokens and cost**, which is why "Estimated cost" could be
      added as a pure UI change: the spend was already in the buckets. Keep it
      that way — a second accumulation for a second chart would mean a second
@@ -614,6 +627,19 @@ Tokens by source
                                     split, which is where the table's per-cell
                                     tooltip went.
 
+                                    A window holding usage from an `entrypoint`
+                                    this version doesn't recognise grows a
+                                    fourth band, **"Other", last, i.e. on top**
+                                    — so the bands sum to the day's total, the
+                                    way the model split always has. Only when
+                                    there is such usage: a bucket that can
+                                    appear between two polls goes on top so it
+                                    never shuffles the named bands under it.
+                                    Its chip reads `—` at rest, not `0`: the
+                                    five-hour `EntrypointBreakdown` still drops
+                                    those events, so there is no number to show
+                                    until the pointer puts the chip on a day.
+
                                     Both axes are drawn, sparsely: without a
                                     y-axis the bands show shape but no
                                     magnitude, and without dated x-ticks a spike
@@ -730,6 +756,19 @@ Tokens by source
                                     shows that source's full five-hour token
                                     split, which is where the table's per-cell
                                     tooltip went.
+
+                                    A window holding usage from an `entrypoint`
+                                    this version doesn't recognise grows a
+                                    fourth band, **"Other", last, i.e. on top**
+                                    — so the bands sum to the day's total, the
+                                    way the model split always has. Only when
+                                    there is such usage: a bucket that can
+                                    appear between two polls goes on top so it
+                                    never shuffles the named bands under it.
+                                    Its chip reads `—` at rest, not `0`: the
+                                    five-hour `EntrypointBreakdown` still drops
+                                    those events, so there is no number to show
+                                    until the pointer puts the chip on a day.
 
                                     Both axes are drawn, sparsely: without a
                                     y-axis the bands show shape but no

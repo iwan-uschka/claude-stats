@@ -589,14 +589,17 @@ struct PopoverView: View {
     /// that claim — no floating tooltip over a 72 pt plot, and no second
     /// styling vocabulary.
     ///
-    /// Zipped against ``Entrypoint/displayOrder`` because
-    /// ``DailyUsageSeries/sources(from:)`` builds the bands in exactly that
-    /// order — pinned by a test, since the chip's number comes from the
-    /// entrypoint while its swatch comes from the band.
+    /// Zipped against ``DailyUsageSeries/sourceKeys(in:)`` rather than against
+    /// ``Entrypoint/displayOrder``: the bands carry a trailing "Other" whenever
+    /// the window holds usage from an entrypoint this version doesn't know, and
+    /// zipping against the three known ones would drop that chip while leaving
+    /// its band in the chart. Pinned by a test, since a chip's number comes
+    /// from the entrypoint while its swatch comes from the band.
     private var sourceLegend: some View {
         let hovered = hoveredSourceIndex
+        let keys = DailyUsageSeries.sourceKeys(in: model.dailyHistory)
         return HStack(spacing: 0) {
-            ForEach(Array(zip(Entrypoint.displayOrder, sourceSeries).enumerated()), id: \.offset) { index, pair in
+            ForEach(Array(zip(keys, sourceSeries).enumerated()), id: \.offset) { index, pair in
                 if index > 0 { Spacer(minLength: PopoverMetrics.rowSpacing) }
                 legendChip(entrypoint: pair.0, band: pair.1, hoveredIndex: hovered)
             }
@@ -619,20 +622,26 @@ struct PopoverView: View {
         return PopoverChartHover.label(for: model.dailyHistory.days[hoveredIndex])
     }
 
-    private func legendChip(entrypoint: Entrypoint, band: DailyUsageSeries, hoveredIndex: Int?) -> some View {
+    private func legendChip(entrypoint: Entrypoint?, band: DailyUsageSeries, hoveredIndex: Int?) -> some View {
         // A band is dense over the window, but `hoveredIndex` is resolved
         // against `days`, so guard the subscript rather than trusting the two
         // to have the same length.
         let hoveredPoint = hoveredIndex.flatMap { $0 < band.points.count ? band.points[$0] : nil }
-        let usage = hoveredPoint?.usage ?? breakdown(for: .fiveHour).usage(for: entrypoint)
+        // `nil` for the "Other" band at rest: ``EntrypointBreakdown`` still
+        // drops events whose entrypoint this version doesn't recognise, so
+        // there is no five-hour number for that band — an em dash, the
+        // popover's own "no reading", rather than a `0` contradicting the band
+        // in the chart above it. Hovering does give it a real number: the daily
+        // series carries those events.
+        let usage = hoveredPoint?.usage ?? entrypoint.map { breakdown(for: .fiveHour).usage(for: $0) }
         let window = sourceWindowLabel(hoveredIndex: hoveredIndex)
         return HStack(spacing: PopoverMetrics.legendSwatchSpacing) {
             Circle()
                 .fill(band.color)
                 .frame(width: PopoverMetrics.legendSwatchSize, height: PopoverMetrics.legendSwatchSize)
-            Text(entrypoint.displayName)
+            Text(band.label)
                 .font(PopoverMetrics.bodyFont)
-            Text(DisplayFormat.tokens(usage.totalTokens))
+            Text(usage.map { DisplayFormat.tokens($0.totalTokens) } ?? "—")
                 .font(PopoverMetrics.valueFont)
                 // Reserved only while hovering — see
                 // ``PopoverMetrics/legendTokenColumnWidth``. At rest the row is
@@ -646,12 +655,13 @@ struct PopoverView: View {
         // One element per source, like the table's cells: a bare "298.5M"
         // announced on its own says neither which source nor which window.
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(entrypoint.displayName), \(window)")
-        .accessibilityValue(DisplayFormat.tokens(usage.totalTokens))
+        .accessibilityLabel("\(band.label), \(window)")
+        .accessibilityValue(usage.map { DisplayFormat.tokens($0.totalTokens) } ?? "no reading")
         // The full input/output/cache split lived on the table's cells; it
         // moves here rather than being dropped — and it has to follow the chip
         // onto the hovered day, or tooltip and chip disagree on screen.
-        .help(DisplayFormat.tokenSplit(usage))
+        .help(usage.map(DisplayFormat.tokenSplit)
+            ?? "Sources this version of Claude Stats doesn't recognise. They are charted, but the five-hour breakdown doesn't carry them.")
     }
 
     /// The breakdown for one window, or an all-zero one before the first

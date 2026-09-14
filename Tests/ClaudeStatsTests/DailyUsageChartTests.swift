@@ -16,8 +16,20 @@ final class DailyUsageChartTests: XCTestCase {
     }()
 
     /// Three days of usage, CLI and SDK only — VS Code deliberately silent.
-    private func makeHistory() throws -> DailyUsageHistory {
+    ///
+    /// `unrecognisedSourceTokens` adds a fourth event on the last day whose
+    /// `entrypoint` this version doesn't know, which is what the history buckets
+    /// under `nil` and the chart draws as "Other".
+    private func makeHistory(unrecognisedSourceTokens: Int = 0) throws -> DailyUsageHistory {
         let now = Self.referenceNow
+        let unrecognised: [UsageEvent] = unrecognisedSourceTokens == 0 ? [] : [
+            UsageEvent(
+                timestamp: try XCTUnwrap(SessionLogParser.parseTimestamp("2026-07-15T10:00:00.000Z")),
+                entrypoint: nil,
+                modelID: "claude-sonnet-5",
+                usage: TokenUsage(inputTokens: unrecognisedSourceTokens)
+            )
+        ]
         let store = LocalLogUsageStore(
             events: [
                 UsageEvent(
@@ -40,7 +52,7 @@ final class DailyUsageChartTests: XCTestCase {
                     modelID: "claude-opus-5",
                     usage: TokenUsage(inputTokens: 700)
                 ),
-            ],
+            ] + unrecognised,
             calendar: Self.utcCalendar,
             now: { now }
         )
@@ -55,6 +67,42 @@ final class DailyUsageChartTests: XCTestCase {
         // The legend zips these bands against `Entrypoint.displayOrder` to pair
         // each swatch with its five-hour number, so the orders must match.
         XCTAssertEqual(series.map(\.label), Entrypoint.displayOrder.map(\.displayName))
+    }
+
+    func testTheOtherBandComesLastAndOnlyWhenThereIsOtherUsage() throws {
+        let plain = try makeHistory()
+        XCTAssertEqual(DailyUsageSeries.sourceKeys(in: plain), Entrypoint.displayOrder.map { $0 })
+        XCTAssertFalse(DailyUsageSeries.sources(from: plain).contains { $0.label == DailyUsageSeries.otherSourceLabel })
+
+        let history = try makeHistory(unrecognisedSourceTokens: 500)
+        let series = DailyUsageSeries.sources(from: history)
+
+        // Last, i.e. the top of the stack: the named sources are what a reader
+        // is looking for, and a bucket that can appear between two polls must
+        // not shuffle the bands under it when it does.
+        XCTAssertEqual(
+            series.map(\.label),
+            Entrypoint.displayOrder.map(\.displayName) + [DailyUsageSeries.otherSourceLabel]
+        )
+        XCTAssertEqual(DailyUsageSeries.sourceKeys(in: history), Entrypoint.displayOrder.map { $0 } + [nil])
+        XCTAssertEqual(series.last?.points.map(\.totalTokens).reduce(0, +), 500)
+        XCTAssertEqual(series.last?.color, DailyUsageSeries.bandColor(3))
+    }
+
+    /// The legend pairs each chip's five-hour number with a band's swatch by
+    /// zipping these two lists, so a mismatch in either direction mislabels a
+    /// colour — which is the whole point of the swatch.
+    func testTheKeysAndTheBandsLineUpInBothShapesOfTheWindow() throws {
+        for history in [try makeHistory(), try makeHistory(unrecognisedSourceTokens: 500)] {
+            let keys = DailyUsageSeries.sourceKeys(in: history)
+            let series = DailyUsageSeries.sources(from: history)
+
+            XCTAssertEqual(keys.count, series.count)
+            XCTAssertEqual(
+                zip(keys, series).map { $0.0?.displayName ?? DailyUsageSeries.otherSourceLabel },
+                series.map(\.label)
+            )
+        }
     }
 
     func testSilentSourceStillGetsABand() throws {

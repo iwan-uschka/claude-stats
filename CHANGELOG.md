@@ -13,6 +13,9 @@
   readings shown below the current one.
 
 ### Changed
+- The "Tokens by source" chart now has an "Other" band for usage from an
+  entrypoint this version doesn't recognise, so the stacked sources add up to
+  the day's total instead of quietly falling short of it.
 - The app now has a single colour, Claude's terracotta: the warning, error and
   sample-data lines, the account markers, the Claude mark in the popover header
   and the menu bar's dev-build dot no longer use orange or red, and the charts'

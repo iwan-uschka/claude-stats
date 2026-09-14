@@ -32,12 +32,32 @@ struct DailyUsageSeries: Identifiable, Hashable {
         PopoverMetrics.chartBandColors[Swift.min(index, PopoverMetrics.chartBandColors.count - 1)]
     }
 
-    /// Ordered bands for the "Tokens by source" chart: display order, strongest
-    /// band first, including sources that did nothing in the window.
+    /// Label for the band carrying sources this version doesn't recognise.
+    static let otherSourceLabel = "Other"
+
+    /// The sources the chart bands stand for, in stack order: display order,
+    /// then the unrecognised bucket — `nil` — when the window has one.
+    ///
+    /// "Other" goes last, i.e. on top of the stack, for the reason it goes last
+    /// in the "Costs by model" rows: the named sources are what a reader is
+    /// looking for, and a bucket that can appear and vanish between two polls
+    /// must not shuffle the bands under it when it does.
+    ///
+    /// Published separately from ``sources(from:)`` because the legend needs
+    /// the entrypoint *and* the band, and zipping the band list against
+    /// ``Entrypoint/displayOrder`` silently drops whichever of the two is
+    /// shorter — which is exactly what an "Other" band makes them.
+    static func sourceKeys(in history: DailyUsageHistory) -> [Entrypoint?] {
+        let known: [Entrypoint?] = Entrypoint.displayOrder.map { $0 }
+        return history.bySource[Entrypoint?.none] == nil ? known : known + [nil]
+    }
+
+    /// Ordered bands for the "Tokens by source" chart: ``sourceKeys(in:)``,
+    /// strongest shade first, including sources that did nothing in the window.
     static func sources(from history: DailyUsageHistory) -> [DailyUsageSeries] {
-        Entrypoint.displayOrder.enumerated().map { index, entrypoint in
+        sourceKeys(in: history).enumerated().map { index, entrypoint in
             DailyUsageSeries(
-                label: entrypoint.displayName,
+                label: entrypoint?.displayName ?? otherSourceLabel,
                 color: bandColor(index),
                 points: history.bySource[entrypoint] ?? []
             )

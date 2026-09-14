@@ -433,8 +433,11 @@ public struct MockUsageStore: UsageStoring {
         return DailyUsageHistory(
             days: axis,
             total: series(share: 1.0),
+            // No `nil` key: the fixture's events all carry an entrypoint this
+            // version knows, and an empty "Other" band in the preview would be
+            // a band the real popover wouldn't draw.
             bySource: Dictionary(uniqueKeysWithValues: Entrypoint.allCases.map {
-                ($0, series(share: sourceShare[$0] ?? 0))
+                (Entrypoint?.some($0), series(share: sourceShare[$0] ?? 0))
             }),
             byModelFamily: Dictionary(uniqueKeysWithValues: modelShare.map { family, share in
                 (family, series(share: share))

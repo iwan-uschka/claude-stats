@@ -333,13 +333,16 @@ public struct LocalLogUsageStore: UsageStoring {
         }
 
         var totalByDay: [Date: DailyUsageTotals] = [:]
-        var sourceByDay: [Entrypoint: [Date: DailyUsageTotals]] = [:]
+        var sourceByDay: [Entrypoint?: [Date: DailyUsageTotals]] = [:]
         var familyByDay: [ModelFamily?: [Date: DailyUsageTotals]] = [:]
         for (cell, totals) in cells {
             totalByDay[cell.day, default: DailyUsageTotals()].merge(totals)
-            if let entrypoint = cell.entrypoint {
-                sourceByDay[entrypoint, default: [:]][cell.day, default: DailyUsageTotals()].merge(totals)
-            }
+            // An `entrypoint` this version doesn't recognise keeps its tokens,
+            // under the `nil` key — the model split has always worked that way,
+            // and dropping them here made the source series quietly sum to less
+            // than `total`, which a stacked chart draws as usage that isn't
+            // there.
+            sourceByDay[cell.entrypoint, default: [:]][cell.day, default: DailyUsageTotals()].merge(totals)
             let family = cell.modelID.flatMap(ModelFamily.inferred(fromModelID:))
             familyByDay[family, default: [:]][cell.day, default: DailyUsageTotals()].merge(totals)
         }
@@ -351,11 +354,20 @@ public struct LocalLogUsageStore: UsageStoring {
             }
         }
 
+        // Dense over every known source, including ones that did nothing — but
+        // the unrecognised bucket only when it has something in it, so the
+        // popover's "Other" band appears exactly when there is other usage.
+        var bySource: [Entrypoint?: [DailyUsagePoint]] = Dictionary(
+            uniqueKeysWithValues: Entrypoint.allCases.map { ($0, series(sourceByDay[$0] ?? [:])) }
+        )
+        if let unrecognised = sourceByDay[Entrypoint?.none] {
+            bySource[Entrypoint?.none] = series(unrecognised)
+        }
+
         return DailyUsageHistory(
             days: axis,
             total: series(totalByDay),
-            // Dense over every known source, including ones that did nothing.
-            bySource: Dictionary(uniqueKeysWithValues: Entrypoint.allCases.map { ($0, series(sourceByDay[$0] ?? [:])) }),
+            bySource: bySource,
             byModelFamily: familyByDay.mapValues(series)
         )
     }

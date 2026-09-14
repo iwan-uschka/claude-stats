@@ -145,23 +145,24 @@ public struct DailyUsageHistory: Sendable, Hashable {
     /// nothing in the window is present with all-zero points, because "VS Code:
     /// 0" is a reading the popover shows rather than a row it drops.
     ///
-    /// Events whose `entrypoint` this version doesn't recognise are left out,
-    /// the same rule ``EntrypointBreakdown`` follows, so these series do **not**
-    /// necessarily sum to ``total``. Don't draw a total line over a source
-    /// stack.
-    public let bySource: [Entrypoint: [DailyUsagePoint]]
+    /// Plus the `nil` key when events this version doesn't recognise the
+    /// `entrypoint` of contributed, exactly as ``byModelFamily`` handles an
+    /// unrecognised model ID — present only when it has something in it, so an
+    /// "Other" band never appears over nothing. Nothing is dropped, so these
+    /// series *do* sum to ``total``.
+    public let bySource: [Entrypoint?: [DailyUsagePoint]]
 
     /// Per model family, carrying only families that appear in the window, plus
     /// the `nil` key when unrecognised model IDs contributed.
     ///
-    /// Unlike ``bySource`` nothing is dropped here, so these series *do* sum to
+    /// Like ``bySource`` nothing is dropped here, so these series sum to
     /// ``total`` and a stacked chart of them is honest.
     public let byModelFamily: [ModelFamily?: [DailyUsagePoint]]
 
     public init(
         days: [Date],
         total: [DailyUsagePoint],
-        bySource: [Entrypoint: [DailyUsagePoint]],
+        bySource: [Entrypoint?: [DailyUsagePoint]],
         byModelFamily: [ModelFamily?: [DailyUsagePoint]]
     ) {
         self.days = days
@@ -173,4 +174,19 @@ public struct DailyUsageHistory: Sendable, Hashable {
     public var isEmpty: Bool { days.isEmpty }
 
     public static let empty = DailyUsageHistory(days: [], total: [], bySource: [:], byModelFamily: [:])
+}
+
+public extension Sequence where Element == DailyUsagePoint {
+    /// Tokens and estimated cost over the whole series — what a table under a
+    /// 30-day chart reads out for one band.
+    ///
+    /// ``DailyUsageTotals`` rather than a new pair type: it already *is*
+    /// "tokens plus estimated cost", it is what the cells these points are
+    /// built from carry, and a second value with the same two fields would only
+    /// need converting at the boundary between them.
+    func summed() -> DailyUsageTotals {
+        reduce(into: DailyUsageTotals()) { total, point in
+            total.merge(DailyUsageTotals(usage: point.usage, estimatedCostUSD: point.estimatedCostUSD))
+        }
+    }
 }
