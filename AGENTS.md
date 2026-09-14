@@ -30,7 +30,7 @@ Two independent tiers, deliberately decoupled:
 1. **Local log parsing (primary, always-on, zero auth).** Parse Claude Code's
    session JSONL under `~/.claude` (or `$CLAUDE_CONFIG_DIR`) —
    `~/.claude/projects/*/*.jsonl`. `~/.config/claude` is NOT consulted. Gives: token counts, cost math (per-model
-   pricing), burn rate, and a source breakdown via the `entrypoint` field
+   pricing), and a source breakdown via the `entrypoint` field
    already present on each line — confirmed values on this machine: `cli`,
    `claude-vscode`, `sdk-cli` (Agent SDK / subagents / workflows / headless
    `-p` runs). Only sees sessions whose JSONL lives on this Mac's disk.
@@ -62,7 +62,11 @@ Two independent tiers, deliberately decoupled:
      - **Identity comes from `~/.claude.json`'s `oauthAccount`**
        (`accountUuid`, `emailAddress`, `organizationName`, `organizationUuid`)
        — modelled as `Models/QuotaAccount.swift`, display name
-       `organizationName ?? email ?? short uuid`. The helper script copies it
+       `email ?? organizationName ?? short uuid`. **Email leads**: for a
+       personal account Anthropic auto-names the organisation
+       `"<email>'s Organization"`, so the org name is the email with noise
+       appended, and the email is what the user recognises and logged in with.
+       A real, chosen organisation name still shows when there is no email. The helper script copies it
        into every cache file it writes as a top-level `account` object;
        `ActiveAccountReader` reads the same key for "who is logged in **now**",
        behind the same fingerprint gate as the promo reader (no FSEvents on
@@ -100,9 +104,33 @@ Two independent tiers, deliberately decoupled:
        windows. Readings with no `seven_day` are never dropped (nothing to
        compare), and with no cached reference everything is accepted.
      - **Every other account's readings are still carried**, through
-       `QuotaProviding.otherAccountSnapshots()` — decoration below the active
+       `QuotaProviding.otherAccountSnapshots()` — listed below the active
        account's rows, never gated on staleness, never an error, and left out
-       entirely for a group whose windows have all rolled over. The state file
+       entirely for a group whose windows have all rolled over. Each group
+       **starts collapsed**: the closed row is a cross icon
+       (`xmark.circle.fill`, in the row's own ink and no colour of its own —
+       see "Colour"), the account name, and a trailing
+       caret, with no summary number (a percentage there would be about an
+       account the glyph and the bars above aren't describing). The whole row
+       is a single plain `Button`, not a `DisclosureGroup` — clicking anywhere
+       on it reveals exactly the rows below. The caret shows the **action, not
+       the state**: `chevron.down` while closed (click to reveal), `chevron.up`
+       while open (click to collapse), in the row's own ink. The row is set in
+       `PopoverMetrics.sectionTitleFont` like the active account's title row,
+       but in secondary ink — same weight, one step dimmer — so the accounts
+       read as one list while the dimmer one is visibly not the account the
+       bars describe. The active account's own section title takes the
+       matching checkmark (`checkmark.circle.fill`, the icon Settings uses next
+       to "Statusline hook installed"), monochrome like the cross —
+       the two differ by shape alone, never green against red and never
+       terracotta, because "inactive" is a state and not a fault and a
+       marker is not a reading — and only while such a
+       group exists (`AppModel.showsAccountStateMarkers`) — with nothing to
+       contrast against, the bare account name reads better. Which groups are open lives in
+       `AppModel.expandedOtherAccounts` (keyed by account uuid, `"unknown"` for
+       the unstamped group), so it survives the popover closing and the rows
+       being rebuilt by a poll — and is not persisted across launches, since
+       the set of other accounts isn't either. The state file
        naming an account that has *no* readings anywhere is "no reading" for
        that account (both windows `nil`), not an error and not somebody else's
        numbers; with nothing on disk for any account the old
@@ -163,8 +191,8 @@ Two independent tiers, deliberately decoupled:
          off at any time). No credits means no popover row and no fourth glyph
          bar — no placeholder, nothing in `activeErrors`, no warning. The only
          thing ever surfaced about their absence is `disabled_reason`, carried
-         as `usageCreditsDisabledReason` and shown as a tooltip on the freshness
-         tag.
+         as `usageCreditsDisabledReason` and appended to the quota title's
+         tooltip (and to an inactive account's row tooltip).
        - **Money is formatted from the payload's own `currency` and
          `exponent`** via `DisplayFormat.money(_:locale:)` — never a hardcoded
          symbol, never a hardcoded `/100`, since a zero-decimal currency reports
@@ -272,7 +300,7 @@ Two independent tiers, deliberately decoupled:
      `cachedGrowthBookFeatures.tengu_rate_limit_promo_notices` holds the promo
      line the CLI renders above its own weekly bar (`{ bar, text, variant }`), and
      `cachedGrowthBookFeaturesAt` says when GrowthBook last served it. We
-     render it under the matching bar — see
+     render it below the quota bars, in bar order — see
      `Sources/ClaudeStatsCore/Quota/RateLimitPromoNoticeReader.swift`.
      Everything about this path is best-effort: it is another program's private
      state, so absent / unreadable / malformed / stale all mean "no promo" and
@@ -311,15 +339,54 @@ Two independent tiers, deliberately decoupled:
 3. Refresh via `FSEventStream` (CoreServices) watching the config dir tree —
    not polling. Kernel wakes the app only on write; debounce bursts; reparse
    only changed files, not a full rescan.
-4. Plan tier (Pro / Max5 / Max20) auto-detected: known thresholds
-   (~19k / ~88k / ~220k tokens per 5h window) plus P90 of the last 8 days of
-   local history as a fallback for custom/unclear tiers.
-5. **Retention window.** `SessionCorpusIndex` keeps individual `UsageEvent`s
-   only for the last `defaultRetention` (8 days = `planDetectionHistoryDays`);
+4. **Retention window.** `SessionCorpusIndex` keeps individual `UsageEvent`s
+   only for the last `defaultRetention` (8 days = `localHistoryDays`);
    older events fold into per-model `HistoricalModelUsage` totals that only
    `modelUsage(last24h: false)` reads back. Any new per-event query — a new
    `TimeWindow` case, a longer heuristic — must fit inside that window, or
    raise `defaultRetention` first.
+   - **The same fold also buckets by day**, into `DailyUsageCell` →
+     `DailyUsageTotals` (`Models/DailyUsage.swift`) keyed by
+     `(local day, raw model ID, entrypoint)`. That is what lets
+     `LocalLogUsageStore.dailyUsage(days:)` chart 30 days without retention
+     being raised: it is not a per-event query, so the rule above does not
+     apply to it. It reads the folded cells for old days and the retained
+     events for recent ones, exactly the two-halves split
+     `modelUsage(last24h: false)` already uses — the halves never overlap,
+     because the fold moves events rather than copying them.
+   - Both accumulations are filled in one pass, so neither costs extra I/O;
+     the parse already happens. `HistoricalModelUsage` stays alongside the
+     cells rather than being derived from them because it carries a
+     `latestTimestamp` per model for `modelUsage`'s "newest raw ID wins" rule,
+     which day-resolution cells could only approximate.
+   - Series come back **dense** — an idle day inside the window is a zero
+     point, never a gap, or a line chart connects across it and draws usage
+     that never happened — and the window is **shortened, never zero-padded**,
+     when the corpus is younger than it was asked for.
+   - **Neither split drops anything.** `DailyUsageHistory.bySource` and
+     `.byModelFamily` are both keyed by an *optional* — `nil` for an
+     `entrypoint` or a model ID this version doesn't recognise — so either set
+     of series sums to `total` and a stack of them may be drawn against it.
+     `bySource` is additionally dense over `Entrypoint.allCases` (a silent
+     source is a `0` row the popover shows), while the `nil` key of either is
+     present **only** when such usage exists, so the chart's "Other" band never
+     appears over nothing. `bySource` used to drop unrecognised entrypoints, the
+     rule `EntrypointBreakdown` still follows; that is why the source stack once
+     fell short of the total beside it. Nothing in the UI reads that breakdown
+     any more — see the popover mock — so the rule now survives only inside the
+     data layer's own query.
+   - `[DailyUsagePoint].summed()` folds a series back into one
+     `DailyUsageTotals` — the whole-window reading a table under a chart shows,
+     tokens split and cost, without a second pass over the corpus.
+   - A cell carries **tokens and cost**, which is why the popover can stack
+     spend and why both of its tables show tokens *and* money without a second
+     accumulation: it was already in the buckets. Keep it that way — a second
+     pass over the corpus is what this shape exists to avoid. It is also what
+     let one `dailyUsage(days:)` replace the three windowed queries the popover
+     used to make per reload (`entrypointBreakdown`, `modelUsage(last24h:)`,
+     `estimatedCostToday()`), each of which walked tens of thousands of
+     `UsageEvent`s on the main actor. All three are still on `UsageStoring`; no
+     view calls them.
 
 ### Explicit non-goals (v1)
 
@@ -333,6 +400,81 @@ Two independent tiers, deliberately decoupled:
   breaks out separately.
 
 ## UI
+
+### Colour
+
+**One colour, and it is Claude's terracotta.** Everything else is ink —
+primary, secondary, the system's own control colours. The brand colour is
+`PopoverMetrics.brandColor`, a per-appearance `NSColor` (`#A85E3E` light,
+`#E88A5C` dark; one literal for both measured 3.17:1 on a light card, under the
+4.5:1 AA floor for caption-size text). It is what paints the promo link, the
+Claude mark in the popover header, **the filled part of every quota bar**, the
+staleness warning, the sample-data line, the error lines, and the menu bar's
+dev-build dot. There is no second alert hue: `.orange` for a warning, `.red` for
+an error and terracotta for a link put three colours on a card whose vocabulary
+is "Claude" versus "ink", and the words already say which of the three a line
+is.
+
+**The quota bars are terracotta at rest, and that is their only state.** They
+are the card's headline reading, so they take the app's colour rather than the
+grey their labels are set in; the unfilled track stays `Color.primary` at 0.12,
+because the unused part of a bar is absence and not a second reading. There is
+deliberately **no over-budget or stale tint**: the resting fill is already the
+ink a warning line is set in, so a bar that turned terracotta to raise an alarm
+would be indistinguishable from every other bar on the card. Staleness is
+carried by `AppModel.quotaWarning`'s own line of text and over-budget by the
+percentage reading past 100%. The usage-credits bar keeps its hatch — the
+geometry is what marks it as a different kind of measurement — and took the same
+ink as the rest, since a grey hatched bar under three terracotta ones reads as
+disabled rather than as different in kind.
+
+**The account state markers are *not* coloured.** The checkmark on the active
+account and the cross on a collapsed one inherit the ink of the row they sit in
+(primary, secondary), the way they did before the one-colour pass briefly made
+them terracotta. The rule is that nothing takes a colour of its *own*, not that
+every monochrome glyph has to take Claude's: two terracotta badges in the card's
+two most prominent rows pulled the eye to the least urgent thing on it, and left
+the row's own ink saying nothing about which account it was.
+
+**Only the chart bands and the table dots that point at them may use a
+*shade*** — `PopoverMetrics.chartBandColor(index, of: count)`, shades of the one
+hue, strongest first, position 0 being the brand colour itself.
+
+**Shade by position, not a fixed palette.** The ramp used to be five literals a
+chart took the first `count` of, so a three-band block sat on three adjacent
+steps of five and its bands were ≈1.28 apart whatever the block. It now spreads
+`count` bands across the *whole* bounded range, so the fewer the bands the
+further apart they sit. The ends are exactly the old ramp's first and last steps,
+so the bounds are unchanged — measured against white and the ≈`#232323` dark
+card, 4.84 → 1.80 in light and 6.15 → 2.29 in dark:
+
+| bands | light, on white | dark, on `#232323` |
+| --- | --- | --- |
+| 2 | 4.84 / 1.80 | 6.15 / 2.29 |
+| 3 | 4.84 / 2.88 / 1.80 | 6.15 / 4.05 / 2.29 |
+| 4 | 4.84 / 3.40 / 2.45 / 1.80 | 6.15 / 4.70 / 3.35 / 2.29 |
+| 5 | 4.84 / 3.69 / 2.88 / 2.27 / 1.80 | 6.15 / 5.03 / 4.05 / 3.04 / 2.29 |
+
+Five is the most the popover can ask for (four model families plus "Other"); the
+smallest step in that table is 1.22, and a sixth band would fall to ≈1.18, which
+is the honest cost of spreading. **Saturation moves with lightness**, so two
+neighbours differ in two dimensions rather than one: interpolated in HSL between
+the two end literals, the ramp runs 46% → 41% saturation as it lightens in light
+and 75% → 47% as it darkens in dark. (HSB, which is what `NSColor` reports and
+what the "not a grey" test measures, reads 0.63 → 0.22 in light; in dark it
+barely moves, 0.60 → 0.64, because both the chroma and the maximum it divides by
+fall together.) Held at the brand value instead, the darker dark-mode steps came
+out a vivid orange rather than terracotta.
+`PopoverColorTests` measures all of it, at every stack height the popover can
+draw; the literals are not to be nudged by eye in one appearance. The same call
+returns the same `NSColor` *instance*, which is not an optimisation: a dynamic
+colour compares by identity, and `DailyUsageSeries` is `Equatable` off its
+colour, so a freshly built shade would make every band read as changed on every
+render.
+
+The hover rule and the hover dots stay on `Color.primary`, since they have to
+read against every band. `MenuBarGlyph` is a **template image** — the system
+tints it, so it takes no colour of its own.
 
 `NSStatusItem` with a custom SwiftUI-hosted view:
 
@@ -363,15 +505,49 @@ Two independent tiers, deliberately decoupled:
 Click opens a popover:
 
 ```
-creativytool                      ← the account the rows below describe, from
-                                    `~/.claude.json`'s `oauthAccount`
-                                    (organisation name, else email, else a
-                                    short uuid). Only when something on disk
-                                    says — an unstamped reading leaves it out
-                                    rather than guessing.
-5-hour window     ▓▓▓▓▓▓░░ 62%     resets in 2h 14m
-7-day window       ▓▓▓░░░░░ 31%     resets in 4d 6h
-5-hour window     ░░░░░░░░  —       no reading
+✓ me@example.com                cached
+                                  ← the quota block's section title, the same
+                                    shape as "By source" and "By model" below:
+                                    title left, tag right. The title names the
+                                    account the rows describe, from
+                                    `~/.claude.json`'s `oauthAccount` (login
+                                    email, else organisation name, else a
+                                    short uuid) — only when something on disk
+                                    says; an unstamped reading (or no reading at
+                                    all) titles the section `Quota` rather than
+                                    guessing a name. The ✓ checkmark icon
+                                    appears **only** when there is at least one
+                                    other account listed below to contrast with
+                                    (then an unstamped reading is titled
+                                    "Unknown account", not "Quota");
+                                    on the one-account machine the bare name
+                                    stands alone. Tooltip distinguishes a named
+                                    account from the unstamped fallback.
+                                    The trailing tag is `cached` while Claude
+                                    Code's own cached reading serves, and
+                                    absent once the statusline hook is
+                                    installed and has fired — "official" is
+                                    never printed, both sources are. No age
+                                    and no `· stale` suffix: freshness is not
+                                    displayed; an over-threshold reading shows
+                                    the terracotta warning line instead. The title
+                                    also carries the `disabled_reason` tooltip
+                                    when the payload
+                                    said why there are no usage credits — there
+                                    is no credits row to hang it on, and it is
+                                    never an error line.
+5-hour      ▓▓▓▓▓▓░░░░ 62%    2h 14m
+7-day       ▓▓▓░░░░░░░ 31%    4d 6h
+                                  ← countdown column is the bare time until
+                                    the window resets; no "resets in" prefix.
+                                    The labels carry no "window" suffix and the
+                                    weekly rows no parentheses: the label column
+                                    is 80 pt, sized to the payload-labelled rows
+                                    (`Sonnet weekly`), and everything those two
+                                    gave up went to the bar, now 100 pt wide.
+                                    Tooltips and VoiceOver still say "5-hour
+                                    window" — nothing competes for width there.
+5-hour      ░░░░░░░░░░  —      no reading
                                   ← how either of the two rows above renders
                                     while no quota source reports that window
                                     (`QuotaSnapshot.fiveHour == nil`) — after
@@ -380,12 +556,7 @@ creativytool                      ← the account the rows below describe, from
                                     Empty track, em dash, "no reading": never
                                     0%, which would be a number nobody
                                     reported.
-+50% weekly limits promo through Aug 31 · clau.de/cc-50-promo
-                                  ← Claude Code's own promo notice for this
-                                    bar, read from `~/.claude.json`; the bare
-                                    URL is clickable. Only when one is cached
-                                    and fresh.
-Fable (weekly)     ░░░░░░░░  0%
+Fable weekly ░░░░░░░░░  0%
                                   ← one row per `weekly_scoped` entry in the
                                     payload's `limits[]`, labelled from
                                     `scope.model.display_name`. Only when the
@@ -395,7 +566,7 @@ Fable (weekly)     ░░░░░░░░  0%
                                     Claude Code's own scoped weekly limit and
                                     deliberately claims no denominator for the
                                     percentage.
-Usage credits      ▨▨░░░░░░   €0.00 of €33.00
+Usage credits ▨▨░░░░░░   €0.00 of €33.00
                                   ← org usage credits, from `utilization.spend`
                                     cross-checked against `extra_usage`. Only
                                     when credits are actually on — no credits
@@ -410,60 +581,526 @@ Usage credits      ▨▨░░░░░░   €0.00 of €33.00
                                     there is no countdown. The tooltip names
                                     the monthly framing and says when
                                     `spend_limit_reached` is set.
-source: official (cached) · 4m ago              ← confidence tag + freshness;
-                                    `official` (no suffix) once the statusline
-                                    hook is installed and has just fired.
-                                    Also carries the `disabled_reason` tooltip
-                                    when the payload said why there are no
-                                    usage credits — there is no credits row to
-                                    hang it on, and it is never an error line.
++50% weekly limits promo through Aug 31 · clau.de/cc-50-promo
+                                  ← Claude Code's own promo notices, read from
+                                    `~/.claude.json`; the bare URL is clickable.
+                                    Only when one is cached and fresh. All of
+                                    them sit here, below the active account's
+                                    last row and in bar order — not under the
+                                    bar each one names: the line wraps to the
+                                    full content width, so one between two bars
+                                    split the column of rows in half.
+<staleness warning, terracotta>   ← and after those, the staleness warning or,
+                                    with no snapshot at all, the "no source yet"
+                                    / just-cleared-cache line.
 
-Bitgrip                           ← one compact group per *other* account this
-5-hour window     ░░░░░░░░  —       no reading
-7-day window       ▓▓▓▓▓░░░ 56%    resets in 2d 3h
-source: official · 3h ago
-                                  ← Mac has readings for — what is left behind
-                                    after switching the global login. Same
-                                    rows, same `—` / "no reading" for an
-                                    expired window, its own freshness tag, no
-                                    usage-credits row (that data only ever
-                                    exists for the active account). Labelled
-                                    "Unknown account" for the unstamped group,
-                                    which is shown only when it isn't the one
-                                    driving the bars above and still has a live
-                                    window. Absent entirely on a one-account
-                                    machine.
-                                  [ Clear Quota Cache ]   ← deletes the
-                                    statusline cache and re-polls
+✕ other@example.com            ⌄  ← one collapsed group per *other* account
+                                    this Mac has readings for — what is left
+                                    behind after switching the global login.
+                                    Closed by default, showing the ✕ cross icon
+                                    and the account name, nothing else; no
+                                    summary percentage. Set in the same
+                                    semibold section-title font as the active
+                                    account's title above but in secondary
+                                    ink (one step dimmer), so the two read as one list of
+                                    accounts rather than as a section with a
+                                    footnote under it. The whole row is one
+                                    button, not a disclosure: clicking anywhere
+                                    on it toggles the group. The caret is
+                                    trailing and names the *action*, not the
+                                    state — `⌄` on a closed row because
+                                    clicking reveals the rows below, `⌃` on an
+                                    open one because clicking folds them away.
+                                    Pairs with the ✓ checkmark above. Separated
+                                    from the bars and from each other by
+                                    whitespace only — no divider (that line
+                                    marks a top-level section) and no indent.
+✕ other@example.com            ⌃  ← expanded: the same rows as above, same `—` /
+5-hour      ░░░░░░░░░░  —           "no reading" for an expired window, a
+7-day       ▓▓▓▓▓░░░░░ 56%          `cached` tag at the foot only if that group
+                                    came from the backup source (it never does:
+                                    statusline files are the only per-account
+                                    readings), no usage-credits row
+                                    (that data only ever exists for the active
+                                    account). Labelled "✕ Unknown
+                                    account" for the unstamped group, which is
+                                    shown only when it isn't the one driving the
+                                    bars above and still has a live window.
+                                    Absent entirely on a one-account machine.
 
-Plan: Max20 (auto-detected)
-Burn rate: 12.4k tok/hr
-10k of 12.4k is cache reads — billed at 1/10 the input rate  ← only when cache
-                                    reads are >50% of the total; same line
-                                    under the model rows. Hovering a model row
-                                    or the burn rate shows the full split.
+By source
+3M ┤
+2M ┤ ▁▂▅▃▂▆█▅▃▂▄▆█▃▂▄▅█▃▂▁▂▄▅█▆▃▂▁▃
+1M ┤
+   ┼──┬───────┬───────┬───────┬────
+   16. Aug. 23. Aug. 30. Aug. 6. Sept.
+Last 30 days            Tokens  Estimated cost
+● CLI                     14.9M          $24.51
+● VS Code                  3.5M           $5.77
+● SDK/agents              25.3M          $41.82
+  Total                   43.7M          $72.10
+      hovered: the caption reads `6. Sept.` and every number in the table is
+      that day's; the chart draws a rule and a dot per band edge
+                                  ← the first of two **symmetric blocks**: a
+                                    stacked daily area chart of the last 30
+                                    days, one band per entrypoint, and a table
+                                    of the same window's numbers under it.
 
-This Mac               5h   24h   7d
-  CLI                   ▓░   ▓▓   ▓▓▓
-  VS Code                ░    ▓    ▓▓
-  SDK/agents            ▓▓   ▓▓▓  ▓▓▓▓
+                                    **One window, one hover rule, for every
+                                    local number in the popover.** That is the
+                                    whole reorganisation. This section used to
+                                    caption a 30-day chart with five-hour
+                                    counts, "Costs by model" was tagged
+                                    `fixed 24h`, and "Estimated cost" ended in a
+                                    `Today` row — four windows on one card, three
+                                    of which had to be labelled to be readable
+                                    at all. Now every figure below the quota
+                                    bars is the same thirty days, or the one day
+                                    under the pointer, and the caption row says
+                                    which.
 
-By model (fixed 24h window, not tied to the 5h/24h/7d toggle above)
-  Sonnet   2.1M tok   $3.15
-  Opus      180k tok   $2.70
-  Haiku     640k tok   $0.19
-  Fable      90k tok   $0.08
+                                    **Two blocks answer two questions**: where
+                                    do the tokens come from, and where does the
+                                    money go. Same shape twice on purpose — same
+                                    chart type, same columns in the same places,
+                                    same row order, same stack order, same
+                                    hover — so the second costs no reading
+                                    effort once the first is
+                                    understood, and the two `Total` rows can be
+                                    compared straight down the card. They are
+                                    two splits of one ``DailyUsageHistory``, so
+                                    those totals are the same number by
+                                    construction, and a test says so.
 
-Est. cost today: $4.82
+                                    The bands are ``DailyUsageSeries``:
+                                    `sources(from:)` here, `models(from:)`
+                                    below, both taking
+                                    ``PopoverMetrics.chartBandColor(_:of:)`` by
+                                    row position *and* row count. One hue,
+                                    shades of it spread across the whole ramp —
+                                    never several colours: see "Colour". Bands
+                                    are `.monotone`, never `.catmullRom`: a
+                                    spline through spiky daily counts
+                                    overshoots, and on a stack an overshoot dips
+                                    below the band underneath, drawing usage
+                                    that never happened.
 
-Refresh   Settings   Quit
+                                    **The stack is the table upside down.** Row
+                                    one is the *top* band, the last row the
+                                    bottom one. A table reads downwards from its
+                                    first row and a stack reads downwards from
+                                    its top band; with the first band at the
+                                    bottom the two sequences were mirror images
+                                    and row one pointed at the band furthest
+                                    from it. The tables kept display order (CLI
+                                    first, `Total` last) and the *stack* flipped
+                                    — Swift Charts stacks in series order, so
+                                    ``DailyUsageChart/stackOrder`` reverses what
+                                    it feeds the marks and the
+                                    `chartForegroundStyleScale` domain, and
+                                    `stackTops(at:)` climbs in that same order
+                                    or every hover dot but the topmost lands on
+                                    a boundary that isn't there.
+
+                                    **Each band also strokes its own cumulative
+                                    top edge**, 1 pt of its own ink at the same
+                                    opacity as the fill. Fills alone leave a
+                                    seam: two stacked `AreaMark`s are two
+                                    anti-aliased paths, and at a shared boundary
+                                    the lower covers the edge pixel by some
+                                    fraction *a* and the upper by the rest, so
+                                    compositing them in that order leaves
+                                    *a(1-a)* of the card visible — a quarter of
+                                    it at a half-covered pixel, which on the
+                                    dark popover is a dark, ragged hairline
+                                    along every edge. ``PopoverChartAlignmentTests``
+                                    renders the whole card and asserts no pixel
+                                    *between* two bands is darker than the
+                                    palest shade the ramp can paint; without the
+                                    stroke, 341 of them are. It has to be the
+                                    whole popover: an isolated chart at these
+                                    sizes composites cleanly and shows no seam
+                                    at all.
+
+                                    **Every entrypoint is always listed**, at 0
+                                    if need be — a silent source keeps a band and
+                                    a row rather than vanishing, because "VS
+                                    Code: 0" is a reading about a tool the user
+                                    either uses or doesn't. The model split
+                                    below does the opposite and lists only the
+                                    families the window holds; the asymmetry
+                                    follows the data (``bySource`` is dense over
+                                    `Entrypoint.allCases`, ``byModelFamily``
+                                    is not), and a zero row for a model this
+                                    account never touched would say nothing.
+
+                                    A window holding usage this version doesn't
+                                    recognise — an unknown `entrypoint` here, an
+                                    unknown model ID below — grows an extra band,
+                                    **"Other", last, i.e. the bottom of the
+                                    stack**, so the bands sum to the day's
+                                    total. Only when there is such usage: a
+                                    bucket that can appear between two polls
+                                    goes at the end so it never shuffles the
+                                    named bands beside it. It is a real row
+                                    now, with a real number in both columns —
+                                    the `—` it used to read at rest was an
+                                    artefact of the five-hour breakdown dropping
+                                    those events, and that breakdown is gone.
+
+                                    **The table.** A caption row, one row per
+                                    band in display order — first row, top band
+                                    — and a `Total`.
+
+                                    - The **caption** is `Last 30 days` at rest
+                                      (counted off the history — a Mac with
+                                      younger logs charts fewer days and the
+                                      caption says so) and the hovered day's
+                                      date while the pointer is in *this
+                                      block's* chart. Swapping it is the whole
+                                      hover disclosure: the caption already
+                                      claimed which window the numbers are for,
+                                      so changing it says they changed meaning.
+                                      No floating tooltip over a 72 pt plot, and
+                                      no second styling vocabulary.
+                                    - The **column headings**, `Tokens` and
+                                      `Estimated cost`, sit over the two value
+                                      columns. They are what let the token
+                                      column drop the `tok` suffix every cell
+                                      used to carry: said once instead of once
+                                      per row, which is 50 pt back
+                                      (98 → 48 pt, measured against `298.5M` at
+                                      41.0 pt). **"Estimated" is spelled out**,
+                                      not `Est.` — it is the word doing the
+                                      qualifying, a stacked area invites reading
+                                      what is under it as a bill, and this is a
+                                      local estimate from published per-token
+                                      prices: on a subscription, spend that was
+                                      never charged. It didn't fit the old
+                                      76 pt column, so the column widened to 74
+                                      pt against the heading's own 71.7 pt
+                                      rather than the word shrinking. There was
+                                      room: dot, widest label (`SDK/agents`,
+                                      61.4 pt) and both columns come to 209 of
+                                      the 312 pt content width.
+                                    - A **dot in the band's own shade** ties each
+                                      row to its area in the plot, at full
+                                      strength where the plot paints the band at
+                                      85% to let the gridlines through — a 6 pt
+                                      circle has nothing behind it to show. The
+                                      `Total` row has none — it is the stack's
+                                      outline, not a band in it — but keeps the
+                                      dot's width, so every label starts at the
+                                      same x.
+                                    - The **`Total` is summed from
+                                      ``DailyUsageHistory.total``**, not from the
+                                      rows above it. Adding the rows up would
+                                      make the total agree with itself no matter
+                                      what the split dropped; summing the
+                                      history's own total means a dropped band
+                                      shows as a mismatch. That is exactly the
+                                      bug the "Other" band was added to fix.
+                                    - Values are ``[DailyUsagePoint].summed()``
+                                      over the window at rest, the hovered day's
+                                      point while hovering. No second pass over
+                                      the corpus either way: the points the
+                                      chart is already drawing are what gets
+                                      folded.
+
+                                    **Hovering one block changes only that
+                                    block.** Two `@State` days in `PopoverView`,
+                                    not one — the charts share an x-axis, but a
+                                    table rewriting itself while the pointer is
+                                    in the *other* block's chart is a surprise.
+
+By model
+$6 ┤
+$4 ┤ ▁▂▅▃▂▆█▅▃▂▄▆█▃▂▄▅█▃▂▁▂▄▅█▆▃▂▁▃
+$2 ┤
+   ┼──┬───────┬───────┬───────┬────
+   16. Aug. 23. Aug. 30. Aug. 6. Sept.
+Last 30 days            Tokens  Estimated cost
+● Sonnet                  20.1M          $33.17
+● Opus                    14.9M          $24.51
+● Haiku                    4.8M           $7.93
+● Fable                    3.9M           $6.49
+  Total                   43.7M          $72.10
+78% cache reads — billed at 1/10 the input rate
+                                  ← the second block: the same chart over the
+                                    same days, stacking **estimated cost** per
+                                    model family instead of tokens per source.
+
+                                    **The top edge of this stack is the old
+                                    "Estimated cost" line.** Literally: that
+                                    section drew one series of
+                                    `total[i].estimatedCostUSD`, which is what
+                                    these bands sum to. So the section and its
+                                    `LineMark` chart are gone rather than kept
+                                    alongside — the same curve now also says
+                                    which models are under it, at the price of
+                                    nothing. The band ramp's first shade was
+                                    that line's ink, and since the stack was
+                                    flipped that shade is the *top* band — so
+                                    the curve the eye follows is drawn in
+                                    exactly the old line's colour, right down to
+                                    the 1 pt stroke closing its edge.
+
+                                    **Deliberately a per-model chart**, which an
+                                    earlier round recorded as settled the other
+                                    way. It lost then on two counts: five bands
+                                    against a palette that had three shades, and
+                                    sitting above rows tagged `fixed 24h`, which
+                                    would have sharpened a window ambiguity the
+                                    tag only papered over. Both are gone — the
+                                    ramp spreads however many bands there are
+                                    across its whole range (see "Colour"), and
+                                    there is no second window left to be
+                                    ambiguous about.
+
+                                    **Today's spend is hover-only now**, by
+                                    decision. The `Today` row was the popover's
+                                    last fixed reading, and keeping it would have
+                                    meant keeping a second window and a second
+                                    rule for one figure that the rightmost day of
+                                    the chart already draws — hover it and the
+                                    caption says `today's date` with the split
+                                    across models beside it, which is strictly
+                                    more than the row gave. `AppModel`'s
+                                    `estimatedCostToday` went with it.
+
+                                    The **cache-read note** is the one thing only
+                                    this block carries, and the one asymmetry
+                                    between the two. It qualifies a token total
+                                    that replayed context dominates, and this is
+                                    the block a reader is most likely to take for
+                                    "what the real work cost". It is computed
+                                    from whatever the table is currently showing,
+                                    so hovering restates the share for that day
+                                    rather than leaving a thirty-day percentage
+                                    under one day's numbers. Only above
+                                    ``DisplayFormat.cacheReadNoteThreshold``.
+
+Both blocks, mechanically
+                                  ← everything below is true of either chart;
+                                    one implementation
+                                    (``DailyUsageChart`` + ``DailyUsageMetric``)
+                                    draws both, so it is one description rather
+                                    than two that drift. The metric decides
+                                    exactly three things: which field of a
+                                    ``DailyUsagePoint`` is read, which axis
+                                    formatter spells it, and what VoiceOver
+                                    calls it.
+
+                                    **No window tag** opposite either title,
+                                    unlike the quota block: the x-axis is dated,
+                                    so it already says how far back the chart
+                                    reaches and that it ends today, and the
+                                    table's caption says the same in words for
+                                    the numbers. A Mac with no local history at
+                                    all gets `No local usage yet` instead of a
+                                    flat line through zero.
+
+                                    **Both axes are drawn, sparsely.** Without a
+                                    y-axis the bands show shape but no magnitude,
+                                    and without dated x-ticks a spike can't be
+                                    tied to a day — but thirty dated labels
+                                    across a 340 pt popover would be mush, so it
+                                    is one label a week and three or four round
+                                    values up the y. The y-axis draws
+                                    **horizontal lines but no ticks** — the line
+                                    already reaches the label, and a stub in
+                                    front of it only thickens the left margin.
+                                    The lines are `RuleMark`s spanning the first
+                                    day to the last, not `AxisGridLine`s: a
+                                    gridline spans the whole plot, gutter
+                                    included, so it overhangs the data it is
+                                    there to be read against.
+
+                                    **They are drawn behind the bands**, which
+                                    is why the bands are painted at
+                                    ``PopoverMetrics.chartBandOpacity`` (0.85)
+                                    rather than opaque: a gridline the stack
+                                    cuts off can only be followed in the empty
+                                    region above the tallest day, and a reader
+                                    taking a value off a spike is reading
+                                    exactly where the stack is. At 0.85 the line
+                                    reads faintly through a band without
+                                    competing with it, and the ramp's steps —
+                                    every one of them measured against an opaque
+                                    card — still hold. The hover rule and dots
+                                    stay in *front* and stay `Color.primary`.
+                                    **X-ticks stop four
+                                    days short of the right edge**: a label
+                                    starts at its tick, runs to the right of it,
+                                    and is truncated at the chart's trailing
+                                    bound, so a tick any closer renders as `1…`
+                                    no matter how the plot is inset (tried:
+                                    padding the chart, then padding the plot area
+                                    — neither helps, the label has nowhere to
+                                    sit). Nothing is lost by it, since the right
+                                    edge of a trailing window is always today.
+
+                                    Y labels come from
+                                    ``DisplayFormat.tokenAxisLabels`` and
+                                    ``costAxisLabels``, which give a column **one
+                                    unit and one decimal count**: `$1.5k / $1.0k
+                                    / $0.5k`, never `$1.5k / $1k / $500`, which
+                                    makes the eye convert a label before the
+                                    steps look even. Money keeps two decimals or
+                                    none (`$2.50`, never `$2.5`); `k` keeps one,
+                                    the way `compactCost` does. **Zero goes
+                                    unlabelled** on both: they scale from zero, so
+                                    the bottom line is zero by construction and
+                                    the label only restates it in the narrowest
+                                    column the popover has.
+
+                                    **Both plots start at the same x**, because
+                                    the y-labels of both are set in one column,
+                                    as wide as the widest label either chart is
+                                    about to draw (`chartYLabelWidth`, measured
+                                    per render from `naturalYLabelWidth`). Left
+                                    to itself a chart starts its plot where its
+                                    own widest label ends, and `2G` is not `$2.50`
+                                    wide — so two stacked plots taking the same
+                                    x-ticks disagreed about where `16. Aug.` was.
+                                    Measured, not reserved: a constant wide
+                                    enough for every label the formatters can
+                                    produce (`$12.5k`) cost a measured 19 pt of
+                                    plot on an ordinary `$6` day, and what the
+                                    axis shows is decided by data.
+
+                                    Measuring means knowing the strings, which is
+                                    why **both charts pick their own y-values**
+                                    (``PopoverChartAxis.yValues``) instead of
+                                    leaving them `.automatic`: the first of
+                                    1, 2, 2.5, 5 × 10ⁿ that is at least
+                                    `max / chartYAxisTickCount`, with the domain
+                                    rounded up to a multiple of it. That is what
+                                    Swift Charts was choosing anyway for spend
+                                    (`$0`…`$6` in twos over a $5.20 day); the
+                                    token axis lands one step finer than it did.
+                                    The other two routes were tried and don't
+                                    work: `ChartProxy` answers for the scale but
+                                    not for the labels, and a `PreferenceKey` set
+                                    inside `AxisValueLabel` never leaves the
+                                    `Chart` — measured, it arrives as zero.
+
+                                    The plot carries a small margin above and
+                                    below — it is the only element in the popover
+                                    that is a picture rather than a row of text,
+                                    and flush against the title and the table it
+                                    reads as part of them. Vertical only: it
+                                    spans the full content width like every other
+                                    row, so a sideways inset would pull its axis
+                                    out of that alignment.
+
+                                    **Hovering** draws a rule on the nearest day
+                                    and a dot on each band's top edge —
+                                    cumulative sums taken in ``stackOrder``,
+                                    i.e. up from the last table row, since that
+                                    is the order the areas are stacked in, and
+                                    none for a band that did nothing that day,
+                                    whose edge is its neighbour's. Every dot is
+                                    plain primary ink rather than its own band's:
+                                    a dot has to read against whichever band it
+                                    lands on, and the palest shade sits at about
+                                    1.8:1 against the card. They are markers, not
+                                    more data — which is also why they are the
+                                    one thing in these charts that is not
+                                    terracotta. Two dots still merge where a band
+                                    is thin — about 330k tokens of a 4M axis —
+                                    which is the cost of asking a stacked chart
+                                    for a per-band readout.
+
+                                    Both charts share ``PopoverChartHover``: a
+                                    `.chartOverlay` converts the pointer's x
+                                    through the chart proxy and snaps to the
+                                    nearest plotted midnight. Snapping is the
+                                    mechanism, not a refinement — 30 days over a
+                                    ~250 pt plot is about 8 pt a day, so pointing
+                                    at a day exactly is not available. Not
+                                    `.chartXSelection`, which answers to click and
+                                    drag on macOS rather than to hover.
+
+                                    **Marks, rule and ticks share one x.** Every
+                                    mark is plotted on a plain `Date`, never
+                                    `unit: .day`: binning a date draws the mark at
+                                    the *centre* of its bin, so the bands, the
+                                    rule and the dots all sat half a day — a
+                                    measured 4 pt — right of the tick naming the
+                                    day they were on.
+                                    ``PopoverChartAlignmentTests`` renders both
+                                    charts and measures the rule against the tick,
+                                    which is the only way to see this at all:
+                                    `ChartProxy` answers for the scale, not for
+                                    where a mark landed, and every other test
+                                    passed throughout.
+
+                                    Midnights on a plain scale land on the plot's
+                                    own edges, so the scale keeps a 3 pt gutter at
+                                    each end (`chartXScale(range: .plotDimension(…))`,
+                                    not chart padding, which would pull the axis
+                                    out of the popover's alignment). Without it
+                                    half the hover dot on *today* — the day most
+                                    likely to be hovered — falls outside the plot.
+
+                                    **Hover moves nothing but the highlight.**
+                                    Both marks carry values already plotted, so no
+                                    scale widens, and the hovered day is never
+                                    added to the x-axis — it belongs in the
+                                    caption. This is not cosmetic: a y-scale that
+                                    grew under a stationary pointer would redraw
+                                    the bands beneath it and drag the plot's
+                                    leading edge with it, changing the day the
+                                    pointer was on under the user's own hand. The
+                                    hovered day is also re-resolved against the
+                                    *current* history on every render, so a poll —
+                                    or midnight sliding the window — drops the
+                                    readout back to resting instead of stranding a
+                                    number from a window that has moved.
+
+                                    Drawn axes still don't make a chart legible to
+                                    VoiceOver, so each carries a real
+                                    `AXChartDescriptor` — one series per band, one
+                                    point per day, y-axis reaching the tallest
+                                    *stacked* day, titled from the metric
+                                    (`Estimated cost by model, last 30 days`).
+                                    Hover is mouse-only and is not the only path
+                                    to a per-day number; these are the accessible
+                                    route. Both value formatters guard the
+                                    framework's own probe values: the token one
+                                    clamps to 2^53, not to `Double(Int.max)` (which
+                                    rounds up to 2^63 and traps), and the cost one
+                                    returns `unknown` past a trillion dollars
+                                    rather than a 300-digit `%f` label that
+                                    renders. Both were live failures.
+
+                                    **Cost of the restructure: 48 pt.** The
+                                    rendered showcase popover went from 675 to
+                                    723 pt tall (340 wide). A whole chart and its
+                                    row came out; two tables went in. Roughly
+                                    height-neutral was the aim and 7% is what it
+                                    came to — worth it for one window instead of
+                                    four.
+
+Refresh   Clear Quota Cache   Settings        Quit
+                                  ← "Clear Quota Cache" deletes the statusline
+                                    cache and re-polls. It lives in the footer
+                                    with the other actions rather than under the
+                                    quota rows it acts on, where it floated
+                                    after the other accounts' groups and read as
+                                    though it belonged to the last one.
 ```
 
-Freshness tag names the source that won: `official (cached)` (Claude Code's own
-cached reading, the zero-setup default) or `official` (a fresh statusline
-capture, once that hook is installed). No estimate fallback: with neither
+The source tag names the source only when it is the backup: `cached` (Claude
+Code's own cached reading, the zero-setup default) versus nothing at all (a
+statusline capture, once that hook is installed). Both are Anthropic's own
+numbers, so the word "official" is not printed, and neither the reading's age
+nor a "stale" marker is shown — staleness surfaces only as the terracotta
+warning line. Settings still spells out the full `QuotaConfidence.displayLabel`. No
+estimate fallback: with neither
 source reporting, the popover shows an error instead of a number; a
-real-but-old reading keeps the last numbers with an orange staleness warning.
+real-but-old reading keeps the last numbers with a terracotta staleness warning.
 "Clear Quota Cache" deletes the statusline cache only — the whole per-session
 directory plus the legacy single file; `~/.claude.json` is Claude Code's, not
 ours — so the bars fall back to the cached-state numbers rather than going
@@ -539,6 +1176,18 @@ The renderer is `Tests/ClaudeStatsTests/ReadmeAssetRenderTests.swift`, skipped
 unless `CLAUDE_STATS_RENDER_ASSETS` names an output directory, so a plain
 `swift test` neither writes files nor pays for the render.
 
+The same file renders one thing the README doesn't ship: the popover with a day
+hovered, under its own gate, for looking at rather than committing.
+
+    CLAUDE_STATS_RENDER_HOVER=/tmp/hover swift test --filter testRenderHoverPreviews
+
+It earns its keep because hover is unreachable offscreen and the tables
+*change content* under it — every number and the caption swap together — so a
+column that truncates in that state alone is invisible to a unit test. That is
+how the truncated `CLI 842.…` row of the legend this replaced was caught.
+`PopoverView` takes its two hovered days as init parameters purely so this (and
+a SwiftUI preview) can seed them.
+
 **Why it lives in the test target.** `ClaudeStats` is an `executableTarget`, so
 no second executable can depend on it. The test target already can, and
 `@testable import ClaudeStats` reaches `PopoverView`, `MenuBarGlyph` and the
@@ -557,20 +1206,26 @@ image if dropped:
   can never disagree with the popover's rows.
 - **A pinned clock.** The PNGs are committed, so `renderDate` is a fixed
   `Date` fed to both the snapshot and `PopoverClock(now:)` (never resumed, so
-  it never ticks). Without it every run rewrites "resets in 2h 14m" and dirties
+  it never ticks). Without it every run rewrites the countdowns and dirties
   the tree. Rendering twice must leave `git status` clean.
-- **`NSHostingView`, not `ImageRenderer`.** The "This Mac" switcher is a
-  `.pickerStyle(.segmented)` `Picker`, i.e. an `NSSegmentedControl` behind an
-  `NSViewRepresentable`. `ImageRenderer` rasterizes SwiftUI's own drawing only
-  and paints that control as its yellow "unsupported view" placeholder. So the
+- **`NSHostingView`, not `ImageRenderer`.** Originally forced: what is now
+  what is now the "By source" block had a `.pickerStyle(.segmented)` `Picker`, i.e. an
+  `NSSegmentedControl` behind an `NSViewRepresentable`, and `ImageRenderer`
+  rasterizes SwiftUI's own drawing only, painting that control as its yellow
+  "unsupported view" placeholder. The picker is gone (that section is a chart
+  now), and the hosting view is kept rather than re-litigated: it is the
+  same AppKit draw path the shipping popover uses, and it is what carries the
+  `NSAppearance` the next point needs — `ImageRenderer` offers a SwiftUI
+  environment, not an AppKit appearance. So the
   card is hosted in a borderless `NSWindow` and captured with
   `cacheDisplay(in:to:)` into an `NSBitmapImageRep` whose `pixelsWide/High` are
   4× its `size` — that ratio is where the 4× scale comes from.
 - **The AppKit appearance**, set on both the hosting view and its window.
-  `PopoverMetrics.brandLinkColor` is a dynamic `NSColor(name:)` resolved against
-  the *AppKit* appearance, not SwiftUI's `colorScheme`: without it the promo
-  link paints one theme's terracotta onto the other theme's card. Any other
-  `NSColor`-backed value in the tree has the same dependency.
+  `PopoverMetrics.brandColor` and every shade of `chartBandColor(_:of:)` are
+  dynamic `NSColor(name:)`s resolved against the *AppKit* appearance, not SwiftUI's
+  `colorScheme`: without it the promo link and the chart bands paint one
+  theme's terracotta onto the other theme's card. Any other `NSColor`-backed
+  value in the tree has the same dependency.
 
 Three things the renderer draws itself, all confined to that file:
 

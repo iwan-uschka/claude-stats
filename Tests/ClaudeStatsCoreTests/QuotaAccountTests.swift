@@ -6,17 +6,22 @@ final class QuotaAccountTests: XCTestCase {
 
     // MARK: - Display name
 
-    /// The organisation name is what the user picked the account by, so it
-    /// leads.
-    func testDisplayNamePrefersTheOrganisationName() {
+    /// The login email leads: for a personal account the organisation is
+    /// auto-named "<email>'s Organization", so the org name is the email plus
+    /// noise, and the email is what the user recognises. Nothing inspects the
+    /// org string's shape — an email present wins whatever it says — so one
+    /// case covers both.
+    func testDisplayNamePrefersTheEmail() {
         let account = QuotaAccount(
-            uuid: uuid, email: "me@example.com", organizationName: "Bitgrip")
-        XCTAssertEqual(account.displayName, "Bitgrip")
+            uuid: uuid, email: "me@example.com", organizationName: "Other Org")
+        XCTAssertEqual(account.displayName, "me@example.com")
     }
 
-    func testDisplayNameFallsBackToTheEmail() {
-        let account = QuotaAccount(uuid: uuid, email: "me@example.com")
-        XCTAssertEqual(account.displayName, "me@example.com")
+    /// A real, chosen organisation name still shows when there is no email to
+    /// prefer over it.
+    func testDisplayNameFallsBackToTheOrganisationName() {
+        let account = QuotaAccount(uuid: uuid, organizationName: "Other Org")
+        XCTAssertEqual(account.displayName, "Other Org")
     }
 
     /// Last resort: a short prefix, never the full 36-character uuid — that is
@@ -36,13 +41,13 @@ final class QuotaAccountTests: XCTestCase {
         let account = try XCTUnwrap(QuotaAccount(json: [
             "accountUuid": uuid,
             "emailAddress": "me@example.com",
-            "organizationName": "Bitgrip",
+            "organizationName": "Other Org",
             "organizationUuid": "a1b2c3d4",
         ]))
 
         XCTAssertEqual(account.uuid, uuid)
         XCTAssertEqual(account.email, "me@example.com")
-        XCTAssertEqual(account.organizationName, "Bitgrip")
+        XCTAssertEqual(account.organizationName, "Other Org")
         XCTAssertEqual(account.organizationUuid, "a1b2c3d4")
         XCTAssertEqual(account.id, uuid)
     }
@@ -54,14 +59,14 @@ final class QuotaAccountTests: XCTestCase {
         let account = try XCTUnwrap(QuotaAccount(json: [
             "uuid": uuid,
             "email": "me@example.com",
-            "organization_name": "Bitgrip",
+            "organization_name": "Other Org",
             "organization_uuid": "a1b2c3d4",
         ]))
 
         XCTAssertEqual(account, QuotaAccount(
             uuid: uuid,
             email: "me@example.com",
-            organizationName: "Bitgrip",
+            organizationName: "Other Org",
             organizationUuid: "a1b2c3d4"
         ))
     }
@@ -89,24 +94,26 @@ final class QuotaAccountTests: XCTestCase {
         XCTAssertNil(QuotaAccount(json: ["uuid": 42]))
     }
 
-    /// A blank organisation name would otherwise win `displayName` and render a
-    /// nameless row.
+    /// A blank email — or a blank organisation name — would otherwise win
+    /// `displayName` and render a nameless row. Both fields, so a regression
+    /// that blanked only one of them can't hide behind the other.
     func testBlankFieldsAreTreatedAsAbsent() throws {
         let account = try XCTUnwrap(QuotaAccount(json: [
-            "uuid": uuid, "organization_name": "  ", "email": "me@example.com",
+            "uuid": uuid, "organization_name": "  ", "email": "  ",
         ]))
 
         XCTAssertNil(account.organizationName)
-        XCTAssertEqual(account.displayName, "me@example.com")
+        XCTAssertNil(account.email)
+        XCTAssertEqual(account.displayName, "0f9c1d3e")
     }
 
     func testFieldsAreTrimmed() throws {
         let account = try XCTUnwrap(QuotaAccount(json: [
-            "uuid": " \(uuid) ", "organization_name": " Bitgrip\n",
+            "uuid": " \(uuid) ", "organization_name": " Other Org\n",
         ]))
 
         XCTAssertEqual(account.uuid, uuid)
-        XCTAssertEqual(account.organizationName, "Bitgrip")
+        XCTAssertEqual(account.organizationName, "Other Org")
     }
 
     // MARK: - Coding
@@ -124,7 +131,7 @@ final class QuotaAccountTests: XCTestCase {
 
     func testSnapshotAccountSurvivesARoundTrip() throws {
         var snapshot = MockQuotaProvider.sampleSnapshot()
-        snapshot.account = QuotaAccount(uuid: uuid, organizationName: "Bitgrip")
+        snapshot.account = QuotaAccount(uuid: uuid, organizationName: "Other Org")
 
         let decoded = try JSONDecoder().decode(
             QuotaSnapshot.self, from: JSONEncoder().encode(snapshot))

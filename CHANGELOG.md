@@ -3,12 +3,75 @@
 ## [Unreleased]
 
 ### Added
+- The popover's usage sections are now two matching blocks, "By source" and
+  "By model": a 30-day stacked chart each — tokens per source, estimated cost
+  per model — over a table of that window's tokens and cost per band, with a
+  total.
+- Hovering either popover chart reads back the day under the pointer: a rule
+  and a dot per band mark it in the plot, and that block's table swaps its
+  caption for the day's date and every number with it.
 - Quota readings are now grouped per Anthropic account, with other accounts'
   readings shown below the current one.
 
 ### Changed
+- Every number below the quota bars is now the same 30-day window, or the one
+  day under the pointer: the 5-hour source counts, the fixed-24h model rows and
+  the `Today` spend figure are gone.
+- "Estimated cost" is no longer its own section — the top edge of the "By
+  model" stack is the line it used to draw, and today's spend is now read by
+  hovering the last day.
+- The "By source" chart now has an "Other" band for usage from an entrypoint
+  this version doesn't recognise, so the stacked sources add up to the day's
+  total instead of quietly falling short of it; the "By model" chart does the
+  same for unrecognised model IDs.
+- The app now has a single colour, Claude's terracotta: the warning, error and
+  sample-data lines, the quota bars, the Claude mark in the popover header and
+  the menu bar's dev-build dot no longer use orange, red or grey, and the
+  charts' bands are shades of that one colour. The account state markers stay
+  monochrome.
+- Chart bands are shaded by their position in the stack, so a three-band chart
+  spreads across the whole ramp instead of using three near-identical steps of
+  five.
+- Each chart band now strokes its own top edge, removing the dark hairline that
+  showed between two stacked bands; the y-axis lines moved behind the bands,
+  which are drawn at 85% so the lines read through them.
+- A chart's first table row is now its top band rather than its bottom one, so
+  the rows and the stack read in the same direction.
+- The popover's "This Mac" table is now the "By source" block: 30 days of daily
+  token usage stacked per source, with dated x-axis and labelled y-axis.
+- "Est. cost today" is gone; the estimate caveat now sits over the tables' cost
+  column, where it qualifies every figure in it.
 - Quota percentages from 99% up to 100% show one decimal place (`99.4%`), so
   "almost done" no longer reads as "done".
+- The popover's "Plan" and "Burn rate" lines are gone — the plan tier was
+  guessed from local history, and the burn rate said little the window bars
+  don't.
+- The cache-read note now reads `81% cache reads` instead of restating the two
+  raw token counts.
+- Accounts are labelled with the login email rather than the organisation name,
+  which for a personal account is just the email with `'s Organization`
+  appended.
+- Other accounts' readings are collapsed under one row per account, closed by
+  default, marked with a cross icon — and the active account's title gets a
+  checkmark while any of them are listed.
+- The quota block now has a title row like "By source" and "By model": the
+  account name on the left, the freshness tag on the right instead of on its
+  own line under the bars.
+- Promo notices moved below the quota bars instead of between them.
+- "Clear Quota Cache" moved from the quota section into the footer, next to
+  Refresh and Settings.
+- Reset countdowns show the bare time (`2h 14m`), without "resets in"; the
+  quota bars grew by the width that freed up.
+- An inactive account's rows open from a click anywhere on its row, which now
+  carries a trailing caret showing what a click will do (`⌄` reveal, `⌃`
+  collapse) and is set in the active account title's font, one shade dimmer.
+- The quota rows' labels lost the word "window" and the weekly rows their
+  parentheses (`5-hour`, `Sonnet weekly`); the bars took the width, growing
+  from 80 to 100 pt. Tooltips and VoiceOver still spell out "5-hour window".
+- The freshness tag is gone: no `official`, no age, no `stale` suffix. A bare
+  `cached` marker appears next to the quota title while Claude Code's own
+  cached reading serves; a stale reading still shows the terracotta warning
+  line.
 
 ### Fixed
 - Switching accounts no longer mixes in a stale reading from the previous

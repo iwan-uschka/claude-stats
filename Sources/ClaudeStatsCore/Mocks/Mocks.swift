@@ -87,15 +87,18 @@ public struct MockQuotaProvider: QuotaProviding {
         )
     }
 
-    /// The account the sample readings belong to — an organisation name, since
-    /// that is what ``QuotaAccount/displayName`` shows first.
+    /// The account the sample readings belong to. `email` is what
+    /// ``QuotaAccount/displayName`` actually renders, so it is a parameter:
+    /// two fixtures sharing one address would label both account groups in
+    /// the two-account preview identically.
     public static func sampleAccount(
         uuid: String = "0f9c1d3e-8a4b-4c2d-9e1f-6b7a8c9d0e1f",
-        organizationName: String? = "creativytool"
+        email: String? = "me@example.com",
+        organizationName: String? = "Example Org"
     ) -> QuotaAccount {
         QuotaAccount(
             uuid: uuid,
-            email: "me@example.com",
+            email: email,
             organizationName: organizationName,
             organizationUuid: "a1b2c3d4-0000-0000-0000-000000000000"
         )
@@ -114,7 +117,8 @@ public struct MockQuotaProvider: QuotaProviding {
             capturedAt: now.addingTimeInterval(-3 * 3600),
             account: sampleAccount(
                 uuid: "7d2b6a10-3c55-4f8e-9a21-0b4c5d6e7f80",
-                organizationName: "Bitgrip"
+                email: "other@example.com",
+                organizationName: "Other Org"
             )
         )
     }
@@ -214,24 +218,27 @@ public struct MockUsageStore: UsageStoring {
     public var breakdowns: [TimeWindow: EntrypointBreakdown]
     public var modelUsageLast24h: [ModelUsage]
     public var modelUsageAllTime: [ModelUsage]
-    public var burnRateUsage: TokenUsage
     public var costToday: Double
-    public var planTier: PlanTier
+    /// Calendar and clock behind ``dailyUsage(days:)``'s day boundaries — the
+    /// only member of this mock whose answer depends on "when", so they are
+    /// injected here rather than assumed like the static fixtures above.
+    public var calendar: Calendar
+    public var now: @Sendable () -> Date
 
     public init(
         breakdowns: [TimeWindow: EntrypointBreakdown] = MockUsageStore.sampleBreakdowns,
         modelUsageLast24h: [ModelUsage] = MockUsageStore.sampleModelUsage,
         modelUsageAllTime: [ModelUsage]? = nil,
-        burnRateUsage: TokenUsage = MockUsageStore.sampleBurnRateUsage,
-        costToday: Double = 4.82,
-        planTier: PlanTier = .max20
+        costToday: Double = MockUsageStore.sampleCostToday,
+        calendar: Calendar = .current,
+        now: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.breakdowns = breakdowns
         self.modelUsageLast24h = modelUsageLast24h
         self.modelUsageAllTime = modelUsageAllTime ?? modelUsageLast24h
-        self.burnRateUsage = burnRateUsage
         self.costToday = costToday
-        self.planTier = planTier
+        self.calendar = calendar
+        self.now = now
     }
 
     public func entrypointBreakdown(for window: TimeWindow) throws -> EntrypointBreakdown {
@@ -242,25 +249,25 @@ public struct MockUsageStore: UsageStoring {
         last24h ? modelUsageLast24h : modelUsageAllTime
     }
 
-    public func burnRateUsagePerHour() throws -> TokenUsage { burnRateUsage }
-
     public func estimatedCostToday() throws -> Double { costToday }
 
-    public func detectedPlanTier() throws -> PlanTier { planTier }
+    /// Today's spend, taken from the same generator that fills the daily
+    /// history, so ``estimatedCostToday()`` and the newest point of
+    /// ``dailyUsage(days:)`` cannot disagree — the invariant the real store gets
+    /// for free, both of its numbers being events since the same local midnight.
+    ///
+    /// Derived rather than written out: a literal here drifts silently the
+    /// first time the fixture's token base or blended rate moves.
+    public static let sampleCostToday: Double =
+        sampleDailyUsage(days: 1).total.first?.estimatedCostUSD ?? 0
 
-    /// Trailing-hour split summing to 12.4k tok/hr, cache-read-heavy like real
-    /// sessions are.
-    public static let sampleBurnRateUsage = TokenUsage(
-        inputTokens: 200,
-        outputTokens: 700,
-        cacheCreationInputTokens: 1_500,
-        cacheReadInputTokens: 10_000
-    )
+    public func dailyUsage(days: Int) throws -> DailyUsageHistory {
+        MockUsageStore.sampleDailyUsage(days: days, now: now(), calendar: calendar)
+    }
 
-    /// Token totals consistent with ``sampleBurnRateUsage`` (12.4k tok/hr)
-    /// across every window, so the popover never shows two contradictory
-    /// numbers for the same underlying rate. Each row is split in roughly the
-    /// same cache-read-heavy proportions as ``sampleBurnRateUsage``.
+    /// Token totals that stay in proportion across every window, so the popover
+    /// never shows two contradictory numbers for the same underlying usage.
+    /// Each row is split cache-read-heavy, the way real sessions are.
     public static let sampleBreakdowns: [TimeWindow: EntrypointBreakdown] = [
         .fiveHour: EntrypointBreakdown(
             window: .fiveHour,
@@ -333,7 +340,9 @@ public struct MockUsageStore: UsageStoring {
         ),
     ]
 
-    /// Matches the "By model" rows in the popover sketch in `AGENTS.md`.
+    /// Per-model fixture for ``modelUsage(last24h:)``. No longer drawn anywhere
+    /// — the popover's "By model" block stacks ``sampleDailyUsage(days:)``'s
+    /// families instead — so this exercises the query, not a layout.
     public static let sampleModelUsage: [ModelUsage] = [
         ModelUsage(
             modelID: "claude-sonnet-5",
@@ -376,4 +385,80 @@ public struct MockUsageStore: UsageStoring {
             estimatedCostUSD: 0.08
         ),
     ]
+
+    /// Deterministic daily history for previews and for the no-logs sample
+    /// mode: a weekly rhythm with quiet weekends, split across sources and
+    /// models in the same proportions as ``sampleBreakdowns`` and
+    /// ``sampleModelUsage``.
+    ///
+    /// No RNG and no dependence on the real date beyond the day boundaries, so
+    /// a SwiftUI preview redrawn twice draws the same chart twice. The source
+    /// series sum to the same per-day total as the model series, so the two
+    /// charts a popover shows side by side never contradict each other.
+    public static func sampleDailyUsage(
+        days: Int,
+        now: Date = Date(),
+        calendar: Calendar = .current
+    ) -> DailyUsageHistory {
+        guard days > 0 else { return .empty }
+        let today = calendar.startOfDay(for: now)
+        let axis: [Date] = stride(from: days - 1, through: 0, by: -1).compactMap {
+            calendar.date(byAdding: .day, value: -$0, to: today)
+        }
+        guard !axis.isEmpty else { return .empty }
+
+        // Indexed by the day's distance from the newest, so the rhythm stays
+        // pinned to the right-hand edge however long the window is.
+        let rhythm: [Double] = [1.0, 0.82, 1.18, 0.64, 1.34, 0.28, 0.19]
+        let sourceShare: [Entrypoint: Double] = [.cli: 0.34, .vscode: 0.08, .sdkAgent: 0.58]
+        let modelShare: [ModelFamily?: Double] = [.sonnet: 0.46, .opus: 0.34, .haiku: 0.11, .fable: 0.09]
+        let baseTokensPerDay = 1_850_000.0
+
+        func series(share: Double) -> [DailyUsagePoint] {
+            axis.enumerated().map { index, day in
+                let fromNewest = axis.count - 1 - index
+                let scale = rhythm[fromNewest % rhythm.count]
+                let tokens = Int((baseTokensPerDay * share * scale).rounded())
+                let usage = sampleTokenSplit(totalTokens: tokens)
+                // Roughly the blended rate the real per-model math lands on for
+                // a cache-read-heavy day; the exact figure doesn't matter for a
+                // fixture, its proportionality to the tokens does. One rate for
+                // every band, so the two blocks' `Total` rows agree by
+                // construction the way the real store's do.
+                return DailyUsagePoint(
+                    day: day,
+                    usage: usage,
+                    estimatedCostUSD: Double(tokens) / 1_000_000 * 1.65
+                )
+            }
+        }
+
+        return DailyUsageHistory(
+            days: axis,
+            total: series(share: 1.0),
+            // No `nil` key: the fixture's events all carry an entrypoint this
+            // version knows, and an empty "Other" band in the preview would be
+            // a band the real popover wouldn't draw.
+            bySource: Dictionary(uniqueKeysWithValues: Entrypoint.allCases.map {
+                (Entrypoint?.some($0), series(share: sourceShare[$0] ?? 0))
+            }),
+            byModelFamily: Dictionary(uniqueKeysWithValues: modelShare.map { family, share in
+                (family, series(share: share))
+            })
+        )
+    }
+
+    /// Split a token total the way a real session splits: cache-read heavy,
+    /// with the reads taking the rounding remainder so the parts sum exactly.
+    private static func sampleTokenSplit(totalTokens: Int) -> TokenUsage {
+        let input = Int(Double(totalTokens) * 0.03)
+        let output = Int(Double(totalTokens) * 0.07)
+        let cacheCreation = Int(Double(totalTokens) * 0.12)
+        return TokenUsage(
+            inputTokens: input,
+            outputTokens: output,
+            cacheCreationInputTokens: cacheCreation,
+            cacheReadInputTokens: max(0, totalTokens - input - output - cacheCreation)
+        )
+    }
 }

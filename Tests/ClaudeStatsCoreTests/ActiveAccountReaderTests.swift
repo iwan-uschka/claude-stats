@@ -55,7 +55,7 @@ final class ActiveAccountReaderTests: XCTestCase {
         """
     }
 
-    private func oauthAccount(uuid: String, organization: String = "Bitgrip") -> String {
+    private func oauthAccount(uuid: String, organization: String = "Other Org") -> String {
         """
         { "accountUuid": "\(uuid)", "emailAddress": "me@example.com",
           "organizationName": "\(organization)", "organizationUuid": "a1b2c3d4" }
@@ -70,7 +70,7 @@ final class ActiveAccountReaderTests: XCTestCase {
         let reading = makeReader().readActiveAccount()
 
         XCTAssertEqual(reading.account?.uuid, uuid)
-        XCTAssertEqual(reading.account?.organizationName, "Bitgrip")
+        XCTAssertEqual(reading.account?.organizationName, "Other Org")
         XCTAssertEqual(reading.account?.email, "me@example.com")
     }
 
@@ -196,13 +196,13 @@ final class ActiveAccountReaderTests: XCTestCase {
         let reader = makeReader()
         XCTAssertEqual(reader.readActiveAccount().account?.uuid, uuid)
 
-        try write(stateFile(oauthAccount: oauthAccount(uuid: "second-account", organization: "creativytool")))
+        try write(stateFile(oauthAccount: oauthAccount(uuid: "second-account", organization: "Example Org")))
         try FileManager.default.setAttributes(
             [.modificationDate: Date().addingTimeInterval(5)], ofItemAtPath: stateFileURL.path)
 
         let reading = reader.readActiveAccount()
         XCTAssertEqual(reading.account?.uuid, "second-account")
-        XCTAssertEqual(reading.account?.organizationName, "creativytool")
+        XCTAssertEqual(reading.account?.organizationName, "Example Org")
     }
 
     /// The file disappearing drops the remembered fingerprint too, so the next

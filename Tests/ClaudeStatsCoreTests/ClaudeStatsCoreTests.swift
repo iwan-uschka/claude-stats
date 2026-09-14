@@ -3,7 +3,7 @@ import XCTest
 
 final class ClaudeStatsCoreTests: XCTestCase {
     /// Placeholder so `swift test` has something to run. Real coverage for
-    /// parsing, quota, and plan detection lands with those implementations.
+    /// parsing and quota lands with those implementations.
     func testEntrypointMapsRawJSONLValues() {
         XCTAssertEqual(Entrypoint(rawJSONLValue: "cli"), .cli)
         XCTAssertEqual(Entrypoint(rawJSONLValue: "claude-vscode"), .vscode)
@@ -29,12 +29,6 @@ final class ClaudeStatsCoreTests: XCTestCase {
     func testTimeWindowStartDate() {
         let end = Date(timeIntervalSince1970: 1000)
         XCTAssertEqual(TimeWindow.fiveHour.startDate(endingAt: end), end.addingTimeInterval(-5 * 60 * 60))
-    }
-
-    func testNearestKnownTierAtToleranceBoundary() {
-        // 19_000 * 1.25 == 23_750, exactly at default tolerance
-        XCTAssertEqual(PlanTier.nearestKnownTier(forFiveHourTokens: 23_750), .pro)
-        XCTAssertEqual(PlanTier.nearestKnownTier(forFiveHourTokens: 23_751), .custom(tokens: 23_751))
     }
 
     // MARK: - QuotaSnapshot coding
@@ -195,7 +189,7 @@ final class ClaudeStatsCoreTests: XCTestCase {
         let account = QuotaAccount(
             uuid: "0f9c1d3e-8a4b-4c2d-9e1f-6b7a8c9d0e1f",
             email: "me@example.com",
-            organizationName: "Bitgrip",
+            organizationName: "Other Org",
             organizationUuid: "a1b2c3d4-0000-0000-0000-000000000000"
         )
         let snapshot = QuotaSnapshot(
@@ -210,7 +204,7 @@ final class ClaudeStatsCoreTests: XCTestCase {
 
         XCTAssertEqual(decoded, snapshot)
         XCTAssertEqual(decoded.account, account)
-        XCTAssertEqual(decoded.account?.organizationName, "Bitgrip")
+        XCTAssertEqual(decoded.account?.organizationName, "Other Org")
     }
 
     /// Same contract as the scoped-limits and usage-credits keys: a payload

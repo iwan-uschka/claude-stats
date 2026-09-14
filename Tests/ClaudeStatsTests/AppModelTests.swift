@@ -49,36 +49,43 @@ final class AppModelTests: XCTestCase {
 
         func entrypointBreakdown(for window: TimeWindow) throws -> EntrypointBreakdown { throw Failure() }
         func modelUsage(last24h: Bool) throws -> [ModelUsage] { throw Failure() }
-        func burnRateUsagePerHour() throws -> TokenUsage { throw Failure() }
         func estimatedCostToday() throws -> Double { throw Failure() }
-        func detectedPlanTier() throws -> PlanTier { throw Failure() }
+        func dailyUsage(days: Int) throws -> DailyUsageHistory { throw Failure() }
     }
 
-    /// ``MockUsageStore``'s data, but counting the breakdown reads — the point
-    /// of precomputing all three windows is that switching the picker makes no
-    /// further read, which is only observable as a call count.
+    /// ``MockUsageStore``'s data, but counting the reads the popover's reload
+    /// actually makes. The point of the two blocks sharing one
+    /// ``DailyUsageHistory`` is that nothing else is summed per reload, and a
+    /// query that crept back in is only observable as a call count.
     /// `@unchecked Sendable` for the same reason as
     /// ``ScriptedPromoNoticeProvider``: `UsageStoring` is synchronous and only
     /// the single `@MainActor` test using one ever touches it.
     private final class CountingUsageStore: UsageStoring, @unchecked Sendable {
         private let backing = MockUsageStore()
+        private(set) var dailyUsageCallCount = 0
         private(set) var breakdownCallCount = 0
-        private(set) var requestedWindows: [TimeWindow] = []
-        /// When set, that one window throws while the other two still succeed —
-        /// the partial-failure case the one-shot assignment has to survive.
-        var failingWindow: TimeWindow?
+        private(set) var modelUsageCallCount = 0
+        private(set) var costTodayCallCount = 0
 
         func entrypointBreakdown(for window: TimeWindow) throws -> EntrypointBreakdown {
             breakdownCallCount += 1
-            requestedWindows.append(window)
-            if window == failingWindow { throw FailingUsageStore.Failure() }
             return try backing.entrypointBreakdown(for: window)
         }
 
-        func modelUsage(last24h: Bool) throws -> [ModelUsage] { try backing.modelUsage(last24h: last24h) }
-        func burnRateUsagePerHour() throws -> TokenUsage { try backing.burnRateUsagePerHour() }
-        func estimatedCostToday() throws -> Double { try backing.estimatedCostToday() }
-        func detectedPlanTier() throws -> PlanTier { try backing.detectedPlanTier() }
+        func modelUsage(last24h: Bool) throws -> [ModelUsage] {
+            modelUsageCallCount += 1
+            return try backing.modelUsage(last24h: last24h)
+        }
+
+        func estimatedCostToday() throws -> Double {
+            costTodayCallCount += 1
+            return try backing.estimatedCostToday()
+        }
+
+        func dailyUsage(days: Int) throws -> DailyUsageHistory {
+            dailyUsageCallCount += 1
+            return try backing.dailyUsage(days: days)
+        }
     }
 
     /// Hands back whatever the test scripted, and records what the model asked
@@ -213,9 +220,8 @@ final class AppModelTests: XCTestCase {
         model.refresh(force: true)
         await waitUntil { model.quotaError != nil }
 
-        XCTAssertEqual(model.activeErrors.count, 3)
+        XCTAssertEqual(model.activeErrors.count, 2)
         XCTAssertNotNil(model.localStatsError)
-        XCTAssertNotNil(model.breakdownError)
         XCTAssertNotNil(model.quotaError)
     }
 
@@ -312,24 +318,6 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(callsAfterClear, callsBeforeClear)
     }
 
-    /// The cached total has to move with every reload — a stale sum would put
-    /// the popover's cache-read caption on the wrong numbers.
-    func testModelUsageTotalIsKeptInSyncWithTheLoadedRows() throws {
-        let store = MockUsageStore()
-        let model = makeModel(quota: ScriptedQuotaProvider(), store: store)
-        XCTAssertEqual(model.modelUsageTotal, .zero)
-
-        model.refresh(force: true)
-
-        let expected = try store.modelUsage(last24h: true).reduce(TokenUsage.zero) { $0 + $1.usage }
-        XCTAssertNotEqual(expected, .zero)
-        XCTAssertEqual(model.modelUsageTotal, expected)
-
-        model.updateUsageStore(MockUsageStore(modelUsageLast24h: []))
-
-        XCTAssertEqual(model.modelUsageTotal, .zero)
-    }
-
     func testPollAfterInstallRetriesUntilSnapshotLands() async {
         let provider = ScriptedQuotaProvider()
         await provider.setResult(.failure(ClaudeStatsError.noQuotaSourceAvailable))
@@ -342,70 +330,79 @@ final class AppModelTests: XCTestCase {
         XCTAssertNotNil(model.snapshot)
     }
 
-    // MARK: - Entrypoint breakdown
+    // MARK: - Daily history
 
-    /// One reload fills in every window, so the picker has nothing left to
-    /// compute when it changes.
-    func testOneReloadPrecomputesEveryWindowsBreakdown() throws {
-        let store = CountingUsageStore()
-        let model = makeModel(quota: ScriptedQuotaProvider(), store: store)
-        XCTAssertTrue(model.breakdownsByWindow.isEmpty)
+    /// Both popover blocks read `dailyHistory` directly — it is the only local
+    /// reading either of them has — so a reload has to fill it. An empty one is
+    /// the sections' "no local usage yet" state, not a "still loading" one, and
+    /// the two must not be confused.
+    func testReloadFillsInTheDailyHistoryTheChartDraws() {
+        let model = makeModel(quota: ScriptedQuotaProvider(), store: MockUsageStore())
+        XCTAssertTrue(model.dailyHistory.isEmpty)
 
         model.refresh(force: true)
 
-        XCTAssertEqual(store.breakdownCallCount, TimeWindow.allCases.count)
-        XCTAssertEqual(Set(store.requestedWindows), Set(TimeWindow.allCases))
-        XCTAssertNil(model.breakdownError)
-        for window in TimeWindow.allCases {
-            let expected = try store.entrypointBreakdown(for: window)
-            model.selectedWindow = window
-            XCTAssertEqual(model.breakdownsByWindow[window], expected)
-            XCTAssertEqual(model.breakdown, expected)
-            XCTAssertEqual(model.breakdown?.window, window)
-        }
+        XCTAssertEqual(model.dailyHistory.days.count, AppModel.chartWindowDays)
+        // `bySource` is keyed by `Entrypoint?` — the `nil` key is the "Other"
+        // band — so the expected set has to be optional too. The fixture fills
+        // every recognised source and nothing else, so there is no `nil` key.
+        XCTAssertEqual(
+            Set(model.dailyHistory.bySource.keys),
+            Set(Entrypoint.allCases.map { Entrypoint?.some($0) })
+        )
     }
 
-    /// The regression test for the picker stall: selecting a window is a
-    /// dictionary lookup, never a re-sum of tens of thousands of events on the
-    /// main actor.
-    func testSwitchingWindowsAfterAReloadReadsTheStoreAgainNever() {
-        let store = CountingUsageStore()
-        let model = makeModel(quota: ScriptedQuotaProvider(), store: store)
-        model.refresh(force: true)
-        let callsAfterReload = store.breakdownCallCount
-
-        model.selectedWindow = .twentyFourHour
-        model.selectedWindow = .sevenDay
-        model.selectedWindow = .fiveHour
-
-        XCTAssertEqual(store.breakdownCallCount, callsAfterReload)
-    }
-
-    func testBreakdownFailureSetsTheErrorAndLeavesNoBreakdown() {
+    func testDailyHistoryFailureSetsTheLocalStatsErrorAndLeavesNoHistory() {
         let model = makeModel(quota: ScriptedQuotaProvider(), store: FailingUsageStore())
 
         model.refresh(force: true)
 
-        XCTAssertNotNil(model.breakdownError)
-        XCTAssertNil(model.breakdown)
-        XCTAssertTrue(model.breakdownsByWindow.isEmpty)
+        XCTAssertNotNil(model.localStatsError)
+        XCTAssertTrue(model.dailyHistory.isEmpty)
     }
 
-    /// One window throwing must not leave a cache mixing the windows that
-    /// still succeeded with the previous reload's numbers — the whole
-    /// dictionary is assigned once, or not at all.
-    func testOneWindowFailingKeepsThePreviousBreakdownsIntact() throws {
+    /// A reload that throws must leave the last-good history on screen rather
+    /// than blanking both charts.
+    ///
+    /// The cold-start case above can't see this: with nothing loaded first,
+    /// `dailyHistory.isEmpty` holds whether or not the `catch` clears it. The
+    /// failure that matters is the later one — an FSEvents batch swapping the
+    /// store under a popover that is already drawing thirty days — where
+    /// emptying the history would replace two charts with an empty state
+    /// beside an error banner.
+    func testAFailedReloadAfterASuccessfulOneKeepsTheHistoryItAlreadyHas() {
+        let model = makeModel(quota: ScriptedQuotaProvider(), store: MockUsageStore())
+        model.refresh(force: true)
+        let loaded = model.dailyHistory
+        XCTAssertFalse(loaded.isEmpty)
+
+        // `updateUsageStore(_:)` reloads as it swaps, so this is the failing
+        // reload — no extra test double needed to script one.
+        model.updateUsageStore(FailingUsageStore())
+
+        XCTAssertNotNil(model.localStatsError)
+        XCTAssertEqual(model.dailyHistory, loaded)
+    }
+
+    /// The two blocks read one history, so a reload has to make exactly one
+    /// store query — and none of the three the popover used to also make.
+    ///
+    /// The call counts are the assertion. `entrypointBreakdown` fed the old
+    /// five-hour legend, `modelUsage(last24h:)` the `fixed 24h` rows and
+    /// `estimatedCostToday()` the `Today` row; all three walked tens of
+    /// thousands of `UsageEvent`s on the main actor for numbers nothing shows
+    /// now. Silently reinstating one would cost that walk on every FSEvents
+    /// batch with nothing failing to catch it.
+    func testAReloadQueriesTheDailyHistoryAndNothingElse() {
         let store = CountingUsageStore()
         let model = makeModel(quota: ScriptedQuotaProvider(), store: store)
-        model.refresh(force: true)
-        let loaded = model.breakdownsByWindow
-        XCTAssertEqual(loaded.count, TimeWindow.allCases.count)
 
-        store.failingWindow = .sevenDay
         model.refresh(force: true)
 
-        XCTAssertNotNil(model.breakdownError)
-        XCTAssertEqual(model.breakdownsByWindow, loaded)
+        XCTAssertEqual(store.dailyUsageCallCount, 1)
+        XCTAssertEqual(store.breakdownCallCount, 0)
+        XCTAssertEqual(store.modelUsageCallCount, 0)
+        XCTAssertEqual(store.costTodayCallCount, 0)
     }
 
     // MARK: - Usage credits
@@ -460,10 +457,10 @@ final class AppModelTests: XCTestCase {
         func readActiveAccount() -> ActiveAccountReading { reading }
     }
 
-    private static let creativytool = QuotaAccount(
-        uuid: "0f9c1d3e-8a4b-4c2d-9e1f-6b7a8c9d0e1f", organizationName: "creativytool")
-    private static let bitgrip = QuotaAccount(
-        uuid: "7d2b6a10-3c55-4f8e-9a21-0b4c5d6e7f80", organizationName: "Bitgrip")
+    private static let exampleOrg = QuotaAccount(
+        uuid: "0f9c1d3e-8a4b-4c2d-9e1f-6b7a8c9d0e1f", organizationName: "Example Org")
+    private static let otherOrg = QuotaAccount(
+        uuid: "7d2b6a10-3c55-4f8e-9a21-0b4c5d6e7f80", organizationName: "Other Org")
 
     /// A statusline cache file as the hook writes it, stamped with `account`.
     private func writeCacheFile(
@@ -530,20 +527,20 @@ final class AppModelTests: XCTestCase {
         let sessions = directory.appendingPathComponent(
             StatuslineCacheReader.sessionCacheDirectoryName, isDirectory: true)
         let now = Date()
-        try writeCacheFile(in: sessions, session: "left-behind", account: Self.bitgrip,
+        try writeCacheFile(in: sessions, session: "left-behind", account: Self.otherOrg,
                            fiveHourPercent: 56, capturedAt: now.addingTimeInterval(-60),
                            resetsAt: now.addingTimeInterval(3600))
-        try writeCacheFile(in: sessions, session: "current", account: Self.creativytool,
+        try writeCacheFile(in: sessions, session: "current", account: Self.exampleOrg,
                            fiveHourPercent: 4, capturedAt: now.addingTimeInterval(-30),
                            resetsAt: now.addingTimeInterval(3600))
 
         let model = makeModel(quota: makeAccountAwareProvider(
-            cacheDirectory: directory, activeAccount: Self.creativytool))
+            cacheDirectory: directory, activeAccount: Self.exampleOrg))
         await model.refresh(force: true)?.value
 
-        XCTAssertEqual(model.snapshot?.account, Self.creativytool)
+        XCTAssertEqual(model.snapshot?.account, Self.exampleOrg)
         XCTAssertEqual(model.snapshot?.fiveHour?.percentUsed, 4)
-        XCTAssertEqual(model.otherAccountSnapshots.map { $0.account }, [Self.bitgrip])
+        XCTAssertEqual(model.otherAccountSnapshots.map { $0.account }, [Self.otherOrg])
         XCTAssertEqual(model.otherAccountSnapshots.first?.fiveHour?.percentUsed, 56)
         XCTAssertNil(model.quotaError)
     }
@@ -569,16 +566,141 @@ final class AppModelTests: XCTestCase {
         XCTAssertTrue(model.otherAccountSnapshots.isEmpty)
     }
 
-    /// The label above each group of rows: the account's own name when the
+    /// The label on each other-account group: the account's own name when the
     /// reading was stamped, and an explicit "we don't know" when it wasn't —
-    /// never a blank line and never the neighbouring account's name.
-    func testAccountLabelNamesTheAccountOrSaysItIsUnknown() {
+    /// never a blank line and never the neighbouring account's name. Always
+    /// prefixed, so a collapsed row says these readings are not the ones the
+    /// bars above describe.
+    func testOtherAccountTitleNamesTheAccountOrSaysItIsUnknown() {
         let model = makeModel(quota: ScriptedQuotaProvider())
         var stamped = MockQuotaProvider.sampleSnapshot()
-        stamped.account = Self.bitgrip
+        stamped.account = Self.otherOrg
 
-        XCTAssertEqual(model.accountLabel(for: stamped), "Bitgrip")
-        XCTAssertEqual(model.accountLabel(for: MockQuotaProvider.sampleSnapshot()), "Unknown account")
+        XCTAssertEqual(model.otherAccountTitle(for: stamped), "Other Org")
+        XCTAssertEqual(
+            model.otherAccountTitle(for: MockQuotaProvider.sampleSnapshot()),
+            "Unknown account"
+        )
+    }
+
+    /// The quota section's own title, across all four states it has to cover.
+    ///
+    /// The checkmark marker is the interesting half: it exists to contrast
+    /// with the crossed inactive groups below, so on the one-account machine —
+    /// every machine until the user switches logins — it stays off and the
+    /// bare account name (or the section's own name, when nothing on disk said
+    /// whose reading this is) stands alone.
+    func testQuotaSectionTitleNamesTheAccountAndOnlyMarksItWhenThereAreOthers() async {
+        var stamped = MockQuotaProvider.sampleSnapshot()
+        stamped.account = Self.otherOrg
+        let unstamped = MockQuotaProvider.sampleSnapshot()
+        var other = MockQuotaProvider.sampleSnapshot()
+        other.account = Self.exampleOrg
+
+        func titledModel(
+            active: QuotaSnapshot?,
+            others: [QuotaSnapshot]
+        ) async -> AppModel {
+            let provider = ScriptedQuotaProvider()
+            await provider.setResult(active.map { .success($0) }
+                ?? .failure(ClaudeStatsError.noQuotaSourceAvailable))
+            await provider.setOtherAccounts(others)
+            let model = makeModel(quota: provider)
+            await model.refresh(force: true)?.value
+            return model
+        }
+
+        // One account, stamped: the account's own name, no state marker.
+        let alone = await titledModel(active: stamped, others: [])
+        XCTAssertEqual(alone.snapshot?.account, Self.otherOrg)
+        XCTAssertEqual(alone.quotaSectionTitle, "Other Org")
+        XCTAssertFalse(alone.showsAccountStateMarkers)
+
+        // One account, unstamped: the section names itself rather than guessing.
+        let anonymous = await titledModel(active: unstamped, others: [])
+        XCTAssertEqual(anonymous.quotaSectionTitle, "Quota")
+        XCTAssertFalse(anonymous.showsAccountStateMarkers)
+
+        // No snapshot at all is the same case — there is no account to name.
+        let empty = await titledModel(active: nil, others: [])
+        XCTAssertNil(empty.snapshot)
+        XCTAssertEqual(empty.quotaSectionTitle, "Quota")
+
+        // Two accounts, stamped: the name, with the checkmark marker on
+        // against the crossed inactive group below.
+        let switched = await titledModel(active: stamped, others: [other])
+        XCTAssertFalse(switched.otherAccountSnapshots.isEmpty)
+        XCTAssertEqual(switched.quotaSectionTitle, "Other Org")
+        XCTAssertTrue(switched.showsAccountStateMarkers)
+
+        // Two accounts, and the active one's reading is unstamped: the marker
+        // still draws the contrast, and the title says it names nobody.
+        let switchedAnonymous = await titledModel(active: unstamped, others: [other])
+        XCTAssertEqual(switchedAnonymous.quotaSectionTitle, "Unknown account")
+        XCTAssertTrue(switchedAnonymous.showsAccountStateMarkers)
+    }
+
+    /// Every other-account group starts collapsed, and toggling one leaves the
+    /// others alone — the popover rebuilds those rows on every poll, so the
+    /// open/closed state has to live on the model, keyed per group.
+    func testOtherAccountGroupsStartCollapsedAndToggleIndependently() {
+        let model = makeModel(quota: ScriptedQuotaProvider())
+        var stamped = MockQuotaProvider.sampleSnapshot()
+        stamped.account = Self.otherOrg
+        let unstamped = MockQuotaProvider.sampleSnapshot()
+
+        XCTAssertTrue(model.expandedOtherAccounts.isEmpty)
+        XCTAssertFalse(model.isOtherAccountExpanded(stamped))
+        XCTAssertFalse(model.isOtherAccountExpanded(unstamped))
+
+        model.toggleOtherAccountExpansion(for: stamped)
+        XCTAssertTrue(model.isOtherAccountExpanded(stamped))
+        XCTAssertEqual(model.expandedOtherAccounts, [Self.otherOrg.uuid])
+        // One group opening must not open the others.
+        XCTAssertFalse(model.isOtherAccountExpanded(unstamped))
+
+        model.toggleOtherAccountExpansion(for: unstamped)
+        XCTAssertEqual(model.expandedOtherAccounts, [Self.otherOrg.uuid, "unknown"])
+
+        model.toggleOtherAccountExpansion(for: stamped)
+        XCTAssertFalse(model.isOtherAccountExpanded(stamped))
+        XCTAssertEqual(model.expandedOtherAccounts, ["unknown"])
+    }
+
+    /// The expansion key is the grouping key, so a refresh that hands back an
+    /// equal-but-new snapshot for the same account keeps that group open.
+    func testExpansionSurvivesASnapshotBeingRebuiltForTheSameAccount() {
+        let model = makeModel(quota: ScriptedQuotaProvider())
+        var first = MockQuotaProvider.sampleSnapshot()
+        first.account = Self.otherOrg
+        model.toggleOtherAccountExpansion(for: first)
+
+        // Same account, a different (fresher) reading — what a poll produces.
+        var second = MockQuotaProvider.sampleSnapshot(now: Date().addingTimeInterval(60))
+        second.account = Self.otherOrg
+
+        XCTAssertTrue(model.isOtherAccountExpanded(second))
+        XCTAssertFalse(
+            model.isOtherAccountExpanded(MockQuotaProvider.sampleSnapshot()),
+            "a different group must not inherit the open state"
+        )
+    }
+
+    /// A click anywhere on an inactive account's row flips the group, and the
+    /// caret the row draws reads the same state back — the row is one button,
+    /// so the two can never disagree.
+    func testToggleOtherAccountExpansionFlipsTheGroupsState() {
+        let model = makeModel(quota: ScriptedQuotaProvider())
+        var snapshot = MockQuotaProvider.sampleSnapshot()
+        snapshot.account = Self.otherOrg
+
+        XCTAssertFalse(model.isOtherAccountExpanded(snapshot))
+        model.toggleOtherAccountExpansion(for: snapshot)
+        XCTAssertTrue(model.isOtherAccountExpanded(snapshot))
+        XCTAssertEqual(model.expandedOtherAccounts, [Self.otherOrg.uuid])
+        model.toggleOtherAccountExpansion(for: snapshot)
+        XCTAssertFalse(model.isOtherAccountExpanded(snapshot))
+        XCTAssertTrue(model.expandedOtherAccounts.isEmpty)
     }
 
     /// The other accounts' rows come from the same files the active account's
@@ -587,7 +709,7 @@ final class AppModelTests: XCTestCase {
     func testOtherAccountsArePublishedEvenWhenTheActiveReadingFails() async {
         let provider = ScriptedQuotaProvider()
         var other = MockQuotaProvider.sampleSnapshot()
-        other.account = Self.bitgrip
+        other.account = Self.otherOrg
         await provider.setOtherAccounts([other])
         await provider.setResult(.failure(ClaudeStatsError.noQuotaSourceAvailable))
         let model = makeModel(quota: provider)
@@ -605,7 +727,7 @@ final class AppModelTests: XCTestCase {
     func testClearQuotaCacheAlsoDropsTheOtherAccountsRows() async {
         let provider = ScriptedQuotaProvider()
         var other = MockQuotaProvider.sampleSnapshot()
-        other.account = Self.bitgrip
+        other.account = Self.otherOrg
         await provider.setOtherAccounts([other])
         await provider.setResult(.success(MockQuotaProvider.sampleSnapshot()))
         let model = makeModel(quota: provider)
@@ -767,5 +889,31 @@ final class AppModelTests: XCTestCase {
         model.refresh(force: true)
 
         XCTAssertTrue(model.promoNotices.isEmpty)
+    }
+
+    // MARK: - README showcase fixture
+
+    func testShowcaseFixtureShowsTwoAccountsWithGenericNames() throws {
+        let model = AppModel.previewShowcase(now: Date())
+
+        // This fixture *is* the README screenshot, so what it carries is a
+        // published claim about what the app looks like. A single-account shot
+        // says nothing about a machine logged into two, which is the case the
+        // account grouping exists for — pinned here because a refactor that
+        // dropped the second account would break no other test and no build.
+        let active = try XCTUnwrap(model.snapshot?.account)
+        let other = try XCTUnwrap(model.otherAccountSnapshots.first?.account)
+        XCTAssertEqual(model.otherAccountSnapshots.count, 1)
+        XCTAssertNotEqual(active.uuid, other.uuid)
+
+        // And generic, because the picture is published: no real address and no
+        // real organisation. `example.com` is reserved for exactly this by
+        // RFC 2606, so it can never collide with someone's actual account.
+        for account in [active, other] {
+            XCTAssertTrue(
+                try XCTUnwrap(account.email).hasSuffix("@example.com"),
+                "\(account.displayName) is not a reserved example address"
+            )
+        }
     }
 }

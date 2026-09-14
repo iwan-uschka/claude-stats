@@ -1,5 +1,6 @@
 import ClaudeStatsCore
 import Foundation
+import SwiftUI
 
 /// Bridges the Core data layer into the UI. Holds the last successful
 /// readings for local stats/breakdown; the quota snapshot is cleared when
@@ -19,36 +20,29 @@ final class AppModel: ObservableObject {
     /// empty on a one-account machine. See
     /// ``QuotaProviding/otherAccountSnapshots()``.
     @Published private(set) var otherAccountSnapshots: [QuotaSnapshot] = []
-    @Published private(set) var planTier: PlanTier?
-    /// Trailing-hour consumption, split by token kind so the popover can both
-    /// show the rate and explain how much of it is replayed cache reads.
-    @Published private(set) var burnRateUsage: TokenUsage?
-    @Published private(set) var estimatedCostToday: Double?
-    /// Every ``TimeWindow``'s breakdown, all recomputed together by
-    /// `reloadBreakdown()`. Precomputed rather than derived on demand because
-    /// the summing walks tens of thousands of `UsageEvent`s on the main actor:
-    /// doing it when the picker changes stalled the segmented control's own
-    /// selection animation for up to a second. The three windows cost one
-    /// reload each on the paths where the data can actually change; switching
-    /// windows now only picks a different key out of here.
-    @Published private(set) var breakdownsByWindow: [TimeWindow: EntrypointBreakdown] = [:]
-    /// The breakdown for the currently-selected window, or `nil` before the
-    /// first successful reload. Computed, not `@Published` — the views'
-    /// `objectWillChange` fires from ``breakdownsByWindow`` and
-    /// ``selectedWindow``, which is all SwiftUI needs (same shape as
-    /// ``activeErrors``).
-    var breakdown: EntrypointBreakdown? { breakdownsByWindow[selectedWindow] }
-    @Published private(set) var modelUsage: [ModelUsage] = [] {
-        didSet { modelUsageTotal = modelUsage.reduce(TokenUsage.zero) { $0 + $1.usage } }
-    }
-    /// Every ``modelUsage`` row summed, folded once per reload rather than on
-    /// each popover render — the "By model" caption is about the section's
-    /// numbers as a whole, and the popover re-renders every clock tick.
-    @Published private(set) var modelUsageTotal: TokenUsage = .zero
+    /// Keys of the ``otherAccountSnapshots`` groups the user has opened in the
+    /// popover — `account?.uuid`, or `"unknown"` for the unstamped group.
+    ///
+    /// Every group starts collapsed, so this is empty until something is
+    /// opened. It lives on the model rather than in the view's `@State` so it
+    /// survives the popover closing and reopening, and a poll rebuilding the
+    /// rows; it is deliberately not persisted across launches, since which
+    /// other accounts exist isn't either.
+    @Published private(set) var expandedOtherAccounts: Set<String> = []
+    /// Daily history behind both popover blocks — "By source" stacks its
+    /// per-source token split, "By model" stacks the estimated spend of its
+    /// per-family one — covering ``chartWindowDays``.
+    ///
+    /// The single local reading the popover has, since the two blocks replaced
+    /// the five-hour legend, the fixed-24h model rows and the `Today` spend
+    /// figure: one window, one hover rule, one query. Empty until the first
+    /// reload, and on a Mac with no local history at all — the sections draw an
+    /// empty state rather than a flat line through zero.
+    @Published private(set) var dailyHistory: DailyUsageHistory = .empty
     @Published private(set) var usingSampleData: Bool
 
     /// Promo lines Claude Code has cached for its own rate-limit bars, shown
-    /// under the matching bar in the popover.
+    /// in bar order below the quota bars in the popover.
     ///
     /// Deliberately untouched by every `runQuotaPoll()` failure path: the
     /// notice comes from a different file than the quota reading, so a quota
@@ -60,7 +54,6 @@ final class AppModel: ObservableObject {
     /// Kept independent per subsystem so one reload's success can't clobber
     /// another's still-live failure — see `activeErrors`.
     @Published private(set) var localStatsError: String?
-    @Published private(set) var breakdownError: String?
     @Published private(set) var quotaError: String?
     /// Set instead of `quotaError` for `.staleQuotaSource` — the source has a
     /// real (if old) reading, not nothing, so ``snapshot`` is kept (or, on a
@@ -77,12 +70,7 @@ final class AppModel: ObservableObject {
     /// Every still-live failure, not just the highest-priority one — the
     /// popover clears `snapshot` on a quota failure, so a masked `quotaError`
     /// would otherwise leave empty bars with no stated cause.
-    var activeErrors: [String] { [localStatsError, breakdownError, quotaError].compactMap { $0 } }
-
-    /// Window selected by the "This Mac" toggle. Purely a choice of which
-    /// already-computed ``breakdownsByWindow`` entry to show — it triggers no
-    /// reload, so clicking the picker costs nothing but a dictionary lookup.
-    @Published var selectedWindow: TimeWindow = .fiveHour
+    var activeErrors: [String] { [localStatsError, quotaError].compactMap { $0 } }
 
     private let quotaProvider: any QuotaProviding
     private let promoNoticeProvider: any PromoNoticeProviding
@@ -135,7 +123,6 @@ final class AppModel: ObservableObject {
     func updateUsageStore(_ newStore: any UsageStoring) {
         usageStore = newStore
         reloadLocalStats()
-        reloadBreakdown()
     }
 
     /// Reload everything. The quota network poll is throttled to
@@ -143,16 +130,14 @@ final class AppModel: ObservableObject {
     /// the spawned quota-poll task (`nil` if throttled) so callers that need
     /// to know when it lands — e.g. ``pollAfterInstall()`` — can await it.
     ///
-    /// `reloadLocalData` skips `reloadLocalStats()`/`reloadBreakdown()` for the
-    /// one caller (`ClaudeStatsApp.rebuildUsageStore`) that just ran them via
-    /// `updateUsageStore(_:)` moments earlier — those walk every `UsageEvent`
-    /// for all three windows, so redoing them here would pay that cost twice
-    /// on every FSEvents batch.
+    /// `reloadLocalData` skips `reloadLocalStats()` for the one caller
+    /// (`ClaudeStatsApp.rebuildUsageStore`) that just ran it via
+    /// `updateUsageStore(_:)` moments earlier — it walks the corpus, so redoing
+    /// it here would pay that cost twice on every FSEvents batch.
     @discardableResult
     func refresh(force: Bool = false, reloadLocalData: Bool = true) -> Task<Void, Never>? {
         if reloadLocalData {
             reloadLocalStats()
-            reloadBreakdown()
         }
 
         let shouldPollQuota = force || shouldRunUpdateCheck(lastCheck: lastQuotaPoll, now: Date(), interval: quotaPollInterval)
@@ -292,7 +277,6 @@ final class AppModel: ObservableObject {
             // failure instead.
             quotaError = error.localizedDescription
             reloadLocalStats()
-            reloadBreakdown()
             return
         }
 
@@ -306,7 +290,6 @@ final class AppModel: ObservableObject {
         quotaCacheClearedNotice = "Statusline cache cleared — the bars fall back to Claude Code's own cached reading until the next statusline render."
 
         reloadLocalStats()
-        reloadBreakdown()
 
         refreshTask?.cancel()
         pollAfterInstall()
@@ -335,22 +318,90 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// What the popover calls the account a snapshot describes.
+    /// The quota block's own section title — the counterpart of the literal
+    /// "By source" and "By model" titles next to it.
+    ///
+    /// Names the account the bars underneath describe, so the block announces
+    /// itself the way the other two sections do. Two rules decide the wording:
+    ///
+    /// - **The account's name, or the literal "Quota".** An unstamped reading
+    ///   (or no reading at all) must not be labelled with a guessed account, so
+    ///   the section falls back to naming itself rather than naming nobody.
+    /// - **"Unknown account" instead of "Quota" once other accounts are
+    ///   listed.** With inactive groups below, the title marks *which* login
+    ///   the bars belong to (see ``showsAccountStateMarkers``), so an unstamped
+    ///   active reading has to say it names nobody rather than hide behind
+    ///   the section name.
+    ///
+    /// The active/inactive contrast itself is drawn by icons in the view, not
+    /// by words here. Lives here rather than in the view so all four
+    /// combinations are testable.
+    var quotaSectionTitle: String {
+        let name = snapshot?.account?.displayName
+        guard !otherAccountSnapshots.isEmpty else { return name ?? "Quota" }
+        return name ?? "Unknown account"
+    }
+
+    /// Whether the account titles carry their state icons — a checkmark on
+    /// the active account's title, a cross on every inactive group.
+    ///
+    /// Only when there is something to be active *against*: on the
+    /// one-account machine, which is every machine until the user switches
+    /// logins, a checkmark would contrast with nothing and the bare name
+    /// reads better. The inactive groups exist only in that same case, so
+    /// their crosses need no separate gate.
+    var showsAccountStateMarkers: Bool { !otherAccountSnapshots.isEmpty }
+
+    /// What the popover calls one of the *other* accounts' disclosure groups.
+    ///
+    /// The bare account name; the view puts a cross icon in front of it,
+    /// against the checkmark on ``quotaSectionTitle``, so a collapsed row says
+    /// what it is without a number: these readings belong to a login nobody is
+    /// currently signed in as.
     ///
     /// An unstamped reading is genuinely "we don't know whose this is" — a
     /// cache file written before the hook script learned to stamp one — so it
     /// says so rather than leaving a blank label or borrowing a name from the
     /// account next to it. Lives here rather than in the view so both branches
     /// are testable.
-    func accountLabel(for snapshot: QuotaSnapshot) -> String {
+    func otherAccountTitle(for snapshot: QuotaSnapshot) -> String {
         snapshot.account?.displayName ?? "Unknown account"
+    }
+
+    /// Stable key for one other-account group's expansion state.
+    ///
+    /// The uuid, or the one `"unknown"` bucket the unstamped group forms — the
+    /// same grouping the readings themselves use, so a group keeps its open or
+    /// closed state across a refresh that rebuilds the snapshots.
+    static func otherAccountKey(for snapshot: QuotaSnapshot) -> String {
+        snapshot.account?.uuid ?? "unknown"
+    }
+
+    /// Whether one other-account group is currently open.
+    ///
+    /// A `Set` of open keys on the model rather than a `Bool` per row because
+    /// the rows are rebuilt from the snapshots on every refresh: anything
+    /// stored per view would collapse the group the moment a poll lands.
+    func isOtherAccountExpanded(_ snapshot: QuotaSnapshot) -> Bool {
+        expandedOtherAccounts.contains(Self.otherAccountKey(for: snapshot))
+    }
+
+    /// Flips one group open or closed — what a click anywhere on the inactive
+    /// account's row does, since the whole row is one button.
+    func toggleOtherAccountExpansion(for snapshot: QuotaSnapshot) {
+        let key = Self.otherAccountKey(for: snapshot)
+        if expandedOtherAccounts.contains(key) {
+            expandedOtherAccounts.remove(key)
+        } else {
+            expandedOtherAccounts.insert(key)
+        }
     }
 
     /// The promo notice for one bar, or `nil` when there is none.
     ///
     /// First match wins if a (malformed) payload ever carries two entries for
-    /// the same bar — the bar has one line under it, and picking the first
-    /// keeps that deterministic.
+    /// the same bar — each bar contributes one line to the popover, and picking
+    /// the first keeps that deterministic.
     func promoNotice(for bar: QuotaWindowKind) -> RateLimitPromoNotice? {
         promoNotices.first { $0.bar == bar }
     }
@@ -367,40 +418,24 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Window the popover's charts cover. Thirty days is what the daily fold
+    /// can serve without touching retention, and about what fits at a readable
+    /// ~10 pt per day across the popover's width.
+    static let chartWindowDays = 30
+
+    /// One query, because the popover now reads one window.
+    ///
+    /// It used to also sum a five-hour per-entrypoint breakdown and a fixed-24h
+    /// per-model list, both of which walked tens of thousands of `UsageEvent`s
+    /// on the main actor for numbers that sat beside a thirty-day chart. The
+    /// two tables read the same ``DailyUsageHistory`` the charts do, so that
+    /// work is gone rather than moved.
     private func reloadLocalStats() {
         do {
-            planTier = try usageStore.detectedPlanTier()
-            burnRateUsage = try usageStore.burnRateUsagePerHour()
-            estimatedCostToday = try usageStore.estimatedCostToday()
-            modelUsage = try usageStore.modelUsage(last24h: true)
+            dailyHistory = try usageStore.dailyUsage(days: Self.chartWindowDays)
             localStatsError = nil
         } catch {
             localStatsError = error.localizedDescription
-        }
-    }
-
-    /// Recomputes all three windows at once, not just ``selectedWindow`` — see
-    /// ``breakdownsByWindow``. Called from every path where the underlying
-    /// events can have changed (`refresh()`, `updateUsageStore(_:)`,
-    /// `clearQuotaCache()`); no new cadence of its own.
-    ///
-    /// Delegates to ``UsageStoring/entrypointBreakdowns(for:)`` rather than
-    /// looping ``UsageStoring/entrypointBreakdown(for:)`` per window —
-    /// `LocalLogUsageStore` sums all three in one walk of the widest window's
-    /// events instead of three separate walks, so this no longer pays for the
-    /// 7-day slice three times over on every reload.
-    ///
-    /// Assigned in one shot at the end so a window that throws part-way through
-    /// never leaves a half-updated cache mixing two reloads' numbers. Defensive:
-    /// no shipping `UsageStoring` throws from `entrypointBreakdown(for:)` today —
-    /// `throws` there is protocol conformance — so in practice this is
-    /// all-or-nothing per reload either way.
-    private func reloadBreakdown() {
-        do {
-            breakdownsByWindow = try usageStore.entrypointBreakdowns(for: TimeWindow.allCases)
-            breakdownError = nil
-        } catch {
-            breakdownError = error.localizedDescription
         }
     }
 
@@ -417,12 +452,12 @@ extension AppModel {
     /// only same-file code can seed them synchronously — previews would otherwise
     /// render one frame of empty state before the async quota read lands.
     static func preview(
-        window: TimeWindow = .fiveHour,
         snapshot: QuotaSnapshot? = MockQuotaProvider.sampleSnapshot(),
         error: String? = nil,
         warning: String? = nil,
         promoNotices: [RateLimitPromoNotice] = [],
-        otherAccounts: [QuotaSnapshot] = []
+        otherAccounts: [QuotaSnapshot] = [],
+        usingSampleData: Bool = false
     ) -> AppModel {
         let store = MockUsageStore()
         // Inlined here (not a public Core factory) so a preview-only "no
@@ -444,19 +479,13 @@ extension AppModel {
                 otherAccounts: otherAccounts
             ),
             usageStore: store,
-            promoNoticeProvider: MockPromoNoticeProvider(notices: promoNotices)
+            promoNoticeProvider: MockPromoNoticeProvider(notices: promoNotices),
+            usingSampleData: usingSampleData
         )
-        model.selectedWindow = window
-        // Selecting a window no longer loads anything, so the breakdowns have
-        // to be filled in explicitly — one reload covers all three windows.
-        model.reloadBreakdown()
         model.snapshot = snapshot
         model.otherAccountSnapshots = otherAccounts
         model.promoNotices = promoNotices
-        model.planTier = try? store.detectedPlanTier()
-        model.burnRateUsage = try? store.burnRateUsagePerHour()
-        model.estimatedCostToday = try? store.estimatedCostToday()
-        model.modelUsage = (try? store.modelUsage(last24h: true)) ?? []
+        model.dailyHistory = (try? store.dailyUsage(days: AppModel.chartWindowDays)) ?? .empty
         model.quotaError = error
         model.quotaWarning = warning
         return model
@@ -494,7 +523,15 @@ extension AppModel {
     }
 
     /// Everything the popover can draw at once: both fixed windows, the promo
-    /// notice, the scoped weekly row and a part-spent usage-credits bar.
+    /// notice, the scoped weekly row, a part-spent usage-credits bar, and two
+    /// accounts — the active one titling the quota section, the other collapsed
+    /// beneath it.
+    ///
+    /// The second account is here rather than only in ``previewTwoAccounts``
+    /// because the README screenshot is the one picture most readers see, and a
+    /// single-account shot says nothing about what a machine that has been
+    /// logged into two accounts looks like. Collapsed, which is the shipping
+    /// default — the screenshot shows the state the app actually opens in.
     ///
     /// The single source of truth for the README asset renderer
     /// (`Tests/ClaudeStatsTests/ReadmeAssetRenderTests.swift`), so the shipped
@@ -502,24 +539,33 @@ extension AppModel {
     /// below renders the same call the renderer does.
     ///
     /// - Parameter now: pinned by the renderer so every time-derived string
-    ///   ("resets in …", "… ago") is byte-stable across runs; defaults to
+    ///   (the reset countdowns) is byte-stable across runs; defaults to
     ///   `Date()` for the canvas, which wants a live-looking clock.
     static func previewShowcase(now: Date = Date()) -> AppModel {
-        preview(
-            snapshot: MockQuotaProvider.sampleShowcaseSnapshot(now: now),
-            promoNotices: [MockPromoNoticeProvider.sampleNotice()]
+        var active = MockQuotaProvider.sampleShowcaseSnapshot(now: now)
+        active.account = MockQuotaProvider.sampleAccount()
+        return preview(
+            snapshot: active,
+            promoNotices: [MockPromoNoticeProvider.sampleNotice()],
+            otherAccounts: [MockQuotaProvider.sampleOtherAccountSnapshot(now: now)]
         )
     }
 
     /// Two accounts: the one Claude Code is logged in as now, labelled, with
-    /// the account the user switched away from listed under it.
-    static func previewTwoAccounts(now: Date = Date()) -> AppModel {
+    /// the account the user switched away from collapsed under it.
+    ///
+    /// - Parameter expanded: opens the other account's disclosure, which is
+    ///   closed in the shipping default — the canvas needs a way to see the
+    ///   rows inside it without clicking.
+    static func previewTwoAccounts(now: Date = Date(), expanded: Bool = false) -> AppModel {
         var active = MockQuotaProvider.sampleSnapshot(now: now)
         active.account = MockQuotaProvider.sampleAccount()
-        return preview(
-            snapshot: active,
-            otherAccounts: [MockQuotaProvider.sampleOtherAccountSnapshot(now: now)]
-        )
+        let other = MockQuotaProvider.sampleOtherAccountSnapshot(now: now)
+        let model = preview(snapshot: active, otherAccounts: [other])
+        if expanded {
+            model.expandedOtherAccounts = [otherAccountKey(for: other)]
+        }
+        return model
     }
 
     /// Live source, but stale — quota still shown, plus a warning line.
@@ -546,7 +592,7 @@ extension AppModel {
             confidence: .official,
             capturedAt: now.addingTimeInterval(-42 * 60)
         )
-        let model = preview(window: .sevenDay, snapshot: snapshot)
+        let model = preview(snapshot: snapshot)
         model.quotaWarning = ClaudeStatsError
             .staleQuotaSource(snapshot: snapshot, age: 42 * 60)
             .localizedDescription

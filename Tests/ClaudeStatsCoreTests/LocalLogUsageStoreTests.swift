@@ -312,10 +312,8 @@ final class LocalLogUsageStoreTests: XCTestCase {
             XCTAssertEqual(breakdown.totalTokens, 0)
             XCTAssertEqual(breakdown.orderedRows.count, Entrypoint.displayOrder.count)
         }
-        XCTAssertEqual(try store.burnRateUsagePerHour().totalTokens, 0)
         XCTAssertEqual(try store.estimatedCostToday(), 0)
         XCTAssertTrue(try store.modelUsage(last24h: false).isEmpty)
-        XCTAssertEqual(try store.detectedPlanTier(), .custom(tokens: 0))
     }
 
     // MARK: - Model usage and cost
@@ -416,25 +414,7 @@ final class LocalLogUsageStoreTests: XCTestCase {
         XCTAssertEqual(pricing.costUSD(for: unattributed), 3.75, accuracy: 1e-9)
     }
 
-    // MARK: - Burn rate and cost today
-
-    func testBurnRateCountsOnlyTheTrailingHour() throws {
-        // 11:30 (13500) + 11:45 (150) + 11:50 (2000) + 11:55 synthetic (0).
-        XCTAssertEqual(try makeStore().burnRateUsagePerHour().totalTokens, 15_650)
-    }
-
-    func testBurnRateKeepsTheTokenSplit() throws {
-        XCTAssertEqual(
-            try makeStore().burnRateUsagePerHour(),
-            TokenUsage(
-                inputTokens: 2_100,
-                outputTokens: 1_550,
-                cacheCreationInputTokens: 2_000,
-                cacheReadInputTokens: 10_000,
-                ephemeral5mInputTokens: 2_000
-            )
-        )
-    }
+    // MARK: - Cost today
 
     func testEstimatedCostTodayUsesLocalMidnight() throws {
         // UTC calendar → midnight is 2026-07-15T00:00Z, so the 07-14 and older
@@ -466,112 +446,6 @@ final class LocalLogUsageStoreTests: XCTestCase {
 
         // UTC-11: midnight is 07-15T11:00Z — later still, same single event.
         XCTAssertEqual(try costToday(secondsFromGMT: -11 * 3600), 0.021, accuracy: 1e-9)
-    }
-
-    // MARK: - Plan tier detection
-
-    /// One 5-hour window per day for 8 days, `tokens` of plain input each.
-    private func planDetectionStore(windowTokens: [Int]) -> LocalLogUsageStore {
-        let now = Self.referenceNow
-        let events = windowTokens.enumerated().map { index, tokens in
-            UsageEvent(
-                // Day `index` back, offset inside the bucket so no two share one.
-                timestamp: now.addingTimeInterval(-Double(index) * 86_400 - 60),
-                entrypoint: .cli,
-                modelID: "claude-sonnet-5",
-                usage: TokenUsage(inputTokens: tokens)
-            )
-        }
-        return LocalLogUsageStore(events: events, calendar: Self.utcCalendar, now: { now })
-    }
-
-    func testDetectedPlanTierSnapsP90ToNearestKnownTier() throws {
-        // P90 of these eight windows is 88_000 → Max5.
-        let store = planDetectionStore(
-            windowTokens: [20_000, 30_000, 40_000, 50_000, 60_000, 70_000, 80_000, 88_000]
-        )
-        XCTAssertEqual(store.fiveHourWindowP90(), 88_000)
-        XCTAssertEqual(try store.detectedPlanTier(), .max5)
-
-        let pro = planDetectionStore(windowTokens: Array(repeating: 19_000, count: 8))
-        XCTAssertEqual(try pro.detectedPlanTier(), .pro)
-
-        let max20 = planDetectionStore(windowTokens: Array(repeating: 215_000, count: 8))
-        XCTAssertEqual(try max20.detectedPlanTier(), .max20)
-    }
-
-    func testDetectedPlanTierFallsBackToCustomWhenNowhereNearAThreshold() throws {
-        let store = planDetectionStore(windowTokens: Array(repeating: 600_000, count: 8))
-        XCTAssertEqual(store.fiveHourWindowP90(), 600_000)
-        XCTAssertEqual(try store.detectedPlanTier(), .custom(tokens: 600_000))
-        XCTAssertFalse(try store.detectedPlanTier().isKnownTier)
-    }
-
-    func testPlanDetectionIgnoresHistoryOlderThanEightDays() throws {
-        let now = Self.referenceNow
-        let events = [
-            // Inside the window: one busy 5-hour bucket.
-            UsageEvent(
-                timestamp: now.addingTimeInterval(-3600),
-                entrypoint: .cli,
-                modelID: "claude-sonnet-5",
-                usage: TokenUsage(inputTokens: 88_000)
-            ),
-            // 10 days old — must not influence the percentile.
-            UsageEvent(
-                timestamp: now.addingTimeInterval(-10 * 86_400),
-                entrypoint: .cli,
-                modelID: "claude-sonnet-5",
-                usage: TokenUsage(inputTokens: 5_000_000)
-            ),
-        ]
-        let store = LocalLogUsageStore(events: events, calendar: Self.utcCalendar, now: { now })
-
-        XCTAssertEqual(store.fiveHourWindowP90(), 88_000)
-        XCTAssertEqual(try store.detectedPlanTier(), .max5)
-    }
-
-    func testPlanDetectionWeightsCacheTokensBelowFreshInput() throws {
-        let now = Self.referenceNow
-        // 1M cache reads weigh 0.1x → 100k, not 1M.
-        let event = UsageEvent(
-            timestamp: now.addingTimeInterval(-600),
-            entrypoint: .cli,
-            modelID: "claude-sonnet-5",
-            usage: TokenUsage(cacheReadInputTokens: 1_000_000)
-        )
-        let store = LocalLogUsageStore(events: [event], calendar: Self.utcCalendar, now: { now })
-
-        XCTAssertEqual(event.usage.totalTokens, 1_000_000)
-        XCTAssertEqual(event.usage.quotaWeightedTokens, 100_000)
-        XCTAssertEqual(store.fiveHourWindowP90(), 100_000)
-    }
-
-    func testFiveHourWindowP90ExcludesThePartialCurrentBucketWhenOlderHistoryExists() throws {
-        let now = Self.referenceNow
-        // A big burst 60s ago (partial "current" bucket) plus 7 fully-populated
-        // older-day buckets at a much lower, consistent level. Including the
-        // burst in the percentile would skew P90 toward it; excluding it (the
-        // fix here) keeps P90 anchored to the representative older buckets.
-        var events = [
-            UsageEvent(
-                timestamp: now.addingTimeInterval(-60),
-                entrypoint: .cli,
-                modelID: "claude-sonnet-5",
-                usage: TokenUsage(inputTokens: 5_000_000)
-            ),
-        ]
-        events += (1...7).map { day in
-            UsageEvent(
-                timestamp: now.addingTimeInterval(-Double(day) * 86_400 - 60),
-                entrypoint: .cli,
-                modelID: "claude-sonnet-5",
-                usage: TokenUsage(inputTokens: 19_000)
-            )
-        }
-        let store = LocalLogUsageStore(events: events, calendar: Self.utcCalendar, now: { now })
-
-        XCTAssertEqual(store.fiveHourWindowP90(), 19_000)
     }
 
     // MARK: - Config directory resolution
@@ -716,7 +590,7 @@ final class LocalLogUsageStoreTests: XCTestCase {
             calendar: Self.utcCalendar,
             now: { now }
         )
-        XCTAssertEqual(try store.burnRateUsagePerHour().totalTokens, 15_650)
+        XCTAssertEqual(try store.entrypointBreakdown(for: .fiveHour).totalTokens, 16_550)
     }
 
     func testSessionFileURLsIgnoresNonJSONLAndMissingProjectsDirectory() throws {
@@ -809,12 +683,14 @@ final class LocalLogUsageStoreTests: XCTestCase {
 
     private func makeHistoricalStore(
         events: [UsageEvent] = [],
-        historical: [String?: HistoricalModelUsage]
+        historical: [String?: HistoricalModelUsage],
+        dailyCells: [DailyUsageCell: DailyUsageTotals] = [:]
     ) -> LocalLogUsageStore {
         let now = Self.referenceNow
         return LocalLogUsageStore(
             events: events,
             historicalByModel: historical,
+            historicalDailyCells: dailyCells,
             calendar: Self.utcCalendar,
             now: { now }
         )
@@ -904,7 +780,15 @@ final class LocalLogUsageStoreTests: XCTestCase {
                 latestTimestamp: date(daysAgo: 30)
             )
         ]
-        let base = makeHistoricalStore(historical: historical)
+        let foldedDay = Self.utcCalendar.startOfDay(for: date(daysAgo: 20))
+        let dailyCells: [DailyUsageCell: DailyUsageTotals] = [
+            DailyUsageCell(day: foldedDay, modelID: "claude-sonnet-5", entrypoint: .cli):
+                DailyUsageTotals(
+                    usage: TokenUsage(inputTokens: 100, outputTokens: 50),
+                    estimatedCostUSD: 1
+                )
+        ]
+        let base = makeHistoricalStore(historical: historical, dailyCells: dailyCells)
         let grown = base.adding(events: [UsageEvent(
             timestamp: date(daysAgo: 0.5),
             modelID: "claude-sonnet-5",
@@ -912,6 +796,11 @@ final class LocalLogUsageStoreTests: XCTestCase {
         )])
         XCTAssertEqual(grown.historicalByModel, historical)
         XCTAssertEqual(try grown.modelUsage(last24h: false).first?.tokens, 165)
+        // The per-day half of the folded history has to ride along too, or an
+        // incrementally-refreshed store draws a chart that starts at the
+        // newest event instead of at the oldest day anything happened.
+        XCTAssertEqual(grown.historicalDailyCells, dailyCells)
+        XCTAssertEqual(try grown.dailyUsage(days: 30).days.first, foldedDay)
     }
 
     // MARK: - Protocol conformance
@@ -921,8 +810,6 @@ final class LocalLogUsageStoreTests: XCTestCase {
 
         XCTAssertEqual(try store.entrypointBreakdown(for: .fiveHour).totalTokens, 16_550)
         XCTAssertFalse(try store.modelUsage(last24h: true).isEmpty)
-        XCTAssertGreaterThan(try store.burnRateUsagePerHour().totalTokens, 0)
         XCTAssertGreaterThan(try store.estimatedCostToday(), 0)
-        _ = try store.detectedPlanTier()
     }
 }

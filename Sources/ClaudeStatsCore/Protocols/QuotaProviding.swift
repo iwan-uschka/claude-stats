@@ -201,6 +201,11 @@ public protocol PromoNoticeProviding: Sendable {
 /// All members are synchronous: implementations are expected to serve from an
 /// in-memory index that the FSEvents watcher keeps up to date, so no call here
 /// should block on I/O.
+///
+/// The popover reads exactly one of these now — ``dailyUsage(days:)``, which
+/// both of its blocks are splits of. The rolling-window queries below are kept
+/// as the data layer's own vocabulary (and are what ``TimeWindow`` sizes the
+/// retention fold from), not because a view is waiting on them.
 public protocol UsageStoring: Sendable {
     /// Per-entrypoint token counts for the given rolling window.
     func entrypointBreakdown(for window: TimeWindow) throws -> EntrypointBreakdown
@@ -212,18 +217,18 @@ public protocol UsageStoring: Sendable {
     func entrypointBreakdowns(for windows: [TimeWindow]) throws -> [TimeWindow: EntrypointBreakdown]
 
     /// Per-model tokens and cost.
-    /// - Parameter last24h: `true` for the popover's fixed 24-hour "By model"
-    ///   section; `false` for all locally-known history.
+    /// - Parameter last24h: `true` for a fixed 24-hour window; `false` for all
+    ///   locally-known history, which is the half that reads the retention
+    ///   fold's ``HistoricalModelUsage`` totals back.
     func modelUsage(last24h: Bool) throws -> [ModelUsage]
-
-    /// Current consumption in the trailing hour, split by token kind.
-    func burnRateUsagePerHour() throws -> TokenUsage
 
     /// Estimated spend in USD since local midnight.
     func estimatedCostToday() throws -> Double
 
-    /// Plan tier inferred from local history.
-    func detectedPlanTier() throws -> PlanTier
+    /// Daily token and cost history for the last `days` local days, for the
+    /// popover's charts. The returned window is shortened, never zero-padded,
+    /// when the corpus is younger than `days`.
+    func dailyUsage(days: Int) throws -> DailyUsageHistory
 }
 
 public extension UsageStoring {

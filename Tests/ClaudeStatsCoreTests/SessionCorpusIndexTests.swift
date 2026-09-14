@@ -47,10 +47,10 @@ final class SessionCorpusIndexTests: XCTestCase {
     }
 
     /// One `assistant` JSONL line carrying usage, `hoursAgo` before `referenceNow`.
-    private func assistantLine(hoursAgo: Double, model: String = "claude-sonnet-5", inputTokens: Int = 100, outputTokens: Int = 50) -> String {
+    private func assistantLine(hoursAgo: Double, model: String = "claude-sonnet-5", entrypoint: String = "cli", inputTokens: Int = 100, outputTokens: Int = 50) -> String {
         let timestamp = Self.referenceNow.addingTimeInterval(-hoursAgo * 3600)
         let iso = timestamp.ISO8601Format(Date.ISO8601FormatStyle(includingFractionalSeconds: true))
-        return #"{"type":"assistant","entrypoint":"cli","timestamp":"\#(iso)","isSidechain":false,"sessionId":"s1","message":{"role":"assistant","model":"\#(model)","usage":{"input_tokens":\#(inputTokens),"output_tokens":\#(outputTokens),"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}"#
+        return #"{"type":"assistant","entrypoint":"\#(entrypoint)","timestamp":"\#(iso)","isSidechain":false,"sessionId":"s1","message":{"role":"assistant","model":"\#(model)","usage":{"input_tokens":\#(inputTokens),"output_tokens":\#(outputTokens),"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}"#
     }
 
     private func writeSession(_ name: String, lines: [String]) throws -> URL {
@@ -206,6 +206,111 @@ final class SessionCorpusIndexTests: XCTestCase {
         XCTAssertEqual(try store.modelUsage(last24h: false).first?.tokens, 1650)
     }
 
+    // MARK: - Daily history
+
+    func testDailyHistorySpansTheFoldBoundary() throws {
+        // One event on each side of the 8-day retention cutoff: the old one can
+        // only reach the chart through the folded daily cells, the recent one
+        // only through the retained events. Both have to land on their own day.
+        _ = try writeSession("a", lines: [
+            assistantLine(hoursAgo: 20 * 24, inputTokens: 1000, outputTokens: 500),
+            assistantLine(hoursAgo: 1, inputTokens: 100, outputTokens: 50),
+        ])
+        let clock = Clock(Self.referenceNow)
+        let index = makeIndex(clock: clock, counter: ParseCounter())
+
+        let history = try index.rebuild().dailyUsage(days: 30)
+
+        XCTAssertEqual(history.days.count, 21)  // 20 days back … today
+        XCTAssertEqual(history.total.first?.totalTokens, 1500)
+        XCTAssertEqual(history.total.last?.totalTokens, 150)
+        XCTAssertEqual(history.total.reduce(0) { $0 + $1.totalTokens }, 1650)
+    }
+
+    func testAnAgedZeroUsageEventOpensNoDailyCell() throws {
+        // Claude Code's `<synthetic>` assistant lines carry an all-zero usage
+        // block. Aged past retention they still fold, and a cell for one would
+        // stretch the chart's axis back over a stretch of nothing — the axis
+        // starts at the oldest day that *has* a cell.
+        _ = try writeSession("a", lines: [assistantLine(hoursAgo: 20 * 24, inputTokens: 0, outputTokens: 0)])
+        let clock = Clock(Self.referenceNow)
+        let index = makeIndex(clock: clock, counter: ParseCounter())
+
+        let history = try index.rebuild().dailyUsage(days: 30)
+
+        XCTAssertTrue(history.days.isEmpty, "an all-zero-usage day should not stretch the axis")
+    }
+
+    func testDailyHistoryMatchesFullParse() throws {
+        _ = try writeSession("a", lines: [
+            assistantLine(hoursAgo: 25 * 24, model: "claude-opus-5", inputTokens: 10, outputTokens: 5),
+            assistantLine(hoursAgo: 12 * 24, model: "claude-sonnet-5", inputTokens: 100, outputTokens: 50),
+            assistantLine(hoursAgo: 1, model: "claude-sonnet-5", inputTokens: 1, outputTokens: 1),
+        ])
+        let clock = Clock(Self.referenceNow)
+        let incremental = try makeIndex(clock: clock, counter: ParseCounter())
+            .rebuild()
+            .dailyUsage(days: 30)
+
+        // The full-parse path keeps every event whole, so it is the reference
+        // for what the fold must reproduce.
+        let full = try LocalLogUsageStore(
+            configDirectory: configDirectory,
+            calendar: Self.utcCalendar,
+            now: { Self.referenceNow }
+        ).dailyUsage(days: 30)
+
+        XCTAssertEqual(incremental, full)
+    }
+
+    func testDailyHistoryDoesNotDoubleCountWhenEventsAgeOrFilesReparse() throws {
+        let url = try writeSession("a", lines: [assistantLine(hoursAgo: 1, inputTokens: 100, outputTokens: 50)])
+        let clock = Clock(Self.referenceNow)
+        let counter = ParseCounter()
+        let index = makeIndex(clock: clock, counter: counter)
+        _ = index.rebuild()
+
+        // 10 days on, untouched: the event folds into a daily cell without a
+        // reparse, and its day must still hold exactly its own tokens.
+        clock.now = Self.referenceNow.addingTimeInterval(10 * 86_400)
+        counter.reset()
+        var history = try index.rebuild().dailyUsage(days: 30)
+        XCTAssertEqual(counter.parsedPaths, [])
+        XCTAssertEqual(history.total.reduce(0) { $0 + $1.totalTokens }, 150)
+
+        // A further rebuild must not fold it a second time…
+        history = try index.rebuild().dailyUsage(days: 30)
+        XCTAssertEqual(history.total.reduce(0) { $0 + $1.totalTokens }, 150)
+
+        // …and neither must a full reparse after the file changes.
+        let lines = [
+            assistantLine(hoursAgo: 1, inputTokens: 100, outputTokens: 50),
+            assistantLine(hoursAgo: 2, inputTokens: 10, outputTokens: 5),
+        ]
+        try Data((lines.joined(separator: "\n") + "\n").utf8).write(to: url)
+        history = try index.rebuild().dailyUsage(days: 30)
+        XCTAssertEqual(history.total.reduce(0) { $0 + $1.totalTokens }, 165)
+    }
+
+    func testDailyCellsMergeAcrossFiles() throws {
+        // Two files, same day, same model, different sources — one cell each,
+        // merged into one day with both sources represented.
+        _ = try writeSession("a", lines: [
+            assistantLine(hoursAgo: 30 * 24, entrypoint: "cli", inputTokens: 1000, outputTokens: 500)
+        ])
+        _ = try writeSession("b", lines: [
+            assistantLine(hoursAgo: 30 * 24, entrypoint: "claude-vscode", inputTokens: 2000, outputTokens: 1000)
+        ])
+        let clock = Clock(Self.referenceNow)
+        let index = makeIndex(clock: clock, counter: ParseCounter())
+
+        let history = try index.rebuild().dailyUsage(days: 40)
+
+        XCTAssertEqual(history.total.first?.totalTokens, 4500)
+        XCTAssertEqual(history.bySource[.cli]?.first?.totalTokens, 1500)
+        XCTAssertEqual(history.bySource[.vscode]?.first?.totalTokens, 3000)
+    }
+
     func testHistoricalTotalsMatchFullParseAcrossModels() throws {
         _ = try writeSession("a", lines: [
             assistantLine(hoursAgo: 30 * 24, model: "claude-opus-5", inputTokens: 10, outputTokens: 5),
@@ -249,7 +354,7 @@ final class SessionCorpusIndexTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(SessionCorpusIndex.defaultRetention, longestWindow)
         XCTAssertGreaterThanOrEqual(
             SessionCorpusIndex.defaultRetention,
-            TimeInterval(LocalLogUsageStore.planDetectionHistoryDays) * 86_400
+            TimeInterval(LocalLogUsageStore.localHistoryDays) * 86_400
         )
     }
 

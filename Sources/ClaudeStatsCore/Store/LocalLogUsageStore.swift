@@ -3,9 +3,11 @@ import Foundation
 /// Per-model lifetime totals for events that have aged out of the store's
 /// per-event retention window (see ``SessionCorpusIndex``).
 ///
-/// Only ``LocalLogUsageStore/modelUsage(last24h:)`` with `last24h == false`
-/// needs data older than the longest rolling window, and it only needs these
-/// sums — so old events are folded down to this instead of being kept whole.
+/// ``LocalLogUsageStore/modelUsage(last24h:)`` with `last24h == false` needs
+/// data older than the longest rolling window, and needs only these sums — so
+/// old events are folded down to this instead of being kept whole. The same
+/// fold also writes ``DailyUsageCell`` totals for the charts, which need the
+/// same events split by day; neither structure reads the other.
 public struct HistoricalModelUsage: Sendable, Hashable {
     /// Summed token counts of every folded event for this model ID.
     public var usage: TokenUsage
@@ -52,15 +54,28 @@ public struct LocalLogUsageStore: UsageStoring {
     /// Every token-bearing event known to this store, sorted oldest-first.
     ///
     /// When the store is built by ``SessionCorpusIndex`` this only spans the
-    /// retention window; older history lives in ``historicalByModel``.
+    /// retention window; older history lives in ``historicalByModel`` and
+    /// ``historicalDailyCells``.
     public let events: [UsageEvent]
 
     /// Per-model totals for events older than the retention window, keyed by
     /// raw model ID (`nil` for events that carried none). Empty when the store
     /// was built from a full parse. Consulted only by
     /// ``modelUsage(last24h:)`` with `last24h == false` — every rolling-window
-    /// query is answerable from ``events`` alone.
+    /// query is answerable from ``events`` alone, and the charts' longer reach
+    /// back is served by ``historicalDailyCells`` instead.
     public let historicalByModel: [String?: HistoricalModelUsage]
+
+    /// Daily token/cost cells for events older than the retention window, the
+    /// history half of ``dailyUsage(days:)``. Empty when the store was built
+    /// from a full parse, where every event is still in ``events``.
+    ///
+    /// Deliberately a second accumulation next to ``historicalByModel`` rather
+    /// than a replacement for it: that one keeps a `latestTimestamp` per model
+    /// for `modelUsage`'s "newest raw ID wins" rule, which summing daily cells
+    /// could only approximate to the day. Both are filled in the same fold, so
+    /// neither costs an extra pass.
+    public let historicalDailyCells: [DailyUsageCell: DailyUsageTotals]
 
     /// Non-fatal problems from the last scan. When the store is built by
     /// ``SessionCorpusIndex`` this is a *sample* (at most
@@ -74,7 +89,8 @@ public struct LocalLogUsageStore: UsageStoring {
     /// Clock, injected so windows and "today" are testable. Defaults to `Date()`.
     public let nowProvider: @Sendable () -> Date
 
-    /// Calendar used for ``estimatedCostToday()``'s local-midnight boundary.
+    /// Calendar for every local-day boundary: ``estimatedCostToday()``'s
+    /// midnight and ``dailyUsage(days:)``'s day buckets.
     /// Injected so tests don't depend on the machine's time zone.
     public let calendar: Calendar
 
@@ -85,10 +101,12 @@ public struct LocalLogUsageStore: UsageStoring {
         events: [UsageEvent],
         skippedLines: [ClaudeStatsError] = [],
         historicalByModel: [String?: HistoricalModelUsage] = [:],
+        historicalDailyCells: [DailyUsageCell: DailyUsageTotals] = [:],
         calendar: Calendar = .current,
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.historicalByModel = historicalByModel
+        self.historicalDailyCells = historicalDailyCells
         // `adding(events:)` merges two individually-sorted sequences; skip the
         // O(n log n) resort of the whole accumulated history when the
         // concatenation is already in order, which is the common case for an
@@ -149,6 +167,7 @@ public struct LocalLogUsageStore: UsageStoring {
             events: events + newEvents,
             skippedLines: skippedLines + newSkipped,
             historicalByModel: historicalByModel,
+            historicalDailyCells: historicalDailyCells,
             calendar: calendar,
             now: nowProvider
         )
@@ -160,8 +179,8 @@ public struct LocalLogUsageStore: UsageStoring {
     ///
     /// Events whose `entrypoint` this version doesn't recognise are omitted —
     /// the breakdown's rows are a fixed, known set — but they still count in
-    /// ``modelUsage(last24h:)``, ``burnRateUsagePerHour()`` and
-    /// ``estimatedCostToday()``, so no spend goes missing from the totals.
+    /// ``modelUsage(last24h:)`` and ``estimatedCostToday()``, so no spend goes
+    /// missing from the totals.
     public func entrypointBreakdown(for window: TimeWindow) throws -> EntrypointBreakdown {
         let now = nowProvider()
         var totals: [Entrypoint: TokenUsage] = [:]
@@ -262,15 +281,6 @@ public struct LocalLogUsageStore: UsageStoring {
         return rows
     }
 
-    /// Tokens consumed in the trailing hour, kept split by kind. The window is
-    /// exactly one hour, so these are token counts and per-hour rates at the
-    /// same time.
-    public func burnRateUsagePerHour() throws -> TokenUsage {
-        let now = nowProvider()
-        return events(in: now.addingTimeInterval(-3600), to: now)
-            .reduce(TokenUsage.zero) { $0 + $1.usage }
-    }
-
     /// Estimated spend since local midnight, per ``calendar``. Events on models
     /// with no pricing entry contribute `0`.
     public func estimatedCostToday() throws -> Double {
@@ -279,57 +289,97 @@ public struct LocalLogUsageStore: UsageStoring {
         return events(in: midnight, to: now).reduce(0) { $0 + $1.estimatedCostUSD }
     }
 
-    /// Plan tier inferred from local history: the 90th percentile of
-    /// quota-weighted tokens per 5-hour window over the last 8 days, snapped to
-    /// the nearest published threshold by
-    /// ``PlanTier/nearestKnownTier(forFiveHourTokens:tolerance:)``.
+    /// Daily token and cost history for the last `days` local days, ending with
+    /// today.
     ///
-    /// Windows are 5-hour buckets anchored at "now" and walked backwards; empty
-    /// buckets are excluded so idle days don't drag the percentile down.
-    /// Tokens are quota-weighted (``TokenUsage/quotaWeightedTokens``) because the
-    /// published thresholds are far below raw cached-token volumes. With no
-    /// history at all the result is `.custom(tokens: 0)`.
-    public func detectedPlanTier() throws -> PlanTier {
-        let p90 = fiveHourWindowP90()
-        return PlanTier.nearestKnownTier(forFiveHourTokens: p90)
+    /// Answered from two halves that never overlap, exactly as
+    /// ``modelUsage(last24h:)`` answers all-time usage: events still inside the
+    /// retention window come from ``events``, everything older from the
+    /// ``historicalDailyCells`` the fold left behind. A full-parse store has an
+    /// empty second half and reads entirely from the first.
+    ///
+    /// Days are walked with ``calendar`` rather than by adding 86 400 seconds,
+    /// so the day after a DST transition is still one day long.
+    public func dailyUsage(days: Int) throws -> DailyUsageHistory {
+        guard days > 0 else { return .empty }
+        let now = nowProvider()
+        let today = calendar.startOfDay(for: now)
+        guard let windowStart = calendar.date(byAdding: .day, value: -(days - 1), to: today) else {
+            return .empty
+        }
+
+        var cells: [DailyUsageCell: DailyUsageTotals] = [:]
+        for (cell, totals) in historicalDailyCells where cell.day >= windowStart {
+            cells[cell, default: DailyUsageTotals()].merge(totals)
+        }
+        var dayResolver = LocalDayResolver(calendar: calendar)
+        for event in events(in: windowStart, to: now) where DailyUsageTotals.countsTowardsDailyHistory(event) {
+            let cell = DailyUsageCell(
+                day: dayResolver.day(for: event.timestamp),
+                modelID: event.modelID,
+                entrypoint: event.entrypoint
+            )
+            cells[cell, default: DailyUsageTotals()].add(event)
+        }
+
+        // The axis starts at the oldest day that actually has usage, not at the
+        // requested window start — see ``DailyUsageHistory/days``.
+        guard let firstDay = cells.keys.map(\.day).min() else { return .empty }
+        var axis: [Date] = []
+        var cursor = firstDay
+        while cursor <= today {
+            axis.append(cursor)
+            guard let next = calendar.date(byAdding: .day, value: 1, to: cursor) else { break }
+            cursor = next
+        }
+
+        var totalByDay: [Date: DailyUsageTotals] = [:]
+        var sourceByDay: [Entrypoint?: [Date: DailyUsageTotals]] = [:]
+        var familyByDay: [ModelFamily?: [Date: DailyUsageTotals]] = [:]
+        for (cell, totals) in cells {
+            totalByDay[cell.day, default: DailyUsageTotals()].merge(totals)
+            // An `entrypoint` this version doesn't recognise keeps its tokens,
+            // under the `nil` key — the model split has always worked that way,
+            // and dropping them here made the source series quietly sum to less
+            // than `total`, which a stacked chart draws as usage that isn't
+            // there.
+            sourceByDay[cell.entrypoint, default: [:]][cell.day, default: DailyUsageTotals()].merge(totals)
+            let family = cell.modelID.flatMap(ModelFamily.inferred(fromModelID:))
+            familyByDay[family, default: [:]][cell.day, default: DailyUsageTotals()].merge(totals)
+        }
+
+        func series(_ byDay: [Date: DailyUsageTotals]) -> [DailyUsagePoint] {
+            axis.map { day in
+                let totals = byDay[day] ?? DailyUsageTotals()
+                return DailyUsagePoint(day: day, usage: totals.usage, estimatedCostUSD: totals.estimatedCostUSD)
+            }
+        }
+
+        // Dense over every known source, including ones that did nothing — but
+        // the unrecognised bucket only when it has something in it, so the
+        // popover's "Other" band appears exactly when there is other usage.
+        var bySource: [Entrypoint?: [DailyUsagePoint]] = Dictionary(
+            uniqueKeysWithValues: Entrypoint.allCases.map { ($0, series(sourceByDay[$0] ?? [:])) }
+        )
+        if let unrecognised = sourceByDay[Entrypoint?.none] {
+            bySource[Entrypoint?.none] = series(unrecognised)
+        }
+
+        return DailyUsageHistory(
+            days: axis,
+            total: series(totalByDay),
+            bySource: bySource,
+            byModelFamily: familyByDay.mapValues(series)
+        )
     }
 
     // MARK: - Derived values
 
-    /// Number of days of local history the plan-tier heuristic looks at.
-    public static let planDetectionHistoryDays = 8
-
-    /// The percentile used by the plan-tier heuristic.
-    public static let planDetectionPercentile = 0.9
-
-    /// 90th percentile of quota-weighted tokens per 5-hour window over the last
-    /// 8 days, exposed so the UI can show the raw estimate next to the snapped tier.
-    public func fiveHourWindowP90() -> Int {
-        let now = nowProvider()
-        let bucketLength = TimeWindow.fiveHour.duration
-        let historyLength = Double(LocalLogUsageStore.planDetectionHistoryDays) * 86_400
-        let start = now.addingTimeInterval(-historyLength)
-
-        var buckets: [Int: Int] = [:]
-        for event in events(in: start, to: now) {
-            let index = Int(now.timeIntervalSince(event.timestamp) / bucketLength)
-            buckets[index, default: 0] += event.usage.quotaWeightedTokens
-        }
-
-        // Bucket 0 (the most recent) only ever collects a fraction of a real
-        // 5-hour window unless "now" lands exactly on a boundary, which would
-        // skew the percentile downward right after a burst of recent usage.
-        // Excluded whenever other history exists to fall back on; kept when
-        // it's the only data available (e.g. right after a fresh install).
-        var totals = buckets.filter { $0.key != 0 }.values.filter { $0 > 0 }.sorted()
-        if totals.isEmpty {
-            totals = buckets.values.filter { $0 > 0 }.sorted()
-        }
-        guard !totals.isEmpty else { return 0 }
-        // Nearest-rank percentile: smallest value with at least 90% of samples at or below it.
-        let rank = Int((LocalLogUsageStore.planDetectionPercentile * Double(totals.count)).rounded(.up))
-        return totals[min(max(rank - 1, 0), totals.count - 1)]
-    }
+    /// How many days of local history the store is expected to be able to
+    /// answer per-event questions about. Sets the floor for
+    /// ``SessionCorpusIndex/defaultRetention``, so a query reaching further
+    /// back than this has to raise it first.
+    public static let localHistoryDays = 8
 
     /// Events with `start <= timestamp <= end`. `events` is sorted, so this is a
     /// contiguous slice.

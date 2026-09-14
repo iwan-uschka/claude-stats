@@ -20,8 +20,8 @@ import XCTest
 /// with `bash scripts/render-readme-assets.sh`.
 @MainActor
 final class ReadmeAssetRenderTests: XCTestCase {
-    /// Pinned so every time-derived string in the popover ("resets in 2h 14m",
-    /// "40s ago") is identical on every run — the PNGs are committed, and a
+    /// Pinned so every time-derived string in the popover (the reset
+    /// countdowns, "2h 14m") is identical on every run — the PNGs are committed, and a
     /// live clock would dirty the tree on each render.
     private static let renderDate = Date(timeIntervalSince1970: 1_756_600_000)
 
@@ -39,6 +39,37 @@ final class ReadmeAssetRenderTests: XCTestCase {
     /// Room for the card's shadow to fall.
     private static let sidePadding: CGFloat = 18
     private static let bottomPadding: CGFloat = 18
+
+    /// Renders the popover with a day hovered, for looking at rather than for
+    /// shipping. Not part of the README set: `render-readme-assets.sh` filters
+    /// on the class, and this stays skipped under its own gate.
+    ///
+    /// It earns its place because hover is unreachable offscreen and the
+    /// legend *changes content* under it — the first render of that row came
+    /// back reading `CLI 842.…` and `VS Co…`, which no unit test would have
+    /// shown. Two days: the busiest in the fixture, whose counts are the widest
+    /// strings the row ever holds, and an ordinary one.
+    ///
+    ///     CLAUDE_STATS_RENDER_HOVER=/tmp/hover swift test --filter testRenderHoverPreviews
+    func testRenderHoverPreviews() throws {
+        guard let outPath = ProcessInfo.processInfo.environment["CLAUDE_STATS_RENDER_HOVER"] else {
+            throw XCTSkip("set CLAUDE_STATS_RENDER_HOVER=<dir> to render the hovered popover")
+        }
+        let outDir = URL(fileURLWithPath: outPath, isDirectory: true)
+        try FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
+
+        let now = Self.renderDate
+        let history = AppModel.previewShowcase(now: now).dailyHistory
+        let busiest = try XCTUnwrap(history.total.max { $0.totalTokens < $1.totalTokens }?.day)
+        let ordinary = try XCTUnwrap(history.days.dropLast(8).last)
+
+        for (name, day) in [("busiest", busiest), ("ordinary", ordinary)] {
+            for theme in Theme.all {
+                let card = try renderCard(theme: theme, now: now, hoveredDay: day)
+                try write(card, to: outDir, named: "hover-\(name)-\(theme.name).png")
+            }
+        }
+    }
 
     func testRenderReadmeAssets() throws {
         guard let outPath = ProcessInfo.processInfo.environment["CLAUDE_STATS_RENDER_ASSETS"] else {
@@ -194,20 +225,26 @@ final class ReadmeAssetRenderTests: XCTestCase {
     /// The popover card on its own, transparent outside the rounded body.
     ///
     /// Rendered through a real `NSHostingView` in an offscreen window rather
-    /// than `ImageRenderer`. `ImageRenderer` rasterizes SwiftUI's own drawing
-    /// only: the "This Mac" window switcher is a `.pickerStyle(.segmented)`
-    /// `Picker`, i.e. an AppKit `NSSegmentedControl` behind an
-    /// `NSViewRepresentable`, and the renderer paints it as SwiftUI's yellow
-    /// "unsupported view" placeholder. A hosting view in a window is the real
-    /// AppKit draw path, so the control renders as it actually looks.
+    /// than `ImageRenderer`. That started as a hard requirement — what is now
+    /// the "By source" block had a `.pickerStyle(.segmented)` `Picker`, an AppKit
+    /// `NSSegmentedControl` behind an `NSViewRepresentable`, which
+    /// `ImageRenderer` paints as SwiftUI's yellow "unsupported view"
+    /// placeholder. That picker is gone (the block is a chart now), but
+    /// the hosting view stays: it is the same AppKit draw path the shipping
+    /// popover uses, and it is what carries the `NSAppearance` the next
+    /// comment depends on — `ImageRenderer` exposes a SwiftUI environment, not
+    /// an AppKit appearance, and every colour the popover has —
+    /// `PopoverMetrics.brandColor` and the band ramp under it — resolves
+    /// against the latter.
     ///
     /// The 4× comes from the `NSBitmapImageRep` being allocated at
     /// `pixelsWide/High = points × scale` while its `size` stays in points —
     /// `cacheDisplay(in:to:)` then draws into it at that resolution.
-    private func renderCard(theme: Theme, now: Date) throws -> CGImage {
+    private func renderCard(theme: Theme, now: Date, hoveredDay: Date? = nil) throws -> CGImage {
         let card = PopoverCard(
             model: .previewShowcase(now: now),
             clock: PopoverClock(now: now),
+            hoveredDay: hoveredDay,
             colorScheme: theme.colorScheme,
             fill: theme.cardFill,
             stroke: theme.cardStroke
@@ -216,9 +253,9 @@ final class ReadmeAssetRenderTests: XCTestCase {
 
         let hosting = NSHostingView(rootView: card)
         // Drives both the AppKit controls and, through NSHostingView, SwiftUI's
-        // colorScheme — and resolves `PopoverMetrics.brandLinkColor`, a dynamic
-        // `NSColor(name:)` that reads the AppKit appearance rather than the
-        // SwiftUI environment.
+        // colorScheme — and resolves `PopoverMetrics.brandColor` and the chart
+        // band ramp, dynamic `NSColor(name:)`s that read the AppKit appearance
+        // rather than the SwiftUI environment.
         hosting.appearance = appearance
         hosting.frame = CGRect(origin: .zero, size: hosting.fittingSize)
 
@@ -329,6 +366,8 @@ final class ReadmeAssetRenderTests: XCTestCase {
 private struct PopoverCard: View {
     let model: AppModel
     let clock: PopoverClock
+    /// Seeds the popover's hover state — see ``PopoverView/init(model:clock:hoveredSourceDay:hoveredModelDay:)``.
+    var hoveredDay: Date?
     let colorScheme: ColorScheme
     let fill: Color
     let stroke: Color
@@ -343,7 +382,12 @@ private struct PopoverCard: View {
             tailWidth: Self.tailWidth,
             tailHeight: Self.tailHeight
         )
-        return PopoverView(model: model, clock: clock)
+        return PopoverView(
+            model: model,
+            clock: clock,
+            hoveredSourceDay: hoveredDay,
+            hoveredModelDay: hoveredDay
+        )
             .padding(.top, Self.tailHeight)
             .background(shape.fill(fill))
             .overlay(shape.stroke(stroke, lineWidth: 1))

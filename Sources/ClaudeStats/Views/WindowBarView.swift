@@ -1,7 +1,7 @@
 import ClaudeStatsCore
 import SwiftUI
 
-/// One rate-limit window row: `5-hour window  ▓▓▓▓▓▓░░ 62%  resets in 2h 14m`.
+/// One rate-limit window row: `5-hour  ▓▓▓▓▓▓░░ 62%  2h 14m`.
 ///
 /// A `nil` ``window`` is the "no reading" row — `—  no reading` over an empty
 /// track. That is not 0%: it means no quota source currently reports the

@@ -1,35 +1,47 @@
 import ClaudeStatsCore
 import SwiftUI
 
-/// A single horizontal fill indicator: faint track, opaque fill.
+/// A single horizontal fill indicator: faint monochrome track, terracotta fill.
 ///
-/// Deliberately monochrome and dependency-free (no charting library) — it is one
-/// rounded rectangle inside another, sized off the available width.
+/// Dependency-free (no charting library) — it is one rounded rectangle inside
+/// another, sized off the available width.
+///
+/// **The fill is ``PopoverMetrics/brandColor``, and it always is.** These bars
+/// are the first thing in the popover and the reading it exists for, so they
+/// take the app's one colour rather than the grey the text around them is set
+/// in. The track stays `Color.primary` at ``trackOpacity``: the unused part of
+/// a bar is absence, not a second reading, and tinting it would make a 5%-used
+/// window look half terracotta.
+///
+/// **There is no over-budget or stale tint, and there must not be one.** The
+/// resting fill is now the same ink a warning line is set in, so a bar that
+/// went terracotta to raise an alarm would be indistinguishable from every
+/// other bar on the card. The staleness warning is carried by
+/// ``AppModel/quotaWarning``'s own line of text, which says what happened; an
+/// over-budget window is carried by its percentage reading past 100%.
 struct UsageBar: View {
     /// How the filled portion is painted. The track, the geometry and the
     /// corner radius are identical either way — only the fill differs, so the
     /// rows still read as one column of bars.
     enum FillStyle {
-        /// The default: flat `Color.primary` at ``fillOpacity``.
+        /// The default: flat ``PopoverMetrics/brandColor``.
         case solid
-        /// Diagonal stripes at ``fillOpacity``, with the gaps showing the
+        /// Diagonal stripes in the same brand ink, with the gaps showing the
         /// track underneath — for a bar that measures something different in
         /// kind from its neighbours (money spent against a monthly cap, not a
-        /// rate-limit window). Monochrome like the solid fill — it is all
-        /// `Color.primary`, so it inverts with the appearance rather than
-        /// needing a light and a dark palette.
+        /// rate-limit window). Same geometry as the solid fill, same spacing,
+        /// same clip: only the ink changed when the bars took the brand colour.
         case hatched
     }
 
     var fraction: Double
     var height: CGFloat = 6
     var trackOpacity: Double = 0.12
-    var fillOpacity: Double = 0.75
     var fillStyle: FillStyle = .solid
     /// Set when this bar isn't already wrapped by a labelled, combined
-    /// accessibility element (e.g. a caller using it standalone). Callers like
-    /// `WindowBarView`/`EntrypointRow` that already combine+label the whole row
-    /// should leave this `nil` so they aren't overridden with an empty label.
+    /// accessibility element (e.g. a caller using it standalone). A caller like
+    /// `WindowBarView`, which already combines and labels the whole row,
+    /// should leave this `nil` so it isn't overridden with an empty label.
     var accessibilityLabel: String? = nil
 
     private var clampedFraction: Double {
@@ -59,11 +71,11 @@ struct UsageBar: View {
     private var fill: some View {
         switch fillStyle {
         case .solid:
-            shape.fill(Color.primary.opacity(fillOpacity))
+            shape.fill(PopoverMetrics.brandColor)
         case .hatched:
             // No separate ground fill: the gaps between stripes show the
             // track underneath, same color as the bar's unfilled portion.
-            DiagonalHatch(color: Color.primary.opacity(fillOpacity))
+            DiagonalHatch(color: PopoverMetrics.brandColor)
                 // Clipped to the same rounded rect the solid fill uses, so
                 // the two styles are pixel-identical in outline.
                 .clipShape(shape)

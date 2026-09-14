@@ -154,10 +154,10 @@ final class StatuslineCacheReaderTests: XCTestCase {
 
     /// The two accounts the switching tests use: the login the user moved to,
     /// and the one they moved away from.
-    private let creativytool = QuotaAccount(
-        uuid: "0f9c1d3e-8a4b-4c2d-9e1f-6b7a8c9d0e1f", organizationName: "creativytool")
-    private let bitgrip = QuotaAccount(
-        uuid: "7d2b6a10-3c55-4f8e-9a21-0b4c5d6e7f80", organizationName: "Bitgrip")
+    private let exampleOrg = QuotaAccount(
+        uuid: "0f9c1d3e-8a4b-4c2d-9e1f-6b7a8c9d0e1f", organizationName: "Example Org")
+    private let otherOrg = QuotaAccount(
+        uuid: "7d2b6a10-3c55-4f8e-9a21-0b4c5d6e7f80", organizationName: "Other Org")
 
     /// `weekly_scoped` + `spend` + `extra_usage` as the script copies them:
     /// verbatim sub-objects of `cachedUsageUtilization.utilization`, so
@@ -873,52 +873,52 @@ final class StatuslineCacheReaderTests: XCTestCase {
     // MARK: - One group per account
 
     /// The reported bug, end to end. The user switched the global login from
-    /// Bitgrip (7-day window resetting later, 56% used) to creativytool (7-day
-    /// resetting sooner, 0%), and one idle session kept re-rendering Bitgrip's
+    /// Other Org (7-day window resetting later, 56% used) to exampleOrg (7-day
+    /// resetting sooner, 0%), and one idle session kept re-rendering Other Org's
     /// payload. "Latest `resets_at` wins" then handed the machine's 7-day bar
-    /// Bitgrip's 56%. Grouping by account is what stops it: the merge never
+    /// Other Org's 56%. Grouping by account is what stops it: the merge never
     /// crosses the two groups, and the active account's group is what serves.
     func testMergeNeverCrossesAccountsAndTheActiveOneServes() async throws {
         try write(session: "left-behind", cache(
             capturedAt: now.addingTimeInterval(-60),
             windowJSON("seven_day", percent: 56, resetsAt: now.addingTimeInterval(20 * 3600)),
-            account: bitgrip
+            account: otherOrg
         ))
         try write(session: "current", cache(
             capturedAt: now.addingTimeInterval(-30),
             windowJSON("seven_day", percent: 0, resetsAt: now.addingTimeInterval(4 * 3600)),
-            account: creativytool
+            account: exampleOrg
         ))
 
         let snapshot = try await makeReader(
-            activeAccount: ActiveAccountReading(account: creativytool)
+            activeAccount: ActiveAccountReading(account: exampleOrg)
         ).currentSnapshot()
 
         XCTAssertEqual(snapshot.sevenDay?.percentUsed, 0)
         XCTAssertEqual(snapshot.sevenDay?.resetsAt, now.addingTimeInterval(4 * 3600))
-        XCTAssertEqual(snapshot.account, creativytool)
+        XCTAssertEqual(snapshot.account, exampleOrg)
     }
 
     /// Same two files, the other way round: the account the user is logged in
     /// as is the one that serves, whatever the other group's numbers look like.
     func testTheOtherAccountServesWhenItIsTheActiveOne() async throws {
-        try write(session: "bitgrip", cache(
+        try write(session: "otherOrg", cache(
             capturedAt: now.addingTimeInterval(-60),
             windowJSON("five_hour", percent: 56, resetsAt: now.addingTimeInterval(3600)),
-            account: bitgrip
+            account: otherOrg
         ))
-        try write(session: "creativytool", cache(
+        try write(session: "exampleOrg", cache(
             capturedAt: now.addingTimeInterval(-30),
             windowJSON("five_hour", percent: 4, resetsAt: now.addingTimeInterval(3600)),
-            account: creativytool
+            account: exampleOrg
         ))
 
         let snapshot = try await makeReader(
-            activeAccount: ActiveAccountReading(account: bitgrip)
+            activeAccount: ActiveAccountReading(account: otherOrg)
         ).currentSnapshot()
 
         XCTAssertEqual(snapshot.fiveHour?.percentUsed, 56)
-        XCTAssertEqual(snapshot.account, bitgrip)
+        XCTAssertEqual(snapshot.account, otherOrg)
     }
 
     /// The state file names an account no cache file is stamped with — a
@@ -931,7 +931,7 @@ final class StatuslineCacheReaderTests: XCTestCase {
         try write(session: "other", cache(
             capturedAt: now.addingTimeInterval(-30),
             windowJSON("five_hour", percent: 56, resetsAt: now.addingTimeInterval(3600)),
-            account: bitgrip
+            account: otherOrg
         ))
         try write(session: "unstamped", cache(
             capturedAt: now.addingTimeInterval(-20),
@@ -940,7 +940,7 @@ final class StatuslineCacheReaderTests: XCTestCase {
 
         await assertThrows(.noQuotaSourceAvailable) {
             try await self.makeReader(
-                activeAccount: ActiveAccountReading(account: self.creativytool)
+                activeAccount: ActiveAccountReading(account: self.exampleOrg)
             ).currentSnapshot()
         }
     }
@@ -952,18 +952,18 @@ final class StatuslineCacheReaderTests: XCTestCase {
         try write(session: "older", cache(
             capturedAt: now.addingTimeInterval(-300),
             windowJSON("five_hour", percent: 56, resetsAt: now.addingTimeInterval(3600)),
-            account: bitgrip
+            account: otherOrg
         ))
         try write(session: "newer", cache(
             capturedAt: now.addingTimeInterval(-30),
             windowJSON("five_hour", percent: 4, resetsAt: now.addingTimeInterval(3600)),
-            account: creativytool
+            account: exampleOrg
         ))
 
         let snapshot = try await makeReader().currentSnapshot()
 
         XCTAssertEqual(snapshot.fiveHour?.percentUsed, 4)
-        XCTAssertEqual(snapshot.account, creativytool)
+        XCTAssertEqual(snapshot.account, exampleOrg)
     }
 
     /// An unstamped file can't be claimed for a named account — it may well be
@@ -977,10 +977,10 @@ final class StatuslineCacheReaderTests: XCTestCase {
         try write(session: "stamped", cache(
             capturedAt: now.addingTimeInterval(-60),
             windowJSON("five_hour", percent: 10, resetsAt: now.addingTimeInterval(3600)),
-            account: creativytool
+            account: exampleOrg
         ))
 
-        let reader = makeReader(activeAccount: ActiveAccountReading(account: creativytool))
+        let reader = makeReader(activeAccount: ActiveAccountReading(account: exampleOrg))
         let snapshot = try await reader.currentSnapshot()
 
         // The legacy file's later reset would have won a cross-account merge.
@@ -1003,16 +1003,16 @@ final class StatuslineCacheReaderTests: XCTestCase {
                 { "limits": [ { "kind": "weekly_scoped", "percent": 7,
                                 "scope": { "model": { "display_name": "Mine" } } } ] }
                 """,
-            account: creativytool
+            account: exampleOrg
         ))
         try write(session: "left-behind", cache(
             capturedAt: now.addingTimeInterval(-10),
             windowJSON("five_hour", percent: 56, resetsAt: now.addingTimeInterval(3600)),
             utilization: copiedUtilization,
-            account: bitgrip
+            account: otherOrg
         ))
 
-        let reader = makeReader(activeAccount: ActiveAccountReading(account: creativytool))
+        let reader = makeReader(activeAccount: ActiveAccountReading(account: exampleOrg))
         let snapshot = try await reader.currentSnapshot()
 
         XCTAssertEqual(snapshot.scopedWeekly.map(\.label), ["Mine"])
@@ -1032,12 +1032,12 @@ final class StatuslineCacheReaderTests: XCTestCase {
         try write(session: "current", cache(
             capturedAt: now.addingTimeInterval(-30),
             windowJSON("five_hour", percent: 4, resetsAt: now.addingTimeInterval(3600)),
-            account: creativytool
+            account: exampleOrg
         ))
         try write(session: "left-behind", cache(
             capturedAt: now.addingTimeInterval(-3 * 3600),
             windowJSON("seven_day", percent: 56, resetsAt: now.addingTimeInterval(20 * 3600)),
-            account: bitgrip
+            account: otherOrg
         ))
         try write(session: "unstamped", cache(
             capturedAt: now.addingTimeInterval(-2 * 3600),
@@ -1045,10 +1045,10 @@ final class StatuslineCacheReaderTests: XCTestCase {
         ))
 
         let others = await makeReader(
-            activeAccount: ActiveAccountReading(account: creativytool)
+            activeAccount: ActiveAccountReading(account: exampleOrg)
         ).otherAccountSnapshots()
 
-        XCTAssertEqual(others.map { $0.account }, [nil, bitgrip])
+        XCTAssertEqual(others.map { $0.account }, [nil, otherOrg])
         XCTAssertEqual(others.map { $0.sevenDay?.percentUsed }, [31, 56])
         // Ungated on staleness — these rows carry their own freshness tag, and
         // an account nobody is logged in as is exactly the cold one.
@@ -1065,7 +1065,7 @@ final class StatuslineCacheReaderTests: XCTestCase {
         try write(session: "other", cache(
             capturedAt: now.addingTimeInterval(-30),
             windowJSON("five_hour", percent: 56, resetsAt: now.addingTimeInterval(3600)),
-            account: bitgrip
+            account: otherOrg
         ))
         try write(session: "unstamped", cache(
             capturedAt: now.addingTimeInterval(-20),
@@ -1073,10 +1073,10 @@ final class StatuslineCacheReaderTests: XCTestCase {
         ))
 
         let others = await makeReader(
-            activeAccount: ActiveAccountReading(account: creativytool)
+            activeAccount: ActiveAccountReading(account: exampleOrg)
         ).otherAccountSnapshots()
 
-        XCTAssertEqual(others.map { $0.account }, [nil, bitgrip])
+        XCTAssertEqual(others.map { $0.account }, [nil, otherOrg])
         XCTAssertEqual(others.map { $0.fiveHour?.percentUsed }, [12, 56])
     }
 
@@ -1088,16 +1088,16 @@ final class StatuslineCacheReaderTests: XCTestCase {
         try write(session: "current", cache(
             capturedAt: now.addingTimeInterval(-30),
             windowJSON("five_hour", percent: 4, resetsAt: now.addingTimeInterval(3600)),
-            account: creativytool
+            account: exampleOrg
         ))
         try write(session: "expired", cache(
             capturedAt: now.addingTimeInterval(-600),
             windowJSON("five_hour", percent: 56, resetsAt: now.addingTimeInterval(-60)),
-            account: bitgrip
+            account: otherOrg
         ))
 
         let others = await makeReader(
-            activeAccount: ActiveAccountReading(account: creativytool)
+            activeAccount: ActiveAccountReading(account: exampleOrg)
         ).otherAccountSnapshots()
 
         XCTAssertEqual(others, [])
@@ -1145,17 +1145,17 @@ final class StatuslineCacheReaderTests: XCTestCase {
         try write(session: "mislabelled", cache(
             capturedAt: now.addingTimeInterval(-10),
             windowJSON("seven_day", percent: 56, resetsAt: now.addingTimeInterval(20 * 3600)),
-            account: creativytool
+            account: exampleOrg
         ))
         try write(session: "honest", cache(
             capturedAt: now.addingTimeInterval(-60),
             windowJSON("seven_day", percent: 3, resetsAt: now.addingTimeInterval(4 * 3600)),
-            account: creativytool
+            account: exampleOrg
         ))
 
         let snapshot = try await makeReader(activeAccount: ActiveAccountReading(
-            account: creativytool,
-            reference: reference(creativytool, sevenDayResetsIn: 4 * 3600)
+            account: exampleOrg,
+            reference: reference(exampleOrg, sevenDayResetsIn: 4 * 3600)
         )).currentSnapshot()
 
         XCTAssertEqual(snapshot.sevenDay?.percentUsed, 3)
@@ -1168,12 +1168,12 @@ final class StatuslineCacheReaderTests: XCTestCase {
         try write(session: "honest", cache(
             capturedAt: now.addingTimeInterval(-10),
             windowJSON("seven_day", percent: 41, resetsAt: now.addingTimeInterval(4 * 3600)),
-            account: creativytool
+            account: exampleOrg
         ))
 
         let snapshot = try await makeReader(activeAccount: ActiveAccountReading(
-            account: creativytool,
-            reference: reference(creativytool, sevenDayResetsIn: 4 * 3600)
+            account: exampleOrg,
+            reference: reference(exampleOrg, sevenDayResetsIn: 4 * 3600)
         )).currentSnapshot()
 
         XCTAssertEqual(snapshot.sevenDay?.percentUsed, 41)
@@ -1187,12 +1187,12 @@ final class StatuslineCacheReaderTests: XCTestCase {
         try write(session: "honest", cache(
             capturedAt: now.addingTimeInterval(-10),
             windowJSON("seven_day", percent: 41, resetsAt: now.addingTimeInterval(4 * 3600)),
-            account: creativytool
+            account: exampleOrg
         ))
 
         let snapshot = try await makeReader(activeAccount: ActiveAccountReading(
-            account: creativytool,
-            reference: reference(creativytool, sevenDayResetsIn: 4 * 3600 + 0.401826)
+            account: exampleOrg,
+            reference: reference(exampleOrg, sevenDayResetsIn: 4 * 3600 + 0.401826)
         )).currentSnapshot()
 
         XCTAssertEqual(snapshot.sevenDay?.percentUsed, 41)
@@ -1207,12 +1207,12 @@ final class StatuslineCacheReaderTests: XCTestCase {
             try write(session: "reading", cache(
                 capturedAt: now.addingTimeInterval(-10),
                 windowJSON("seven_day", percent: 41, resetsAt: now.addingTimeInterval(4 * 3600 + offset)),
-                account: creativytool
+                account: exampleOrg
             ))
 
             let reader = makeReader(activeAccount: ActiveAccountReading(
-                account: creativytool,
-                reference: reference(creativytool, sevenDayResetsIn: 4 * 3600)
+                account: exampleOrg,
+                reference: reference(exampleOrg, sevenDayResetsIn: 4 * 3600)
             ))
 
             if let expected {
@@ -1232,11 +1232,11 @@ final class StatuslineCacheReaderTests: XCTestCase {
         try write(session: "unverifiable", cache(
             capturedAt: now.addingTimeInterval(-10),
             windowJSON("seven_day", percent: 56, resetsAt: now.addingTimeInterval(20 * 3600)),
-            account: creativytool
+            account: exampleOrg
         ))
 
         let snapshot = try await makeReader(
-            activeAccount: ActiveAccountReading(account: creativytool)
+            activeAccount: ActiveAccountReading(account: exampleOrg)
         ).currentSnapshot()
 
         XCTAssertEqual(snapshot.sevenDay?.percentUsed, 56)
@@ -1249,12 +1249,12 @@ final class StatuslineCacheReaderTests: XCTestCase {
         try write(session: "five-hour-only", cache(
             capturedAt: now.addingTimeInterval(-10),
             windowJSON("five_hour", percent: 22, resetsAt: now.addingTimeInterval(3600)),
-            account: creativytool
+            account: exampleOrg
         ))
 
         let snapshot = try await makeReader(activeAccount: ActiveAccountReading(
-            account: creativytool,
-            reference: reference(creativytool, sevenDayResetsIn: 4 * 3600)
+            account: exampleOrg,
+            reference: reference(exampleOrg, sevenDayResetsIn: 4 * 3600)
         )).currentSnapshot()
 
         XCTAssertEqual(snapshot.fiveHour?.percentUsed, 22)
@@ -1267,20 +1267,20 @@ final class StatuslineCacheReaderTests: XCTestCase {
         try write(session: "left-behind", cache(
             capturedAt: now.addingTimeInterval(-60),
             windowJSON("seven_day", percent: 56, resetsAt: now.addingTimeInterval(20 * 3600)),
-            account: bitgrip
+            account: otherOrg
         ))
         try write(session: "current", cache(
             capturedAt: now.addingTimeInterval(-10),
             windowJSON("seven_day", percent: 3, resetsAt: now.addingTimeInterval(4 * 3600)),
-            account: creativytool
+            account: exampleOrg
         ))
 
         let others = await makeReader(activeAccount: ActiveAccountReading(
-            account: creativytool,
-            reference: reference(creativytool, sevenDayResetsIn: 4 * 3600)
+            account: exampleOrg,
+            reference: reference(exampleOrg, sevenDayResetsIn: 4 * 3600)
         )).otherAccountSnapshots()
 
-        XCTAssertEqual(others.map { $0.account }, [bitgrip])
+        XCTAssertEqual(others.map { $0.account }, [otherOrg])
         XCTAssertEqual(others.first?.sevenDay?.percentUsed, 56)
     }
 

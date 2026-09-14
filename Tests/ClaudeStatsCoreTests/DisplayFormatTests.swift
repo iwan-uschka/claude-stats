@@ -54,7 +54,7 @@ final class DisplayFormatTests: XCTestCase {
     func testResetCountdownWording() {
         XCTAssertEqual(
             DisplayFormat.resetCountdown(2 * 3600 + 14 * 60),
-            "resets in 2h 14m"
+            "2h 14m"
         )
     }
 
@@ -72,7 +72,7 @@ final class DisplayFormatTests: XCTestCase {
         )
         XCTAssertEqual(
             DisplayFormat.resetCountdown(window.timeUntilReset(from: now)),
-            "resets in 2h 14m"
+            "2h 14m"
         )
     }
 
@@ -100,7 +100,7 @@ final class DisplayFormatTests: XCTestCase {
         )
 
         XCTAssertEqual(DisplayFormat.windowPercent(window), "62%")
-        XCTAssertEqual(DisplayFormat.windowCountdown(window, from: now), "resets in 2h 14m")
+        XCTAssertEqual(DisplayFormat.windowCountdown(window, from: now), "2h 14m")
     }
 
     /// A window that exists but reports no reset: "pending" for the two
@@ -129,39 +129,21 @@ final class DisplayFormatTests: XCTestCase {
         XCTAssertEqual(DisplayFormat.windowPercent(QuotaWindow(percentUsed: 0)), "0%")
     }
 
-    // MARK: - age
+    // MARK: - sourceTag
 
-    func testAgeWording() {
-        XCTAssertEqual(DisplayFormat.age(40), "40s ago")
-        XCTAssertEqual(DisplayFormat.age(5 * 60 + 30), "5m ago")
-        XCTAssertEqual(DisplayFormat.age(2 * 3600), "2h ago")
-        XCTAssertEqual(DisplayFormat.age(3 * 86_400 + 3600), "3d ago")
-    }
-
-    func testAgeCollapsesSubSecondAndNegativeToJustNow() {
-        XCTAssertEqual(DisplayFormat.age(0), "just now")
-        XCTAssertEqual(DisplayFormat.age(0.4), "just now")
-        XCTAssertEqual(DisplayFormat.age(-30), "just now")
-        XCTAssertEqual(DisplayFormat.age(.nan), "just now")
-    }
-
-    func testSourceTagMatchesTheMockupLine() {
-        XCTAssertEqual(
-            DisplayFormat.sourceTag(confidence: .official, age: 40),
-            "source: official · 40s ago"
-        )
+    /// Only the backup source is named: both carry Anthropic's numbers, so
+    /// "official" said nothing, while "cached" warns the reading may be old.
+    /// No age, no "stale" suffix — freshness is not part of the tag.
+    func testSourceTagNamesOnlyTheCachedSource() {
+        XCTAssertNil(DisplayFormat.sourceTag(confidence: .official))
+        XCTAssertEqual(DisplayFormat.sourceTag(confidence: .cachedOfficial), "cached")
+        XCTAssertNil(QuotaConfidence.official.tagLabel)
+        XCTAssertEqual(QuotaConfidence.cachedOfficial.tagLabel, "cached")
     }
 
     func testSourceTagReadsFromASnapshot() {
-        let now = Date()
-        let snapshot = MockQuotaProvider.sampleSnapshot(now: now)
-        XCTAssertEqual(
-            DisplayFormat.sourceTag(
-                confidence: snapshot.confidence,
-                age: snapshot.age(asOf: now)
-            ),
-            "source: official · 40s ago"
-        )
+        let snapshot = MockQuotaProvider.sampleSnapshot(now: Date())
+        XCTAssertNil(DisplayFormat.sourceTag(confidence: snapshot.confidence))
     }
 
     // MARK: - tokens
@@ -178,6 +160,11 @@ final class DisplayFormatTests: XCTestCase {
         XCTAssertEqual(DisplayFormat.tokens(12_000), "12k")
         XCTAssertEqual(DisplayFormat.tokens(1_000_000), "1M")
         XCTAssertEqual(DisplayFormat.tokens(1_050_000), "1.1M")
+        // The ladder has to roll over, or a busy corpus reads `2000M`.
+        XCTAssertEqual(DisplayFormat.tokens(2_000_000_000), "2G")
+        XCTAssertEqual(DisplayFormat.tokens(2_140_000_000), "2.1G")
+        XCTAssertEqual(DisplayFormat.tokens(999_900_000), "999.9M")
+        XCTAssertEqual(DisplayFormat.tokens(3_500_000_000_000), "3.5T")
     }
 
     func testTokenCountsBelowAThousandStayExact() {
@@ -188,11 +175,6 @@ final class DisplayFormatTests: XCTestCase {
 
     func testTokenCountsHandleNegatives() {
         XCTAssertEqual(DisplayFormat.tokens(-5_400), "-5.4k")
-    }
-
-    func testBurnRateWording() {
-        XCTAssertEqual(DisplayFormat.burnRate(12_400), "12.4k tok/hr")
-        XCTAssertEqual(DisplayFormat.burnRate(0), "0 tok/hr")
     }
 
     // MARK: - token splits
@@ -214,7 +196,7 @@ final class DisplayFormatTests: XCTestCase {
         let dominated = TokenUsage(inputTokens: 10_000, cacheReadInputTokens: 90_000)
         XCTAssertEqual(
             DisplayFormat.cacheReadNote(dominated),
-            "90k of 100k is cache reads — billed at 1/10 the input rate"
+            "90% cache reads — billed at 1/10 the input rate"
         )
 
         // Exactly at the threshold, and below it: the raw total speaks for itself.
@@ -225,9 +207,10 @@ final class DisplayFormatTests: XCTestCase {
         XCTAssertNil(DisplayFormat.cacheReadNote(.zero))
     }
 
-    /// Mirrors `AppModel.modelUsageTotal`: the section's caption is about
-    /// every row summed, not any single model — a row that alone stays under
-    /// the threshold can still push the total over it once combined.
+    /// Mirrors the "By model" table's `shownUsage`: the note under the block is
+    /// computed from every band summed for the shown window or day, not from
+    /// any single model — a row that alone stays under the threshold can still
+    /// push the total over it once combined.
     func testCacheReadNoteOverSummedModelRows() {
         let rows = [
             ModelUsage(
@@ -246,43 +229,101 @@ final class DisplayFormatTests: XCTestCase {
         XCTAssertEqual(total, TokenUsage(inputTokens: 40_000, cacheReadInputTokens: 80_000))
         XCTAssertEqual(
             DisplayFormat.cacheReadNote(total),
-            "80k of 120k is cache reads — billed at 1/10 the input rate"
+            "67% cache reads — billed at 1/10 the input rate"
         )
     }
 
-    /// Mirrors the "This Mac" caption: it is computed from every entrypoint
-    /// row summed, so a quiet row that is cache-read-light can't suppress it.
-    func testCacheReadNoteOverSummedEntrypointRows() {
-        let breakdown = EntrypointBreakdown(
-            window: .fiveHour,
-            usageByEntrypoint: [
-                .cli: TokenUsage(inputTokens: 30_000, cacheReadInputTokens: 20_000),
-                .sdkAgent: TokenUsage(inputTokens: 10_000, cacheReadInputTokens: 60_000),
-            ]
-        )
-
+    /// The share is rounded to a whole percent, both ways — the caption is a
+    /// characterisation of the total, not a measurement to a tenth.
+    func testCacheReadNoteRoundsTheShareToAWholePercent() {
+        // 81.4% → 81%.
         XCTAssertEqual(
-            breakdown.totalUsage,
-            TokenUsage(inputTokens: 40_000, cacheReadInputTokens: 80_000)
+            DisplayFormat.cacheReadNote(
+                TokenUsage(inputTokens: 18_600, cacheReadInputTokens: 81_400)
+            ),
+            "81% cache reads — billed at 1/10 the input rate"
+        )
+        // 81.5% → 82%, and a total that is only just over the threshold still
+        // reads as 51% rather than "50%", which would contradict the guard.
+        XCTAssertEqual(
+            DisplayFormat.cacheReadNote(
+                TokenUsage(inputTokens: 18_500, cacheReadInputTokens: 81_500)
+            ),
+            "82% cache reads — billed at 1/10 the input rate"
         )
         XCTAssertEqual(
-            DisplayFormat.cacheReadNote(breakdown.totalUsage),
-            "80k of 120k is cache reads — billed at 1/10 the input rate"
+            DisplayFormat.cacheReadNote(
+                TokenUsage(inputTokens: 49_000, cacheReadInputTokens: 51_000)
+            ),
+            "51% cache reads — billed at 1/10 the input rate"
         )
-
-        // A window with no cache-read dominance stays uncaptioned.
-        let fresh = EntrypointBreakdown(
-            window: .fiveHour,
-            usageByEntrypoint: [.cli: TokenUsage(inputTokens: 10_000, outputTokens: 5_000)]
+        // A hair over the threshold on a small total — 151/300 is 50.33%, which
+        // rounds to the threshold itself. The floor keeps it off that number,
+        // since a note reading "50%" would contradict the guard that drew it.
+        XCTAssertEqual(
+            DisplayFormat.cacheReadNote(
+                TokenUsage(inputTokens: 149, cacheReadInputTokens: 151)
+            ),
+            "51% cache reads — billed at 1/10 the input rate"
         )
-        XCTAssertNil(DisplayFormat.cacheReadNote(fresh.totalUsage))
-        XCTAssertNil(DisplayFormat.cacheReadNote(EntrypointBreakdown.empty(window: .fiveHour).totalUsage))
+        // All cache reads: 100%, not 99 or 101.
+        XCTAssertEqual(
+            DisplayFormat.cacheReadNote(TokenUsage(cacheReadInputTokens: 12_345)),
+            "100% cache reads — billed at 1/10 the input rate"
+        )
     }
 
     func testCostFormatting() {
         XCTAssertEqual(DisplayFormat.cost(4.82), "$4.82")
         XCTAssertEqual(DisplayFormat.cost(0), "$0.00")
         XCTAssertEqual(DisplayFormat.cost(3.1), "$3.10")
+    }
+
+    // MARK: - compactCost
+    //
+    // The "Estimated cost" chart's y-axis. Ticks land on round numbers, so the cases
+    // that matter are the round ones — `$50.00` is what this exists to avoid.
+
+    func testCompactCostDropsDecimalsAtAndAboveTenDollars() {
+        XCTAssertEqual(DisplayFormat.compactCost(50), "$50")
+        XCTAssertEqual(DisplayFormat.compactCost(10), "$10")
+        XCTAssertEqual(DisplayFormat.compactCost(48.4), "$48")
+        XCTAssertEqual(DisplayFormat.compactCost(48.6), "$49")
+    }
+
+    func testCompactCostKeepsDecimalsBelowTenDollarsButNotTrailingZeros() {
+        // A $2 tick and a $2.50 tick are different readings of the same day,
+        // so the decimals have to survive down here — but `$2.00` does not.
+        XCTAssertEqual(DisplayFormat.compactCost(2), "$2")
+        XCTAssertEqual(DisplayFormat.compactCost(2.5), "$2.5")
+        XCTAssertEqual(DisplayFormat.compactCost(0.75), "$0.75")
+        XCTAssertEqual(DisplayFormat.compactCost(0.05), "$0.05")
+        XCTAssertEqual(DisplayFormat.compactCost(0), "$0")
+    }
+
+    func testCompactCostAbbreviatesThousands() {
+        XCTAssertEqual(DisplayFormat.compactCost(1_000), "$1k")
+        XCTAssertEqual(DisplayFormat.compactCost(1_234), "$1.2k")
+    }
+
+    func testCompactCostSignsNegatives() {
+        // A cost axis should never see one, but `.automatic` domains and axis
+        // probes both can — a bare `$2` for minus two dollars would be a lie.
+        XCTAssertEqual(DisplayFormat.compactCost(-2.5), "-$2.5")
+        XCTAssertEqual(DisplayFormat.compactCost(-50), "-$50")
+    }
+
+    func testCompactCostRefusesValuesAnAxisCannotMean() {
+        // Chart frameworks probe a formatter with values of their own choosing.
+        // `%f` on these is a 300-digit label, which renders — worse than a nil.
+        XCTAssertNil(DisplayFormat.compactCost(.nan))
+        XCTAssertNil(DisplayFormat.compactCost(.infinity))
+        XCTAssertNil(DisplayFormat.compactCost(-.infinity))
+        XCTAssertNil(DisplayFormat.compactCost(.greatestFiniteMagnitude))
+        // The cutoff itself: a trillion is out, everything under it still
+        // formats — unreadably wide, but a number rather than a refusal.
+        XCTAssertNil(DisplayFormat.compactCost(1e12))
+        XCTAssertEqual(DisplayFormat.compactCost(999_999_999_999), "$1000000000k")
     }
 
     // MARK: - money
@@ -425,46 +466,53 @@ final class DisplayFormatTests: XCTestCase {
         XCTAssertEqual(DisplayFormat.barFraction(value: -10, total: 100), 0)
     }
 
-    func testBreakdownRowsScaleAgainstThePeakRow() {
-        let breakdown = MockUsageStore.sampleBreakdowns[.twentyFourHour]!
-        let rows = breakdown.orderedRows
-        let peak = rows.map(\.usage.totalTokens).max() ?? 0
-        let fractions = rows.map {
-            DisplayFormat.barFraction(value: $0.usage.totalTokens, peak: peak)
-        }
-
-        // Exactly one row is full-width, and every row is inside 0...1.
-        XCTAssertEqual(fractions.filter { $0 == 1 }.count, 1)
-        XCTAssertTrue(fractions.allSatisfy { $0 >= 0 && $0 <= 1 })
-        // sdk-cli is the busiest entrypoint in the sample data.
-        XCTAssertEqual(rows.max { $0.usage.totalTokens < $1.usage.totalTokens }?.entrypoint, .sdkAgent)
-    }
-
-    func testEmptyBreakdownProducesAllZeroFractions() {
+    /// Every entrypoint keeps a row, including the ones with nothing in the
+    /// window — an absent row would read as an entrypoint this Mac has never
+    /// used rather than an idle one. No view reads this breakdown any more (the
+    /// popover's "By source" block is built from `DailyUsageHistory`, which
+    /// keeps the same rule), so this pins the data layer's own contract.
+    func testEmptyBreakdownStillHasARowPerEntrypoint() {
         let rows = EntrypointBreakdown.empty(window: .fiveHour).orderedRows
-        let peak = rows.map(\.usage.totalTokens).max() ?? 0
-        XCTAssertEqual(rows.count, Entrypoint.displayOrder.count)
-        XCTAssertTrue(rows.allSatisfy {
-            DisplayFormat.barFraction(value: $0.usage.totalTokens, peak: peak) == 0
-        })
+        XCTAssertEqual(rows.map(\.entrypoint), Entrypoint.displayOrder)
+        XCTAssertTrue(rows.allSatisfy { $0.usage.totalTokens == 0 })
     }
 
-    // MARK: - plan
+    // MARK: - Axis labels
 
-    func testPlanDescriptionForKnownTiers() {
-        XCTAssertEqual(DisplayFormat.planDescription(.max20), "Max20 (auto-detected)")
-        XCTAssertEqual(DisplayFormat.planDescription(.max5), "Max5 (auto-detected)")
-        XCTAssertEqual(DisplayFormat.planDescription(.pro), "Pro (auto-detected)")
-    }
-
-    func testPlanDescriptionForCustomTierShowsTheEstimatedBudget() {
+    func testATokenAxisIsLabelledInOneUnit() {
+        // The reading this fixes: `1.5G / 1G / 500M / 0` makes the eye convert
+        // `500M` into `0.5G` before the steps look even.
         XCTAssertEqual(
-            DisplayFormat.planDescription(.custom(tokens: 145_000)),
-            "Custom (~145k tok/5h)"
+            DisplayFormat.tokenAxisLabels([0, 500_000_000, 1_000_000_000, 1_500_000_000]),
+            ["", "0.5G", "1.0G", "1.5G"]
         )
+        // Round steps keep their decimals off — the column is narrow.
+        XCTAssertEqual(DisplayFormat.tokenAxisLabels([0, 1_000_000, 2_000_000, 3_000_000]), ["", "1M", "2M", "3M"])
+        // The unit comes from the largest value, so a quarter-million step is
+        // still labelled in `k` rather than being pushed up to `0.25M`.
+        XCTAssertEqual(DisplayFormat.tokenAxisLabels([0, 250_000, 500_000, 750_000]), ["", "250k", "500k", "750k"])
+        // Below a thousand there is no unit to share.
+        XCTAssertEqual(DisplayFormat.tokenAxisLabels([0, 400, 800]), ["", "400", "800"])
     }
 
-    func testPlanDescriptionBeforeDetection() {
-        XCTAssertEqual(DisplayFormat.planDescription(nil), "detecting…")
+    func testACostAxisKeepsMoneysDecimals() {
+        // Two decimals or none: `$2.5` is not how money is written, and every
+        // label on the axis carries the same number of them.
+        XCTAssertEqual(DisplayFormat.costAxisLabels([0, 2.5, 5]), ["", "$2.50", "$5.00"])
+        XCTAssertEqual(DisplayFormat.costAxisLabels([0, 0.5, 1]), ["", "$0.50", "$1.00"])
+        XCTAssertEqual(DisplayFormat.costAxisLabels([0, 2, 4, 6]), ["", "$2", "$4", "$6"])
+        // `k` carries one decimal, as `compactCost` does — `$1.50k` reads as a
+        // typo where `$1.5k` reads as a number.
+        XCTAssertEqual(DisplayFormat.costAxisLabels([0, 500, 1_000, 1_500]), ["", "$0.5k", "$1.0k", "$1.5k"])
+    }
+
+    func testZeroGoesUnlabelledOnEveryAxis() {
+        // Both charts scale from zero, so the bottom line is zero by
+        // construction — the label only restates it, in the narrowest column
+        // the popover has. Empty rather than dropped, so the labels stay
+        // index-for-index with the values they came from.
+        XCTAssertEqual(DisplayFormat.tokenAxisLabels([0, 1_500_000_000]), ["", "1.5G"])
+        XCTAssertEqual(DisplayFormat.costAxisLabels([0, 1_500]), ["", "$1.5k"])
+        XCTAssertEqual(DisplayFormat.tokenAxisLabels([]), [])
     }
 }
