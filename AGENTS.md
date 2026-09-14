@@ -19,9 +19,12 @@ settled unless the user reopens it; don't re-derive or re-litigate.
 
 - `swift build` / `swift test`
 - `xcrun xctrace record --template 'os_signpost' --launch ClaudeStats.app` —
-  rebuild perf triage; `SessionCorpusIndex` emits `StatPass`, `Reparse`,
-  `Fold` and `SnapshotAssembly` intervals under subsystem
-  `de.bitgrip.claude-stats`, category `RebuildPerf`.
+  rebuild perf triage; `SessionCorpusIndex` emits `StatPass`, `ScopedScan`,
+  `Reparse`, `Fold` and `SnapshotAssembly` intervals under subsystem
+  `de.bitgrip.claude-stats`, category `RebuildPerf`. `StatPass` (full corpus)
+  and `ScopedScan` (just the watcher batch's paths) are alternatives — a
+  healthy steady state is one `StatPass` at launch and one `ScopedScan` per
+  coalesced write.
 
 ## Data layer
 

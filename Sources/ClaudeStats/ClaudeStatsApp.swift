@@ -53,11 +53,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let corpusIndex: SessionCorpusIndex?
 
     /// `true` while a rebuild is queued but not yet started, guarded by
-    /// `rebuildFlagLock`. Watcher batches arriving in that window are already
-    /// covered — the queued rebuild stat-scans the whole corpus when it runs —
-    /// so they don't enqueue another one. Without this, batches every ~2s each
-    /// queueing their own rebuild would pile up behind a slow one indefinitely.
+    /// `rebuildFlagLock`. Watcher batches arriving in that window fold into
+    /// `pendingChanges` instead of enqueueing a second rebuild — without this,
+    /// batches every ~2s each queueing their own would pile up behind a slow one
+    /// indefinitely.
     private var rebuildQueued = false
+    /// Changes accumulated for the queued rebuild to consume, guarded by
+    /// `rebuildFlagLock`. A batch arriving while a rebuild is queued used to be
+    /// dropped outright, on the grounds that the queued rebuild would stat-scan
+    /// the whole corpus anyway and find its files regardless. That stopped being
+    /// true when rebuilds became scoped to the batch they're given: a dropped
+    /// batch is now a set of paths nothing would ever look at. So they merge
+    /// (see `FileChangeBatch.merging`) and drain together.
+    private var pendingChanges: FileChangeBatch?
     private let rebuildFlagLock = NSLock()
 
     override init() {
@@ -129,35 +137,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// The batch decides *whether* to rebuild — only `.jsonl` content changes
-    /// (or a dropped-events rescan signal) matter. *What* to reparse is the
-    /// index's job: it stat-scans the corpus and reparses only files whose
-    /// mtime/size actually changed, so a rebuild costs a scan rather than the
-    /// ~4.5s full-corpus parse this used to be. That scan is still O(corpus)
-    /// and grows with file count — ~190 ms at 13.5k files, measured — because
-    /// the batch gates *whether* to rebuild but never narrows *what* is
-    /// scanned. Bursts collapse via `rebuildQueued` — at most one rebuild runs
-    /// and one waits.
+    /// The batch decides both *whether* to rebuild and *what* to reparse. Only
+    /// `.jsonl` content changes matter, plus the two signals that say the batch
+    /// itself is an incomplete account of what happened — a dropped-events
+    /// rescan, and a removed or renamed directory, for which FSEvents names no
+    /// children. Anything else is `todos/`-style noise and is dropped here.
+    ///
+    /// Everything that survives is handed to the index, which stats just those
+    /// paths and reparses the ones whose mtime/size actually moved — so a
+    /// rebuild costs a handful of `stat` calls rather than the ~190 ms
+    /// corpus-wide scan it used to (itself down from a ~4.5s full-corpus parse).
+    /// The two incomplete-batch signals make it scan the whole corpus instead,
+    /// which is what keeps a lost event or a vanished project directory from
+    /// leaving stale data behind indefinitely.
+    ///
+    /// Bursts collapse via `rebuildQueued` — at most one rebuild runs and one
+    /// waits — with the waiting one's changes accumulating in `pendingChanges`.
     private func rebuildUsageStore(changed batch: FileChangeBatch) {
-        guard batch.requiresFullRescan || !batch.contentChanges(withExtension: "jsonl").isEmpty else { return }
+        guard batch.requiresFullRescan
+                || batch.containsRemovedOrRenamedDirectory
+                || !batch.contentChanges(withExtension: "jsonl").isEmpty
+        else { return }
 
         rebuildFlagLock.lock()
         let alreadyQueued = rebuildQueued
         rebuildQueued = true
+        pendingChanges = pendingChanges.map { $0.merging(batch) } ?? batch
         rebuildFlagLock.unlock()
         guard !alreadyQueued else { return }
 
         rebuildQueue.async { [weak self] in
             guard let self else { return }
-            // Clear the flag before any early exit or rebuild: changes that
-            // land mid-rebuild must queue a follow-up, and a `nil` index
-            // (sample-data mode) must not latch the flag forever.
+            // Drain flag and changes together, before any early exit or
+            // rebuild: changes that land mid-rebuild must queue a follow-up
+            // carrying their own paths, and a `nil` index (sample-data mode)
+            // must not latch the flag forever.
             self.rebuildFlagLock.lock()
             self.rebuildQueued = false
+            let changes = self.pendingChanges
+            self.pendingChanges = nil
             self.rebuildFlagLock.unlock()
 
             guard let index = self.corpusIndex else { return }
-            let fresh = index.rebuild()
+            let fresh = index.rebuild(changed: changes)
             DispatchQueue.main.async {
                 self.model?.updateUsageStore(fresh)
                 // Local stats/breakdown already refreshed by `updateUsageStore`;

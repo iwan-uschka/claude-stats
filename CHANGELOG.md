@@ -92,6 +92,10 @@
 - The periodic CPU spike while a session is running costs about a third less,
   and peaks lower: the corpus scan that runs on every write no longer rebuilds
   each file's path once per sort comparison. Bigger corpora gain the most.
+- The periodic CPU spike is roughly halved, and no longer grows with the size
+  of the log corpus. A write now costs a look at the files that changed,
+  instead of a walk over every session file on disk. The full walk still runs
+  at launch, and whenever the system reports it lost track of what changed.
 - The popover stalls less while a session is running: the work each refresh
   does on the main thread is down to about a quarter of what it was. Working
   out which model family a logged message belongs to no longer runs a
