@@ -416,17 +416,20 @@ struct PopoverView: View {
 
     /// The active/inactive marker in front of an account name: the same
     /// checkmark Settings shows next to "Statusline hook installed", and a
-    /// cross for a login nobody is signed in as. Shown only while both kinds
-    /// exist, see ``AppModel/showsAccountStateMarkers``.
+    /// cross for a login nobody is signed in as. Deliberately uncoloured —
+    /// they inherit the title's ink, primary on the active account and
+    /// secondary on a collapsed one — because "inactive" is a state, not a
+    /// fault; the shapes alone carry the contrast. Shown only while both
+    /// kinds exist, see ``AppModel/showsAccountStateMarkers``.
     ///
-    /// Both in brand ink, not green and red: "inactive" is a state, not a
-    /// fault, so the two markers differ by shape alone — and a second and third
-    /// hue would break the one-colour rule ``PopoverMetrics/brandColor``
-    /// states. The name beside it keeps the row's own ink, so the marker is the
-    /// only coloured thing in the row.
+    /// They were briefly brand terracotta, on the reading that the one-colour
+    /// rule meant *everything* non-ink should be that colour. It doesn't: the
+    /// rule says nothing may take a colour of its own, not that a monochrome
+    /// glyph has to take Claude's. Two terracotta badges in the two most
+    /// prominent rows of the card pulled the eye to the least urgent thing on
+    /// it, and left the row's own ink saying nothing about which account it is.
     private func accountStateMarker(active: Bool) -> some View {
         Image(systemName: active ? "checkmark.circle.fill" : "xmark.circle.fill")
-            .foregroundStyle(PopoverMetrics.brandColor)
             .accessibilityLabel(active ? "Active account" : "Inactive account")
     }
 

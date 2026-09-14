@@ -162,7 +162,7 @@ enum PopoverMetrics {
     /// background (≈6.2:1).
     ///
     /// The only thing allowed to use anything else is a chart band — see
-    /// ``chartBandColors``, which are shades of exactly these two literals.
+    /// ``chartBandColor(_:of:)``, which shades exactly these two literals.
     static let brandColor = Color(brandNSColor)
 
     /// ``brandColor`` before SwiftUI wraps it, so a measuring test can resolve
@@ -173,44 +173,231 @@ enum PopoverMetrics {
             : NSColor(srgbHex: 0xA85E3E)
     }
 
-    /// Ink for the stacked charts' bands, strongest first — five shades, which
-    /// is what the model chart needs (four families plus "Other"; the source
-    /// chart needs four).
+    /// How strongly a stacked chart paints its bands and the strokes that close
+    /// the seams between them.
     ///
-    /// Shades of one hue, never five hues. Colour in this popover means
-    /// ``brandColor``, so a chart painted in five unrelated colours would both
-    /// break that rule and make the plots shout louder than the quota bars
-    /// above them. The band a reader looks at first — the bottom of the stack,
-    /// and the ink the cost line and the hover dots borrow — *is* the brand
-    /// colour; each further band steps one notch towards its own background.
+    /// Not opaque, because the y-axis lines are drawn *behind* the stack now:
+    /// at 0.85 they read faintly through a band, which is what a gridline is
+    /// for — a reader picks a value off the plot by following one, and a line
+    /// that stops at the stack's outline can only be followed in the empty
+    /// region above it. 0.85 rather than less: the bands' own ramp (see
+    /// ``chartBandColor(_:of:)``) is what has to stay legible, and every step
+    /// of it is measured against an opaque card.
     ///
-    /// The ramp is bounded at both ends rather than running to white or black:
-    /// the darkest shade still has to read against the dark popover and the
-    /// lightest against the light one. Measured as WCAG contrast against the
-    /// same two backgrounds the figures above use — white, and the ≈`#232323`
-    /// dark popover — the five steps come to 4.84 / 3.77 / 2.94 / 2.31 / 1.80
-    /// in light and 6.15 / 4.79 / 3.75 / 2.92 / 2.29 in dark. That is one
-    /// factor of ≈1.28 per step, enough to tell two touching bands apart, and
-    /// the pale end lands where the monochrome ramp this replaced ended
+    /// The table dots keep the band colour at full strength — a 6 pt circle has
+    /// no gridline to show through it, and thinning it would only make the two
+    /// palest rows harder to tell apart.
+    static let chartBandOpacity: Double = 0.85
+
+    /// Width of the stroke a band draws along its own cumulative top edge.
+    ///
+    /// One point, which is what it takes to cover a seam: each band is a
+    /// separate anti-aliased path, so at a shared boundary both paths cover
+    /// their edge pixel about half and the card behind shows through as a dark
+    /// hairline. The stroke is the band's own ink at the same
+    /// ``chartBandOpacity``, so it reads as part of the band rather than as an
+    /// outline around it.
+    static let chartBandSeamWidth: CGFloat = 1
+
+    /// Ink for stack position `index` of a stack `count` bands tall, strongest
+    /// first.
+    ///
+    /// Shades of one hue, never several hues. Colour in this popover means
+    /// ``brandColor``, so a chart painted in unrelated colours would both break
+    /// that rule and make the plots shout louder than the quota bars above
+    /// them. Position 0 — the first table row, the *top* band of the stack, and
+    /// the ink anything saying "the same colour as the first band" borrows — is
+    /// the brand colour itself; the last band sits at the far end of the ramp.
+    ///
+    /// **Shade by position, not a fixed palette.** The ramp this replaced was
+    /// five literals a chart took the first `count` of, so a three-band stack
+    /// used three adjacent steps of five and its bands were a factor of ≈1.28
+    /// apart. Spreading `count` bands across the *whole* bounded range instead
+    /// puts three of them 1.68 / 1.60 apart — the fewer the bands, the further
+    /// apart they sit, which is the opposite of what a fixed palette does.
+    ///
+    /// The ends are bounded rather than run to white or black: the strong end
+    /// still has to read against the dark popover and the pale end against the
+    /// light one. They are exactly the old ramp's first and last steps, so the
+    /// measured bounds are unchanged — WCAG contrast against white and against
+    /// the ≈`#232323` dark card, 4.84 → 1.80 in light and 6.15 → 2.29 in dark.
+    /// The pale end lands where the monochrome ramp before that ended
     /// (`Color.primary` at 0.24 opacity measured 1.78:1 on white).
     ///
-    /// Hue and saturation are not constant down the ramp: at a fixed 46% / 75%
-    /// saturation the darker dark-mode steps came out a vivid orange rather
-    /// than terracotta, so saturation eases off as the shade moves away from
-    /// the brand colour.
-    static let chartBandColors: [Color] = chartBandNSColors.map(Color.init)
+    /// Measured for the stack heights the popover can actually draw — the
+    /// source chart tops out at four bands (three entrypoints plus "Other"),
+    /// the model chart at five (four families plus "Other"):
+    ///
+    /// | bands | light, on white | dark, on `#232323` |
+    /// | --- | --- | --- |
+    /// | 2 | 4.84 / 1.80 | 6.15 / 2.29 |
+    /// | 3 | 4.84 / 2.88 / 1.80 | 6.15 / 4.05 / 2.29 |
+    /// | 4 | 4.84 / 3.40 / 2.45 / 1.80 | 6.15 / 4.70 / 3.35 / 2.29 |
+    /// | 5 | 4.84 / 3.69 / 2.88 / 2.27 / 1.80 | 6.15 / 5.03 / 4.05 / 3.04 / 2.29 |
+    ///
+    /// The smallest step in that table is 1.22, against the 1.28 the fixed ramp
+    /// managed at *any* count. A sixth band would fall to ≈1.18, which is the
+    /// honest cost of spreading: more bands, smaller steps. Nothing in the
+    /// popover can ask for one.
+    ///
+    /// **Saturation moves with lightness**, so two neighbours differ in two
+    /// dimensions rather than one: interpolated in HSL between the two end
+    /// literals, the ramp runs 46% → 41% saturation as it lightens in the light
+    /// appearance (which is 0.63 → 0.22 measured as HSB, the figure `NSColor`
+    /// reports) and 75% → 47% as it darkens in the dark one. Held at the brand
+    /// value instead, the darker dark-mode steps came out a vivid orange rather
+    /// than terracotta.
+    static func chartBandColor(_ index: Int, of count: Int) -> Color {
+        Color(chartBandNSColor(index, of: count))
+    }
 
-    /// ``chartBandColors`` before SwiftUI wraps them — see ``brandNSColor``.
-    static let chartBandNSColors: [NSColor] = [
-        (light: 0xA85E3E, dark: 0xE88A5C),
-        (light: 0xBC704F, dark: 0xD87240),
-        (light: 0xC6886D, dark: 0xBF6233),
-        (light: 0xD1A08A, dark: 0xA05733),
-        (light: 0xDCBAAB, dark: 0x844C30),
-    ].map { pair in
-        NSColor(name: nil) { appearance in
-            NSColor(srgbHex: appearance.isDarkPopover ? pair.dark : pair.light)
+    /// ``chartBandColor(_:of:)`` before SwiftUI wraps it — see ``brandNSColor``.
+    ///
+    /// A dynamic `NSColor` like the brand colour, resolved against the *AppKit*
+    /// appearance rather than SwiftUI's `colorScheme`, so the same band is one
+    /// literal on the light card and another on the dark one.
+    ///
+    /// **The same call returns the same instance**, which is not an
+    /// optimisation. A dynamic `NSColor` — and the SwiftUI `Color` wrapping one
+    /// — compares by *identity*, so a shade built fresh on each access is never
+    /// `==` to the one the last render used: ``DailyUsageSeries`` is `Equatable`
+    /// off its colour, and every band would read as changed on every pass.
+    static func chartBandNSColor(_ index: Int, of count: Int) -> NSColor {
+        let bands = Swift.max(count, 1)
+        let position = Swift.min(Swift.max(index, 0), bands - 1)
+        guard bands <= bandRampCacheLimit else { return makeChartBandNSColor(position, of: bands) }
+        return cachedBandColors[bands][position]
+    }
+
+    /// Stack heights ``chartBandNSColor(_:of:)`` is precomputed for — eight,
+    /// comfortably past the five bands the popover can draw (four model
+    /// families plus "Other"). A taller stack still gets the right colour; it
+    /// just builds it each time, and nothing asks for one.
+    private static let bandRampCacheLimit = 8
+
+    private static let cachedBandColors: [[NSColor]] = (0...bandRampCacheLimit).map { count in
+        (0..<count).map { makeChartBandNSColor($0, of: count) }
+    }
+
+    /// One shade, built rather than looked up. `index` and `count` are already
+    /// clamped by the caller.
+    ///
+    /// A single band is the brand colour, not the middle of the ramp: one band
+    /// has nothing to be told apart from, and "the same ink as band 0" has to
+    /// keep meaning the brand colour.
+    private static func makeChartBandNSColor(_ index: Int, of count: Int) -> NSColor {
+        let position = count > 1 ? Double(index) / Double(count - 1) : 0
+        return NSColor(name: nil) { appearance in
+            let ramp = appearance.isDarkPopover ? BandRamp.dark : BandRamp.light
+            return ramp.color(at: position)
         }
+    }
+}
+
+/// The two ends of one appearance's band ramp, and the shades between them.
+///
+/// HSL rather than HSB or sRGB: lightness is the axis the ramp is *about*, and
+/// interpolating it carries saturation along with it for free — a straight sRGB
+/// lerp between the same two literals runs through muddier, greyer middles.
+private struct BandRamp {
+    /// Light appearance: the brand terracotta, paling towards the white card
+    /// but stopping at 1.80:1 against it.
+    static let light = BandRamp(strong: 0xA85E3E, pale: 0xDCBAAB)
+    /// Dark appearance: the brand terracotta, darkening towards the ≈`#232323`
+    /// card but stopping at 2.29:1 against it.
+    static let dark = BandRamp(strong: 0xE88A5C, pale: 0x844C30)
+
+    private let strong: HSL
+    private let pale: HSL
+
+    init(strong: UInt32, pale: UInt32) {
+        self.strong = HSL(srgbHex: strong)
+        self.pale = HSL(srgbHex: pale)
+    }
+
+    /// The shade at `position`, `0` being the brand colour itself.
+    ///
+    /// Both ends round-trip to the literals they were measured as, which is
+    /// what lets ``PopoverMetrics/chartBandColor(_:of:)`` promise that band 0
+    /// *is* ``PopoverMetrics/brandColor`` rather than something close to it.
+    func color(at position: Double) -> NSColor {
+        strong.blended(toward: pale, amount: position).nsColor
+    }
+}
+
+/// Just enough HSL for the band ramp: the sRGB literals in, a shade out.
+private struct HSL {
+    /// Degrees, `0..<360`.
+    var hue: Double
+    var saturation: Double
+    var lightness: Double
+
+    init(srgbHex hex: UInt32) {
+        let red = Double((hex >> 16) & 0xFF) / 255
+        let green = Double((hex >> 8) & 0xFF) / 255
+        let blue = Double(hex & 0xFF) / 255
+        let high = Swift.max(red, green, blue)
+        let low = Swift.min(red, green, blue)
+        let chroma = high - low
+        lightness = (high + low) / 2
+        guard chroma > 0 else {
+            hue = 0
+            saturation = 0
+            return
+        }
+        saturation = chroma / (1 - abs(2 * lightness - 1))
+        let sector: Double
+        if high == red {
+            sector = ((green - blue) / chroma).truncatingRemainder(dividingBy: 6)
+        } else if high == green {
+            sector = (blue - red) / chroma + 2
+        } else {
+            sector = (red - green) / chroma + 4
+        }
+        hue = (sector * 60 + 360).truncatingRemainder(dividingBy: 360)
+    }
+
+    private init(hue: Double, saturation: Double, lightness: Double) {
+        self.hue = hue
+        self.saturation = saturation
+        self.lightness = lightness
+    }
+
+    /// Linear in all three axes, hue the short way round the wheel. Both ends
+    /// of this ramp sit at ≈18–20°, so the wrap never fires in practice; it is
+    /// here so a future pair of literals can't interpolate the long way through
+    /// green.
+    func blended(toward other: HSL, amount: Double) -> HSL {
+        var turn = other.hue - hue
+        if turn > 180 { turn -= 360 }
+        if turn < -180 { turn += 360 }
+        return HSL(
+            hue: (hue + turn * amount + 360).truncatingRemainder(dividingBy: 360),
+            saturation: saturation + (other.saturation - saturation) * amount,
+            lightness: lightness + (other.lightness - lightness) * amount
+        )
+    }
+
+    var nsColor: NSColor {
+        let chroma = (1 - abs(2 * lightness - 1)) * saturation
+        let sector = hue / 60
+        let second = chroma * (1 - abs(sector.truncatingRemainder(dividingBy: 2) - 1))
+        let (red, green, blue): (Double, Double, Double)
+        switch sector {
+        case ..<1: (red, green, blue) = (chroma, second, 0)
+        case ..<2: (red, green, blue) = (second, chroma, 0)
+        case ..<3: (red, green, blue) = (0, chroma, second)
+        case ..<4: (red, green, blue) = (0, second, chroma)
+        case ..<5: (red, green, blue) = (second, 0, chroma)
+        default: (red, green, blue) = (chroma, 0, second)
+        }
+        let base = lightness - chroma / 2
+        return NSColor(
+            srgbRed: red + base,
+            green: green + base,
+            blue: blue + base,
+            alpha: 1
+        )
     }
 }
 

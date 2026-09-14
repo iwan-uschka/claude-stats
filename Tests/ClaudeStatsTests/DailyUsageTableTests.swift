@@ -99,7 +99,10 @@ final class DailyUsageTableTests: XCTestCase {
 
         // The dot is the only thing tying a row to an area in the plot; the
         // total is the stack's outline, not a band in it, so it has no dot.
-        XCTAssertEqual(table.bandRows.compactMap(\.color), table.bandRows.indices.map(DailyUsageSeries.bandColor))
+        XCTAssertEqual(
+            table.bandRows.compactMap(\.color),
+            table.bandRows.indices.map { DailyUsageSeries.bandColor($0, of: table.bandRows.count) }
+        )
         XCTAssertNil(table.totalRow.color)
         XCTAssertEqual(table.totalRow.label, "Total")
     }

@@ -1,7 +1,7 @@
 import ClaudeStatsCore
 import SwiftUI
 
-/// The numbers under a ``DailyUsageChart``: one row per band, in stack order,
+/// The numbers under a ``DailyUsageChart``: one row per band, in display order,
 /// plus the total the bands add up to.
 ///
 /// Both popover blocks use it, with the same columns in the same places, so the
@@ -12,10 +12,17 @@ import SwiftUI
 ///
 /// A dot in the band's own shade ties each row to its area in the plot; the
 /// total row has none, because it is the stack's outline rather than a band in
-/// it. Rows are in stack order, bottom band first, so the eye reading the chart
-/// downwards meets the rows in the same sequence.
+/// it. The dot is the band colour at full strength, where the plot paints the
+/// band at ``PopoverMetrics/chartBandOpacity`` to let the gridlines through —
+/// a 6 pt circle has nothing behind it to show.
+///
+/// **The first row is the chart's top band**, and the last the bottom one: the
+/// table reads downwards from its first row, the stack reads downwards from its
+/// top band, so the two run the same way. It is the stack that is reversed for
+/// this, not the table — see ``DailyUsageChart/stackOrder``.
 struct DailyUsageTable: View {
-    /// Bands in stack order, bottom first — exactly what the chart was handed.
+    /// Bands in display order, first row first — exactly what the chart was
+    /// handed, which draws them bottom-up.
     let series: [DailyUsageSeries]
 
     /// The whole window's points, whatever their band. Summed independently of

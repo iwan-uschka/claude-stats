@@ -88,22 +88,24 @@ struct DailyUsageSeries: Identifiable, Hashable {
     /// Row label, e.g. `CLI` or `Sonnet` — the same string the table shows.
     let label: String
 
-    /// This band's ink — one shade of ``PopoverMetrics/brandColor``, taken from
-    /// ``PopoverMetrics/chartBandColors`` by stack position. Shades of the one
-    /// brand hue rather than a hue per band: colour anywhere else in this
-    /// popover means Claude, and a five-colour chart would make the section
-    /// shout louder than the quota bars above it.
+    /// This band's ink — one shade of ``PopoverMetrics/brandColor``, from
+    /// ``PopoverMetrics/chartBandColor(_:of:)`` by position in the band list.
+    /// Shades of the one brand hue rather than a hue per band: colour anywhere
+    /// else in this popover means Claude, and a five-colour chart would make
+    /// the section shout louder than the quota bars above it.
     let color: Color
 
     /// One point per day of ``DailyUsageChart/days``, same order.
     let points: [DailyUsagePoint]
 
-    /// The band ink for stack position `index`, strongest first. Clamped rather
-    /// than wrapped: a sixth band repeating the first one's colour would tie a
-    /// table dot to the wrong band, where repeating the palest one only makes
-    /// two faint bands hard to tell apart.
-    static func bandColor(_ index: Int) -> Color {
-        PopoverMetrics.chartBandColors[Swift.min(index, PopoverMetrics.chartBandColors.count - 1)]
+    /// The band ink for row `index` of a `count`-band block, strongest first.
+    ///
+    /// `count` is part of the question, not a detail: the ramp spreads whatever
+    /// it is handed across its whole bounded range, so three bands sit much
+    /// further apart than three of five fixed steps did — see
+    /// ``PopoverMetrics/chartBandColor(_:of:)``.
+    static func bandColor(_ index: Int, of count: Int) -> Color {
+        PopoverMetrics.chartBandColor(index, of: count)
     }
 
     /// Label for the band carrying whatever this version doesn't recognise —
@@ -112,12 +114,13 @@ struct DailyUsageSeries: Identifiable, Hashable {
     /// remainder that would otherwise make the stack fall short of the total.
     static let otherBandLabel = "Other"
 
-    /// The sources the "By source" bands stand for, in stack order: display
+    /// The sources the "By source" bands stand for, in table order: display
     /// order, then the unrecognised bucket — `nil` — when the window has one.
     ///
-    /// "Other" goes last, i.e. on top of the stack: the named sources are what
-    /// a reader is looking for, and a bucket that can appear and vanish between
-    /// two polls must not shuffle the bands under it when it does.
+    /// "Other" goes last, i.e. the last table row and the *bottom* of the
+    /// stack: the named sources are what a reader is looking for, and a bucket
+    /// that can appear and vanish between two polls must not shuffle the bands
+    /// beside it when it does.
     ///
     /// Published separately from ``sources(from:)`` because a caller may need
     /// the entrypoint *and* the band, and zipping the band list against
@@ -128,7 +131,7 @@ struct DailyUsageSeries: Identifiable, Hashable {
         return history.bySource[Entrypoint?.none] == nil ? known : known + [nil]
     }
 
-    /// Ordered bands for the "By source" chart: ``sourceKeys(in:)``, strongest
+    /// Ordered bands for the "By source" block: ``sourceKeys(in:)``, strongest
     /// shade first, including sources that did nothing in the window.
     static func sources(from history: DailyUsageHistory) -> [DailyUsageSeries] {
         bands(keys: sourceKeys(in: history)) { key in
@@ -136,7 +139,7 @@ struct DailyUsageSeries: Identifiable, Hashable {
         }
     }
 
-    /// The model families the "By model" bands stand for, in stack order.
+    /// The model families the "By model" bands stand for, in table order.
     ///
     /// Filtered to the families the window actually holds, unlike
     /// ``sourceKeys(in:)`` which keeps a silent source. The asymmetry follows
@@ -152,24 +155,30 @@ struct DailyUsageSeries: Identifiable, Hashable {
         return history.byModelFamily[ModelFamily?.none] == nil ? known : known + [nil]
     }
 
-    /// Ordered bands for the "By model" chart — ``modelKeys(in:)`` against the
-    /// same ramp, taken in the same stack order, so a dot means the same thing
-    /// in both tables.
+    /// Ordered bands for the "By model" block — ``modelKeys(in:)`` against the
+    /// same ramp, taken in the same order, so a dot means the same thing in
+    /// both tables.
     static func models(from history: DailyUsageHistory) -> [DailyUsageSeries] {
         bands(keys: modelKeys(in: history)) { key in
             (key?.displayName ?? otherBandLabel, history.byModelFamily[key] ?? [])
         }
     }
 
-    /// Shared band construction: the ramp is indexed by stack position, which
-    /// is the one rule both splits have to follow identically.
+    /// Shared band construction: the ramp is indexed by row position *and*
+    /// handed the row count, which is the one rule both splits have to follow
+    /// identically — a three-band block and a five-band block do not draw the
+    /// same three shades.
     private static func bands<Key>(
         keys: [Key],
         resolve: (Key) -> (label: String, points: [DailyUsagePoint])
     ) -> [DailyUsageSeries] {
         keys.enumerated().map { index, key in
             let band = resolve(key)
-            return DailyUsageSeries(label: band.label, color: bandColor(index), points: band.points)
+            return DailyUsageSeries(
+                label: band.label,
+                color: bandColor(index, of: keys.count),
+                points: band.points
+            )
         }
     }
 }
@@ -186,7 +195,8 @@ struct DailyUsageChart: View {
     /// Local midnights, oldest first — the x positions every series shares.
     let days: [Date]
 
-    /// Stack order, bottom band first.
+    /// The bands in *table* order — first row first, which is the **top** of
+    /// the stack. See ``stackOrder``.
     let series: [DailyUsageSeries]
 
     /// Which field of a day this chart plots, and how its axis spells it.
@@ -214,6 +224,24 @@ struct DailyUsageChart: View {
     /// out, or when a reload moved the window under it.
     var highlightedIndex: Int? { PopoverChartHover.index(of: hoveredDay, in: days) }
 
+    /// The bands bottom-first, which is the order Swift Charts stacks them in
+    /// and the reverse of ``series``.
+    ///
+    /// The flip is deliberate and it is the *stack* that moved, not the table.
+    /// A table reads downwards from its first row, a stack reads downwards from
+    /// its top band, and with the first band at the bottom those two sequences
+    /// were mirror images: row one pointed at the band furthest from it. Now
+    /// row one is the top band, so the eye crosses the plot and the rows in the
+    /// same direction, and "Other" — last in display order because it can
+    /// appear between two polls — lands at the bottom of the stack where it
+    /// shuffles nothing above it.
+    ///
+    /// Reversing here rather than in `Entrypoint.displayOrder` or
+    /// ``DailyUsageSeries/sourceKeys(in:)``: display order is what the tables,
+    /// the ramp positions and VoiceOver all read, and only the chart's own
+    /// stacking is upside down relative to it.
+    var stackOrder: [DailyUsageSeries] { series.reversed() }
+
     /// Flattened for `Chart`, which wants one record per mark.
     private struct Record: Identifiable {
         let id: String
@@ -222,11 +250,51 @@ struct DailyUsageChart: View {
         let value: Double
     }
 
+    /// One record per band per day, bottom band first — Swift Charts stacks an
+    /// `AreaMark` in the order its series appear, so this order *is* the stack.
     private var records: [Record] {
-        series.flatMap { band in
+        stackOrder.flatMap { band in
             zip(days, band.points).enumerated().map { index, pair in
                 Record(id: "\(band.label)-\(index)", series: band.label, day: pair.0, value: metric.value(of: pair.1))
             }
+        }
+    }
+
+    /// One band's cumulative top edge, as a polyline the band strokes over its
+    /// own boundary.
+    private struct Seam: Identifiable {
+        let id: String
+        let color: Color
+        let points: [Point]
+
+        struct Point: Identifiable {
+            var id: Int { index }
+            let index: Int
+            let day: Date
+            let value: Double
+        }
+    }
+
+    /// The edge every band shares with the one above it, one polyline each.
+    ///
+    /// Fills alone leave a seam: each band is its own anti-aliased path, so at
+    /// a shared boundary both paths cover the edge pixel about half and the
+    /// card behind shows through as a dark, ragged hairline — visible on the
+    /// dark popover, where the card is much darker than any band. Stroking each
+    /// band's own top edge in its own ink covers it. Same
+    /// ``PopoverMetrics/chartBandOpacity`` and same `.monotone` interpolation as
+    /// the fill, or the stroke would sit beside the curve rather than on it.
+    ///
+    /// Cumulative, for the same reason ``stackTops(at:)`` is: the boundary a
+    /// band is drawn at is the sum of every band under it.
+    private var seams: [Seam] {
+        var running = [Double](repeating: 0, count: days.count)
+        return stackOrder.map { band in
+            let points = zip(days, band.points).enumerated().map { index, pair -> Seam.Point in
+                running[index] += metric.value(of: pair.1)
+                return Seam.Point(index: index, day: pair.0, value: running[index])
+            }
+            return Seam(id: band.label, color: band.color, points: points)
         }
     }
 
@@ -238,11 +306,14 @@ struct DailyUsageChart: View {
         let value: Double
     }
 
-    /// Where each band ends on the hovered day, bottom band first.
+    /// Where each band ends on the hovered day, bottom band first — i.e. in
+    /// ``stackOrder``, not in table order.
     ///
     /// Cumulative sums, because the areas stack: a dot at a band's own value
     /// would float somewhere inside the stack rather than sitting on the edge
-    /// the chart draws.
+    /// the chart draws. The running total has to climb the stack in the order
+    /// the stack is *drawn*, or every dot but the topmost lands on a boundary
+    /// that isn't there.
     ///
     /// A band that did nothing that day is skipped. Its edge is its
     /// neighbour's, so its dot would land exactly on top of another one and
@@ -250,7 +321,7 @@ struct DailyUsageChart: View {
     /// shows rather than drops, so this is not hypothetical.
     func stackTops(at index: Int) -> [StackTop] {
         var running = 0.0
-        return series.compactMap { band in
+        return stackOrder.compactMap { band in
             guard index < band.points.count else { return nil }
             let value = metric.value(of: band.points[index])
             running += value
@@ -284,6 +355,28 @@ struct DailyUsageChart: View {
 
     var body: some View {
         Chart {
+            // The horizontal lines, drawn as marks rather than as
+            // `AxisGridLine`s: a gridline spans the whole plot, including the
+            // gutter the x scale keeps at each end, so it overhangs the data it
+            // is there to be read against. These end exactly where the first
+            // and last day do.
+            //
+            // *Behind* the bands, which is why the bands are painted at
+            // ``PopoverMetrics/chartBandOpacity`` — a gridline the stack cuts
+            // off can only be followed in the empty region above the plot's
+            // tallest day, and a reader taking a value off a spike is reading
+            // exactly where the stack is. At 0.85 the line stays visible
+            // through a band without competing with it.
+            ForEach(yValues, id: \.self) { value in
+                RuleMark(
+                    xStart: .value("Day", days.first ?? Date()),
+                    xEnd: .value("Day", days.last ?? Date()),
+                    y: .value(metric.markLabel, value)
+                )
+                .lineStyle(StrokeStyle(lineWidth: 0.5))
+                .foregroundStyle(.secondary)
+            }
+
             ForEach(records) { record in
                 // A plain date, deliberately not `unit: .day`: binning draws
                 // the mark at the centre of its bin, half a day right of the
@@ -301,25 +394,27 @@ struct DailyUsageChart: View {
                 // stack a day Anthropic paid you. Monotone keeps every segment
                 // within its own two points.
                 .interpolationMethod(.monotone)
+                .opacity(PopoverMetrics.chartBandOpacity)
             }
 
-                // The horizontal lines, drawn as marks rather than as
-                // `AxisGridLine`s: a gridline spans the whole plot, including
-                // the gutter the x scale keeps at each end, so it overhangs the
-                // data it is there to be read against. These end exactly where
-                // the first and last day do.
-                //
-                // After the data and before the highlight: the same order the
-                // axis drew them in — over the bands, under the hovered day.
-                ForEach(yValues, id: \.self) { value in
-                    RuleMark(
-                        xStart: .value("Day", days.first ?? Date()),
-                        xEnd: .value("Day", days.last ?? Date()),
-                        y: .value(metric.markLabel, value)
+            // The seam strokes, over the fills and under the highlight — see
+            // ``seams``. An explicit `series:` per band, or Swift Charts would
+            // join every band's edge into one polyline; an explicit
+            // `foregroundStyle`, so they stay out of the style scale's domain
+            // and out of the legend.
+            ForEach(seams) { seam in
+                ForEach(seam.points) { point in
+                    LineMark(
+                        x: .value("Day", point.day),
+                        y: .value(metric.markLabel, point.value),
+                        series: .value("Seam", seam.id)
                     )
-                    .lineStyle(StrokeStyle(lineWidth: 0.5))
-                    .foregroundStyle(.secondary)
+                    .interpolationMethod(.monotone)
+                    .lineStyle(StrokeStyle(lineWidth: PopoverMetrics.chartBandSeamWidth))
+                    .foregroundStyle(seam.color)
+                    .opacity(PopoverMetrics.chartBandOpacity)
                 }
+            }
 
             if let index = highlightedIndex {
                 // Every mark here carries a value the chart already plots — the
@@ -347,9 +442,13 @@ struct DailyUsageChart: View {
                 }
             }
         }
+        // Domain in ``stackOrder`` too, not just the records: Swift Charts
+        // takes the stacking order from the style scale's domain as well as
+        // from the order the marks arrive in, and the two disagreeing is a
+        // stack whose bands don't match their own colours.
         .chartForegroundStyleScale(
-            domain: series.map(\.label),
-            range: series.map(\.color)
+            domain: stackOrder.map(\.label),
+            range: stackOrder.map(\.color)
         )
         .chartLegend(.hidden)
         // The axis draws the values this chart measured its label column from,

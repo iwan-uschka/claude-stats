@@ -25,9 +25,18 @@
   total instead of quietly falling short of it; the "By model" chart does the
   same for unrecognised model IDs.
 - The app now has a single colour, Claude's terracotta: the warning, error and
-  sample-data lines, the account markers, the Claude mark in the popover header
-  and the menu bar's dev-build dot no longer use orange or red, and the charts'
-  grey bands are five shades of that one colour.
+  sample-data lines, the quota bars, the Claude mark in the popover header and
+  the menu bar's dev-build dot no longer use orange, red or grey, and the
+  charts' bands are shades of that one colour. The account state markers stay
+  monochrome.
+- Chart bands are shaded by their position in the stack, so a three-band chart
+  spreads across the whole ramp instead of using three near-identical steps of
+  five.
+- Each chart band now strokes its own top edge, removing the dark hairline that
+  showed between two stacked bands; the y-axis lines moved behind the bands,
+  which are drawn at 85% so the lines read through them.
+- A chart's first table row is now its top band rather than its bottom one, so
+  the rows and the stack read in the same direction.
 - The popover's "This Mac" table is now the "By source" block: 30 days of daily
   token usage stacked per source, with dated x-axis and labelled y-axis.
 - "Est. cost today" is gone; the estimate caveat now sits over the tables' cost

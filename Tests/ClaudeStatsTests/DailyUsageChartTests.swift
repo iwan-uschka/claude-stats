@@ -80,8 +80,8 @@ final class DailyUsageChartTests: XCTestCase {
     func testSourceSeriesFollowEntrypointDisplayOrder() throws {
         let series = DailyUsageSeries.sources(from: try makeHistory())
 
-        // Stack order is table order, bottom band first, so a reader moving
-        // from the plot to the rows meets the bands in the same sequence.
+        // Display order is table order, and the chart stacks it upside down
+        // so the first row is the *top* band — see `stackOrder`.
         XCTAssertEqual(series.map(\.label), Entrypoint.displayOrder.map(\.displayName))
     }
 
@@ -93,16 +93,16 @@ final class DailyUsageChartTests: XCTestCase {
         let history = try makeHistory(unrecognisedSourceTokens: 500)
         let series = DailyUsageSeries.sources(from: history)
 
-        // Last, i.e. the top of the stack: the named sources are what a reader
-        // is looking for, and a bucket that can appear between two polls must
-        // not shuffle the bands under it when it does.
+        // Last row, i.e. the bottom of the stack: the named sources are what a
+        // reader is looking for, and a bucket that can appear between two polls
+        // must not shuffle the bands beside it when it does.
         XCTAssertEqual(
             series.map(\.label),
             Entrypoint.displayOrder.map(\.displayName) + [DailyUsageSeries.otherBandLabel]
         )
         XCTAssertEqual(DailyUsageSeries.sourceKeys(in: history), Entrypoint.displayOrder.map { $0 } + [nil])
         XCTAssertEqual(series.last?.points.map(\.totalTokens).reduce(0, +), 500)
-        XCTAssertEqual(series.last?.color, DailyUsageSeries.bandColor(3))
+        XCTAssertEqual(series.last?.color, DailyUsageSeries.bandColor(3, of: 4))
     }
 
     /// Keys and bands are published separately, and anything pairing them zips
@@ -132,14 +132,35 @@ final class DailyUsageChartTests: XCTestCase {
         XCTAssertTrue(vscode.points.allSatisfy { $0.totalTokens == 0 })
     }
 
-    func testBandsTakeTheRampsShadesInStackOrder() throws {
+    func testBandsTakeTheRampsShadesInRowOrder() throws {
         let colors = DailyUsageSeries.sources(from: try makeHistory()).map(\.color)
 
-        // Strongest shade at the bottom of the stack, one step per band up it.
-        // Which shades those are, and that they can be told apart, is measured
-        // in `PopoverColorTests`.
+        // Strongest shade on the first row, which is the top of the stack, one
+        // step per band down the table. Which shades those are, that the ramp
+        // spreads them over its whole range, and that they can be told apart,
+        // is measured in `PopoverColorTests`.
         XCTAssertEqual(Set(colors).count, colors.count, "two bands sharing a shade are unreadable")
-        XCTAssertEqual(colors, colors.indices.map(DailyUsageSeries.bandColor))
+        XCTAssertEqual(colors, colors.indices.map { DailyUsageSeries.bandColor($0, of: colors.count) })
+    }
+
+    func testTheStackIsTheTableUpsideDownSoTheFirstRowIsTheTopBand() throws {
+        // The flip this exists for. The table reads downwards from its first
+        // row and a stack reads downwards from its top band; with the first
+        // band at the bottom those two sequences were mirror images of each
+        // other, and row one pointed at the band furthest from it. Now they run
+        // the same way — and "Other", last in display order, is the bottom band
+        // rather than the top one.
+        let history = try makeHistory(unrecognisedSourceTokens: 500)
+        let series = DailyUsageSeries.sources(from: history)
+        let chart = DailyUsageChart(days: history.days, series: series)
+
+        XCTAssertEqual(chart.stackOrder.map(\.label), series.map(\.label).reversed())
+        XCTAssertEqual(chart.series.first?.label, Entrypoint.cli.displayName)
+        XCTAssertEqual(chart.stackOrder.first?.label, DailyUsageSeries.otherBandLabel)
+        XCTAssertEqual(chart.stackOrder.last?.label, Entrypoint.cli.displayName)
+        // The ramp still follows the *rows*: band 0 is the brand colour and it
+        // is the top of the stack now, not the bottom.
+        XCTAssertEqual(chart.stackOrder.last?.color, PopoverMetrics.chartBandColor(0, of: series.count))
     }
 
     func testEmptyHistoryStillYieldsOneBandPerSourceWithNoPoints() {
@@ -171,9 +192,9 @@ final class DailyUsageChartTests: XCTestCase {
         let history = try makeHistory(unrecognisedModelTokens: 400)
         let series = DailyUsageSeries.models(from: history)
 
-        // Last, i.e. the top of the stack — the same rule the source split
-        // follows, for the same reason: a bucket that can appear between two
-        // polls must not shuffle the named bands under it.
+        // Last row, i.e. the bottom of the stack — the same rule the source
+        // split follows, for the same reason: a bucket that can appear between
+        // two polls must not shuffle the named bands beside it.
         XCTAssertEqual(
             series.map(\.label),
             [ModelFamily.sonnet.displayName, ModelFamily.opus.displayName, DailyUsageSeries.otherBandLabel]
@@ -183,12 +204,13 @@ final class DailyUsageChartTests: XCTestCase {
     }
 
     func testBothSplitsIndexTheRampTheSameWay() throws {
-        // One rule for both tables: the ramp is indexed by stack position, so a
-        // dot two rows down means "two bands up from the bottom" in either
-        // block. Anything else would make the same shade mean two things.
+        // One rule for both tables: the ramp is indexed by row position and
+        // handed the row count, so a dot two rows down means "two bands down
+        // from the top" in either block. Anything else would make the same
+        // shade mean two things.
         let history = try makeHistory(unrecognisedSourceTokens: 500, unrecognisedModelTokens: 400)
         for series in [DailyUsageSeries.sources(from: history), DailyUsageSeries.models(from: history)] {
-            XCTAssertEqual(series.map(\.color), series.indices.map(DailyUsageSeries.bandColor))
+            XCTAssertEqual(series.map(\.color), series.indices.map { DailyUsageSeries.bandColor($0, of: series.count) })
         }
     }
 
@@ -236,7 +258,9 @@ final class DailyUsageChartTests: XCTestCase {
 
         // Cumulative, like the token stack: a dot at a band's own spend would
         // float inside the stack rather than sit on the edge the chart draws.
-        XCTAssertEqual(chart.stackTops(at: index).map(\.value), [bands[0], bands[0] + bands[1]])
+        // Bottom band first, and the bottom band is the *last* row — Opus here,
+        // with Sonnet's edge sitting on top of it.
+        XCTAssertEqual(chart.stackTops(at: index).map(\.value), [bands[1], bands[1] + bands[0]])
     }
 
     func testEachMetricLabelsItsAxisInItsOwnUnit() {
@@ -247,7 +271,7 @@ final class DailyUsageChartTests: XCTestCase {
             days: days,
             series: [DailyUsageSeries(
                 label: "Sonnet",
-                color: DailyUsageSeries.bandColor(0),
+                color: DailyUsageSeries.bandColor(0, of: 1),
                 points: days.map { DailyUsagePoint(day: $0, estimatedCostUSD: 2.5) }
             )],
             metric: .cost
@@ -256,7 +280,7 @@ final class DailyUsageChartTests: XCTestCase {
             days: days,
             series: [DailyUsageSeries(
                 label: "CLI",
-                color: DailyUsageSeries.bandColor(0),
+                color: DailyUsageSeries.bandColor(0, of: 1),
                 points: days.map { DailyUsagePoint(day: $0, usage: TokenUsage(inputTokens: 2_000_000_000)) }
             )]
         )
@@ -329,11 +353,12 @@ final class DailyUsageChartTests: XCTestCase {
         let chart = DailyUsageChart(days: history.days, series: series, hoveredDay: history.days.last)
         let index = try XCTUnwrap(chart.highlightedIndex)
 
-        // The areas stack, so the dots have to climb with them — CLI's 200 and
-        // the SDK's 700 make edges at 200 and 900, not two dots at their own
-        // heights. VS Code did nothing that day and gets no dot.
-        XCTAssertEqual(chart.stackTops(at: index).map(\.value), [200, 900])
-        XCTAssertEqual(chart.stackTops(at: index).map(\.id), ["CLI", Entrypoint.sdkAgent.displayName])
+        // The areas stack, so the dots have to climb with them — and they climb
+        // in *stack* order, which is the table read upwards: the SDK's 700 sits
+        // at the bottom and CLI's 200 closes the stack at 900, not two dots at
+        // their own heights. VS Code did nothing that day and gets no dot.
+        XCTAssertEqual(chart.stackTops(at: index).map(\.value), [700, 900])
+        XCTAssertEqual(chart.stackTops(at: index).map(\.id), [Entrypoint.sdkAgent.displayName, "CLI"])
     }
 
     func testASilentSourceGetsNoDotOfItsOwn() throws {

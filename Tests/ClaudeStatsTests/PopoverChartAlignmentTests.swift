@@ -5,11 +5,8 @@ import XCTest
 @testable import ClaudeStats
 @testable import ClaudeStatsCore
 
-/// Pixels per point in every render here. File scope rather than a member, so
-/// the measuring code stays off the main actor with the pixels it reads.
-private let renderScale: CGFloat = 4
-
-/// Measures where a popover chart actually puts its ink.
+/// Measures where a popover chart actually puts its ink, and whether it leaves
+/// any gaps in it.
 ///
 /// Pixels, because nothing else can see this. Where Swift Charts places a mark
 /// along the x scale is not reachable from the view — `ChartProxy` answers for
@@ -21,15 +18,14 @@ private let renderScale: CGFloat = 4
 /// close to 5 pt — right of the tick naming the day it claimed to mark, and
 /// every unit test passed.
 ///
-/// Rendered through an `NSHostingView` in an offscreen window, the draw path
-/// ``ReadmeAssetRenderTests`` uses and the one the shipping popover takes. 4×,
-/// so a tolerance under a point is still whole pixels.
+/// The seam between two stacked bands is the same kind of thing: invisible to
+/// every measurement here except a pixel one, and the first thing the eye finds
+/// in the rendered card.
+///
+/// Rendered through ``PopoverPixels``, the draw path ``ReadmeAssetRenderTests``
+/// uses and the one the shipping popover takes.
 @MainActor
 final class PopoverChartAlignmentTests: XCTestCase {
-    /// The width a chart gets in the popover. Every offset measured here is a
-    /// fraction of the plot, so it has to be measured at the shipping size.
-    private static let contentWidth = PopoverMetrics.popoverWidth - 2 * PopoverMetrics.contentPadding
-
     /// A day is about 39 px wide at this scale and the offset this guards was
     /// 19 px, so three leaves room for anti-aliasing and nothing else.
     private static let tolerance: CGFloat = 3
@@ -56,7 +52,7 @@ final class PopoverChartAlignmentTests: XCTestCase {
     /// One band of `points`, which is all any of these measurements needs —
     /// the offsets they guard are properties of the scale, not of the stack.
     private func band(_ points: [DailyUsagePoint]) -> [DailyUsageSeries] {
-        [DailyUsageSeries(label: "CLI", color: DailyUsageSeries.bandColor(0), points: points)]
+        [DailyUsageSeries(label: "CLI", color: DailyUsageSeries.bandColor(0, of: 1), points: points)]
     }
 
     func testTheModelChartsHoverRuleLandsOnTheHoveredDaysAxisTick() throws {
@@ -136,8 +132,8 @@ final class PopoverChartAlignmentTests: XCTestCase {
 
         let charts = stackedCharts(days: days, yLabelWidth: shared)
         XCTAssertEqual(
-            try render(charts.cost).dataLeadingEdge(),
-            try render(charts.source).dataLeadingEdge(),
+            try PopoverPixels.render(charts.cost).dataLeadingEdge(),
+            try PopoverPixels.render(charts.source).dataLeadingEdge(),
             accuracy: Self.tolerance
         )
     }
@@ -151,9 +147,9 @@ final class PopoverChartAlignmentTests: XCTestCase {
         let shared = max(natural.cost.naturalYLabelWidth, natural.source.naturalYLabelWidth)
         let wider = natural.cost.naturalYLabelWidth > natural.source.naturalYLabelWidth
 
-        let alone = wider ? try render(natural.cost) : try render(natural.source)
+        let alone = wider ? try PopoverPixels.render(natural.cost) : try PopoverPixels.render(natural.source)
         let withColumn = stackedCharts(days: days, yLabelWidth: shared)
-        let shared_ = wider ? try render(withColumn.cost) : try render(withColumn.source)
+        let shared_ = wider ? try PopoverPixels.render(withColumn.cost) : try PopoverPixels.render(withColumn.source)
 
         XCTAssertEqual(try alone.dataLeadingEdge(), try shared_.dataLeadingEdge(), accuracy: Self.tolerance)
     }
@@ -168,11 +164,11 @@ final class PopoverChartAlignmentTests: XCTestCase {
         // rule the highlight draws is exactly where the day is.
         let days = self.days(30)
         let points = days.enumerated().map { DailyUsagePoint(day: $1, estimatedCostUSD: 3 + Double($0 % 5)) }
-        let resting = try render(costChart(days: days, points: points))
+        let resting = try PopoverPixels.render(costChart(days: days, points: points))
         let lines = try resting.horizontalLineExtent()
 
         for (day, end) in [(days.first, lines.first), (days.last, lines.last)] {
-            let hovered = try render(costChart(days: days, points: points, hoveredDay: day))
+            let hovered = try PopoverPixels.render(costChart(days: days, points: points, hoveredDay: day))
             let dayX = try XCTUnwrap(hovered.tallestDifference(from: resting), "hover drew nothing")
             XCTAssertEqual(dayX, end, accuracy: Self.tolerance, "a horizontal line overhangs the days it spans")
         }
@@ -203,19 +199,110 @@ final class PopoverChartAlignmentTests: XCTestCase {
     ) throws {
         let days = self.days(30)
         let points = days.enumerated().map { DailyUsagePoint(day: $1, estimatedCostUSD: 3 + Double($0 % 5)) }
-        let resting = try render(costChart(days: days, points: points))
-        let hovered = try render(costChart(days: days, points: points, hoveredDay: pick(days)))
+        let resting = try PopoverPixels.render(costChart(days: days, points: points))
+        let hovered = try PopoverPixels.render(costChart(days: days, points: points, hoveredDay: pick(days)))
 
         let rule = try XCTUnwrap(hovered.tallestDifference(from: resting), "hover drew nothing", file: file, line: line)
         let extent = try XCTUnwrap(hovered.differenceExtent(from: resting), "hover drew nothing", file: file, line: line)
 
         // `chartHoverPointSize` is the dot's *area*, and it is centred on the
         // rule. Two pixels of slack for the anti-aliased rim.
-        let radius = (PopoverMetrics.chartHoverPointSize / .pi).squareRoot() * renderScale - 2
+        let radius = (PopoverMetrics.chartHoverPointSize / .pi).squareRoot() * popoverRenderScale - 2
         XCTAssertGreaterThanOrEqual(rule - extent.first, radius, "the dot is clipped on its leading side", file: file, line: line)
         XCTAssertGreaterThanOrEqual(extent.last - rule, radius, "the dot is clipped on its trailing side", file: file, line: line)
     }
 
+    // MARK: - Seams between bands
+
+    /// The card the dark popover is drawn on — the same fill
+    /// ``ReadmeAssetRenderTests`` paints behind the content, and the one
+    /// background a seam can show against: it is far darker than any band.
+    private static let darkCardWhite = 0.07
+    private static let darkCard = Color(white: darkCardWhite)
+
+    /// How much darker than the palest band a pixel may be before it counts as
+    /// the card showing through. Measured on this fixture: with the seams
+    /// stroked the darkest pixel *inside* a stack sits just above the palest
+    /// band (0.2954 against a floor of 0.2949); with the stroke removed it
+    /// drops to 0.2745, a fifth of the card's own 0.07 bleeding through.
+    private static let seamTolerance = 0.01
+
+    func testNoCardShowsThroughTheSeamsBetweenStackedBands() throws {
+        // Fills alone leave a hairline. Two stacked `AreaMark`s are two
+        // anti-aliased paths: where they share a boundary the lower one covers
+        // the edge pixel by some fraction a and the upper one by the rest, and
+        // compositing them in that order leaves a(1-a) of the card visible — a
+        // quarter of it at a half-covered pixel. On the dark popover that is a
+        // dark, ragged line along every band edge, and it is the first thing
+        // the eye finds in the rendered card.
+        //
+        // Every other measurement in this file is blind to it: the hover rule,
+        // the dots, the gridlines' extent and the plot's leading edge are all
+        // exactly where they should be, and a seam moves none of them.
+        //
+        // The whole popover, not a chart on its own: an isolated chart at these
+        // sizes composites its bands cleanly and shows no seam at all, so a
+        // fixture built out of one would pin nothing. Measured on this one,
+        // removing the seam strokes puts 341 pixels below the palest band.
+        let now = Date(timeIntervalSince1970: 1_756_600_000)
+        let popover = PopoverView(model: .previewShowcase(now: now), clock: PopoverClock(now: now))
+            .background(Self.darkCard)
+        let bitmap = try PopoverPixels.render(
+            popover,
+            width: PopoverMetrics.popoverWidth,
+            appearance: .darkAqua,
+            background: Self.darkCard
+        )
+
+        // The palest band, which is the darkest ink any stack paints: both
+        // charts' ramps end there whatever their band count, so one figure is
+        // the floor for every boundary in the card.
+        let floor = try paintedLuminance(of: PopoverMetrics.chartBandNSColor(1, of: 2))
+        let bandRows = bitmap.bandRows()
+        XCTAssertGreaterThan(bandRows.count, 20, "found no chart bands to measure — the fixture did not render")
+
+        var breaches: [(x: Int, y: Int, luminance: Double)] = []
+        for y in bandRows where bandRows.contains(y - 3) && bandRows.contains(y + 3) {
+            for x in 0..<bitmap.width {
+                // Only pixels *inside* a band: both neighbours have to be band
+                // ink at full strength, which excludes the stack's own outline
+                // against the card and everything the popover draws in a colour
+                // of its own.
+                guard bitmap.isBandInk(x, y - 3, floor: floor - Self.seamTolerance),
+                      bitmap.isBandInk(x, y + 3, floor: floor - Self.seamTolerance) else { continue }
+                let pixel = bitmap.luminance(x, y)
+                if pixel < floor - Self.seamTolerance {
+                    breaches.append((x, y, pixel))
+                }
+            }
+        }
+
+        let darkest = breaches.min { $0.luminance < $1.luminance }
+        XCTAssertEqual(
+            breaches.count,
+            0,
+            "the card shows through at \(breaches.count) pixels between two bands"
+                + "; darkest \(darkest.map { "\($0.luminance) at \($0.x),\($0.y)" } ?? "—")"
+                + " against a floor of \(floor)"
+        )
+    }
+
+    /// What a band actually paints on the dark card: its own shade at
+    /// ``PopoverMetrics/chartBandOpacity``, as this file's mean-of-channels
+    /// luminance.
+    private func paintedLuminance(of band: NSColor) throws -> Double {
+        let appearance = try XCTUnwrap(NSAppearance(named: .darkAqua))
+        var resolved: NSColor?
+        appearance.performAsCurrentDrawingAppearance {
+            resolved = band.usingColorSpace(.sRGB)
+        }
+        let shade = try XCTUnwrap(resolved)
+        let alpha = PopoverMetrics.chartBandOpacity
+        return [shade.redComponent, shade.greenComponent, shade.blueComponent]
+            .reduce(0.0) { $0 + alpha * $1 + (1 - alpha) * Self.darkCardWhite } / 3
+    }
+
+    // MARK: - Measuring a rendered chart
     // MARK: - Measuring a rendered chart
 
     /// Renders the same chart hovered and at rest, and asserts the stroke hover
@@ -231,9 +318,9 @@ final class PopoverChartAlignmentTests: XCTestCase {
         file: StaticString = #filePath,
         line: UInt = #line
     ) throws {
-        let restingBitmap = try render(resting)
+        let restingBitmap = try PopoverPixels.render(resting)
         let rule = try XCTUnwrap(
-            try render(hovered).tallestDifference(from: restingBitmap),
+            try PopoverPixels.render(hovered).tallestDifference(from: restingBitmap),
             "hover drew nothing the resting chart didn't",
             file: file,
             line: line
@@ -253,170 +340,5 @@ final class PopoverChartAlignmentTests: XCTestCase {
             file: file,
             line: line
         )
-    }
-
-    /// Greyscale pixels of a chart drawn on white, and the handful of
-    /// measurements this file takes off them.
-    private struct Bitmap {
-        let width: Int
-        let height: Int
-        /// 0 is black, 1 is white, row-major.
-        let luminance: [Double]
-
-        /// Faint on purpose: a gridline is drawn at 0.12 opacity, so a
-        /// threshold anywhere near mid-grey would miss the plot's own edges.
-        private static let inkThreshold = 0.97
-
-        func isInk(_ x: Int, _ y: Int) -> Bool { luminance[y * width + x] < Self.inkThreshold }
-
-        /// The x of the tallest column of pixels that differ from `other` — the
-        /// hover rule, which spans the plot's whole height while the dots on it
-        /// are a few rows each.
-        ///
-        /// The centre of the run rather than its darkest column: a 0.5 pt
-        /// stroke is 2 px here and anti-aliasing spreads it over three.
-        func tallestDifference(from other: Bitmap) -> CGFloat? {
-            guard other.width == width, other.height == height else { return nil }
-            let changed = (0..<width).map { x in
-                (0..<height).reduce(0) { $0 + (abs(luminance[$1 * width + x] - other.luminance[$1 * width + x]) > 0.01 ? 1 : 0) }
-            }
-            let floor = height / 4
-            guard let peak = changed.indices.max(by: { changed[$0] < changed[$1] }), changed[peak] > floor else { return nil }
-            var left = peak, right = peak
-            while left > 0, changed[left - 1] > floor { left -= 1 }
-            while right < width - 1, changed[right + 1] > floor { right += 1 }
-            return CGFloat(left + right) / 2
-        }
-
-        /// The leftmost and rightmost columns that differ from `other` — the
-        /// full width of what hover drew, rule and dots together.
-        func differenceExtent(from other: Bitmap) -> (first: CGFloat, last: CGFloat)? {
-            guard other.width == width, other.height == height else { return nil }
-            let changed = (0..<width).filter { x in
-                (0..<height).contains { abs(luminance[$0 * width + x] - other.luminance[$0 * width + x]) > 0.01 }
-            }
-            guard let first = changed.first, let last = changed.last else { return nil }
-            return (CGFloat(first), CGFloat(last))
-        }
-
-        /// The x each x-axis tick is centred on, left to right.
-        ///
-        /// Sampled from a row halfway down the ticks' own 3 pt — below the plot,
-        /// above the dated labels — with everything left of the plot dropped,
-        /// since the leading y-axis labels reach into those rows too.
-        func axisTickColumns() throws -> [CGFloat] {
-            let plot = try plotEdges()
-            let row = plot.bottom + Int(PopoverMetrics.chartTickLength * renderScale) / 2
-            let columns = inkColumns(inRow: row).filter { $0 >= plot.left }
-            return runs(in: columns).map { CGFloat($0.first! + $0.last!) / 2 }
-        }
-
-        /// Where the plotted days start — the leading end of the horizontal
-        /// lines, which run from the first day to the last.
-        func dataLeadingEdge() throws -> CGFloat { CGFloat(try plotEdges().left) }
-
-        /// Both ends of the chart's horizontal lines.
-        func horizontalLineExtent() throws -> (first: CGFloat, last: CGFloat) {
-            let edges = try plotEdges()
-            return (CGFloat(edges.left), CGFloat(edges.right))
-        }
-
-        /// The plot's own edges and its baseline.
-        ///
-        /// All three read off the widest rows of ink in the image, which are
-        /// the chart's horizontal lines: they run the length of the data and
-        /// nothing else in the chart is that wide.
-        private func plotEdges() throws -> (left: Int, right: Int, bottom: Int) {
-            var widest: [Int] = []
-            var bottom = 0
-            for y in 0..<height {
-                let columns = inkColumns(inRow: y)
-                guard columns.count > width / 2 else { continue }
-                if columns.count >= widest.count { widest = columns }
-                bottom = max(bottom, y)
-            }
-            let gridline = try XCTUnwrap(runs(in: widest).max { $0.count < $1.count }, "no gridline to measure the plot by")
-            return (gridline.first!, gridline.last!, bottom)
-        }
-
-        private func columnInk(_ x: Int) -> Int {
-            (0..<height).reduce(0) { $0 + (isInk(x, $1) ? 1 : 0) }
-        }
-
-        private func inkColumns(inRow row: Int) -> [Int] {
-            (0..<width).filter { isInk($0, row) }
-        }
-
-        /// Consecutive columns grouped, so a 2 px stroke smeared over three
-        /// columns by anti-aliasing counts once.
-        private func runs(in columns: [Int]) -> [[Int]] {
-            columns.reduce(into: [[Int]]()) { runs, column in
-                if runs.last?.last == column - 1 {
-                    runs[runs.count - 1].append(column)
-                } else {
-                    runs.append([column])
-                }
-            }
-        }
-    }
-
-    /// Draws `chart` at popover width on opaque white, at ``renderScale``.
-    ///
-    /// White and `.light` rather than the popover's own material: every mark
-    /// here is `Color.primary` at some opacity, and finding a faint stroke's
-    /// centre wants the most contrast available, not the shipping backdrop.
-    private func render(_ chart: some View) throws -> Bitmap {
-        let hosting = NSHostingView(
-            rootView: chart
-                .frame(width: Self.contentWidth)
-                .background(Color.white)
-                .environment(\.colorScheme, .light)
-        )
-        hosting.appearance = NSAppearance(named: .aqua)
-        hosting.frame = CGRect(origin: .zero, size: hosting.fittingSize)
-
-        // A window, not a bare view: AppKit resolves appearance-derived colors
-        // off the window a view belongs to.
-        let window = NSWindow(
-            contentRect: hosting.frame,
-            styleMask: [.borderless],
-            backing: .buffered,
-            defer: false
-        )
-        window.appearance = hosting.appearance
-        window.contentView = hosting
-        hosting.layoutSubtreeIfNeeded()
-
-        let bounds = hosting.bounds
-        let rep = try XCTUnwrap(NSBitmapImageRep(
-            bitmapDataPlanes: nil,
-            pixelsWide: Int((bounds.width * renderScale).rounded()),
-            pixelsHigh: Int((bounds.height * renderScale).rounded()),
-            bitsPerSample: 8,
-            samplesPerPixel: 4,
-            hasAlpha: true,
-            isPlanar: false,
-            colorSpaceName: .deviceRGB,
-            bytesPerRow: 0,
-            bitsPerPixel: 0
-        ))
-        // Points for `size`, pixels for the buffer — `cacheDisplay(in:to:)`
-        // then draws at `scale`, the trick ``ReadmeAssetRenderTests`` uses.
-        rep.size = bounds.size
-        hosting.cacheDisplay(in: bounds, to: rep)
-
-        let width = rep.pixelsWide
-        let height = rep.pixelsHigh
-        let bytesPerRow = rep.bytesPerRow
-        let samples = rep.samplesPerPixel
-        let data = try XCTUnwrap(rep.bitmapData)
-        var luminance = [Double](repeating: 1, count: width * height)
-        for y in 0..<height {
-            for x in 0..<width {
-                let pixel = data + y * bytesPerRow + x * samples
-                luminance[y * width + x] = Double(Int(pixel[0]) + Int(pixel[1]) + Int(pixel[2])) / (3 * 255)
-            }
-        }
-        return Bitmap(width: width, height: height, luminance: luminance)
     }
 }
