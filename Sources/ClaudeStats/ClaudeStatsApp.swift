@@ -132,9 +132,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The batch decides *whether* to rebuild — only `.jsonl` content changes
     /// (or a dropped-events rescan signal) matter. *What* to reparse is the
     /// index's job: it stat-scans the corpus and reparses only files whose
-    /// mtime/size actually changed, so a rebuild is milliseconds, not the
-    /// ~4.5s full-corpus parse this used to be. Bursts collapse via
-    /// `rebuildQueued` — at most one rebuild runs and one waits.
+    /// mtime/size actually changed, so a rebuild costs a scan rather than the
+    /// ~4.5s full-corpus parse this used to be. That scan is still O(corpus)
+    /// and grows with file count — ~190 ms at 13.5k files, measured — because
+    /// the batch gates *whether* to rebuild but never narrows *what* is
+    /// scanned. Bursts collapse via `rebuildQueued` — at most one rebuild runs
+    /// and one waits.
     private func rebuildUsageStore(changed batch: FileChangeBatch) {
         guard batch.requiresFullRescan || !batch.contentChanges(withExtension: "jsonl").isEmpty else { return }
 
