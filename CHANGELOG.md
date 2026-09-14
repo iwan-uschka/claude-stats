@@ -12,8 +12,23 @@
   caption for the day's date and every number with it.
 - Quota readings are now grouped per Anthropic account, with other accounts'
   readings shown below the current one.
+- Settings has a Display section: the popover's tables can rest on the last 30
+  days or on the latest day. Hovering a day still shows that day either way.
 
 ### Changed
+- Numbers are now set in monospaced digits everywhere they sit in a column —
+  the countdowns, both chart axes and the tables' captions join the
+  percentages and the figures.
+- Quota bars are 18% wider (104 → 123 pt): the percentage and the countdown
+  beside it now sit flush against each other, and the countdown column is
+  sized to the longest countdown rather than to a placeholder.
+- The reset placeholders are shorter, so the bars can have the width: `reset
+  pending` now reads `pending`, and `no reading` reads `no data`.
+- The terracotta is 25% less saturated, at hue and lightness unchanged; every
+  bar, chart band and table dot follows it.
+- The usage tables now put "Estimated cost" before "Tokens".
+- Token counts always keep one decimal place (`5.0G`, not `5G`), matching
+  costs always keeping two.
 - Every number below the quota bars is now the same 30-day window, or the one
   day under the pointer: the 5-hour source counts, the fixed-24h model rows and
   the `Today` spend figure are gone.

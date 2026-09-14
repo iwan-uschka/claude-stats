@@ -17,24 +17,78 @@ enum PopoverMetrics {
     /// model name truncates (``WindowBarView`` pins its label to one line)
     /// rather than growing the row to two lines.
     static let labelColumnWidth: CGFloat = 80
-    /// Width of the percentage column on a quota row — widest label `99.9%`,
+    /// Width of the percentage column on a quota row — widest reading `99.9%`,
     /// which measures 34.6 pt in the monospaced-digit ``valueFont``.
-    static let percentColumnWidth: CGFloat = 38
-    /// Width of the trailing reset-countdown column. Sized to the widest
-    /// string it ever holds, the `reset pending` placeholder (66.5 pt at
-    /// ``captionFont``); the countdowns themselves (`2h 14m`, `6d 23h`) are
-    /// under 45 pt. It was 92 while the column read `resets in 2h 14m`; the
-    /// width saved went to the bars. Not lower: the merged
-    /// ``percentAndCountdownColumnWidth`` must still hold a usage-credits
-    /// value such as `20,87 € of 33,00 €` (99.8 pt at ``valueFont``) on one
-    /// line — at 38 + 8 + 70 it has 116 pt for it.
-    static let countdownColumnWidth: CGFloat = 70
-    /// The two trailing quota columns merged into one, for a row whose value is
-    /// wider than a percentage and has no countdown to show — the usage-credits
-    /// row's `€0.00 of €33.00`. Spans exactly the same pixels, so its value
-    /// still ends flush with the countdowns above it.
+    ///
+    /// 42 rather than the 38 it was measured at, and the extra 4 pt is the
+    /// point of it: the reading is right-aligned, so a column wider than the
+    /// number is clear space between the bar's trailing edge and the first
+    /// digit. At 38 an ordinary `62%` (24.2 pt) stood 21.8 pt from the bar —
+    /// visibly crowding the bar it was meant to be read apart from.
+    ///
+    /// The column's *width* has not moved since; its **right edge** has, from
+    /// 242 pt to 261 pt measured from the content's leading edge, which is where
+    /// the percentages sit today. That edge is
+    /// `labelColumnWidth + rowSpacing + quotaBarWidth + rowSpacing +
+    /// percentColumnWidth`, so every point the countdown column gave up moved it
+    /// right and widened the bar by the same amount rather than padding this
+    /// one. See ``countdownColumnWidth`` for what paid for it.
+    static let percentColumnWidth: CGFloat = 42
+    /// Width of the trailing reset-countdown column.
+    ///
+    /// 51, and the tightest column on the row: it is sized to the longest
+    /// countdown the formatter can produce, `11d 11h` (40.9 pt at
+    /// ``captionValueFont``), rather than to a placeholder. It was 70 while the
+    /// pending-reset placeholder read `reset pending` (66.5 pt) and 92 before
+    /// that, while the column read `resets in 2h 14m`.
+    ///
+    /// **Both placeholders were shortened to get here** — `reset pending` to
+    /// `pending` (39.0 pt) and `no reading` to `no data` (36.2 pt), see
+    /// ``DisplayFormat/resetCountdown(_:)`` and
+    /// ``DisplayFormat/unknownWindowCountdown``. Nothing else on the row had
+    /// slack left to give: the label column is pinned by `Sonnet weekly`
+    /// (76.2 of its 80 pt) and the percent column by `99.9%`. `no data` is the
+    /// binding one for the *gap* rather than the width — it shares its row with
+    /// the em dash, so a longer placeholder here does not truncate, it collides
+    /// with the reading beside it (`no reading` would have left 0.8 pt of air).
+    ///
+    /// The 19 pt this freed went to ``quotaBarWidth``, whole.
+    static let countdownColumnWidth: CGFloat = 51
+    /// The trailing region of a row whose value is wider than a percentage and
+    /// which has no countdown to show — the usage-credits row's
+    /// `€0.00 of €33.00`. Ends flush with the countdowns above it.
+    ///
+    /// **The two reading columns *and the gap in front of them*.** The gap is
+    /// in the sum, which it was not while the countdown column was 70 pt wide:
+    /// this value has to hold a usage-credits figure in the locale that spends
+    /// the most width on one (`20,87 € of 33,00 €`, 99.8 pt at ``valueFont``),
+    /// and two columns that now come to 93 pt cannot. Borrowing the gap instead
+    /// of widening the region is what keeps the credits row's bar exactly
+    /// ``quotaBarWidth`` — see ``PopoverView``'s `usageCreditsRow`, which lays
+    /// the bar and this column out in a nested zero-spacing stack for that
+    /// reason. The cost is paid only in the widest locale, where the figure's
+    /// box comes within 1.2 pt of the bar — about 3 pt of visible air once the
+    /// leading digit's side bearing is counted. `€0.00 of €33.00` leaves 14.5.
+    ///
+    /// No ``rowSpacing`` *between* the two columns it spans: those sit flush
+    /// against each other — see ``WindowBarView``, which lays them out in a
+    /// nested zero-spacing stack of its own.
     static let percentAndCountdownColumnWidth: CGFloat =
-        percentColumnWidth + rowSpacing + countdownColumnWidth
+        rowSpacing + percentColumnWidth + countdownColumnWidth
+    /// What a quota row's bar is left with: the content width less the three
+    /// fixed columns and the two gaps around the bar. 123 pt, up from 104 — the
+    /// whole of what ``countdownColumnWidth`` gave up, and nothing of it spent
+    /// on the gaps or on the columns beside it.
+    ///
+    /// Derived, and deliberately not applied — ``UsageBar`` stays greedy, so
+    /// every row's bar ends at the same x whatever the columns beside it are
+    /// sized to. This exists so the figure the docs quote is measured rather
+    /// than remembered, and so a column widened for its own sake can't quietly
+    /// take the bar's width without a test noticing.
+    static let quotaBarWidth: CGFloat =
+        popoverWidth - 2 * contentPadding
+            - labelColumnWidth - percentColumnWidth - countdownColumnWidth
+            - 2 * rowSpacing
     /// Width of the token column in a chart's table, both blocks sharing it.
     ///
     /// 48: the widest count a thirty-day sum plausibly reaches is `298.5M`
@@ -133,14 +187,43 @@ enum PopoverMetrics {
     static let accountGroupSpacing: CGFloat = 12
 
     static let bodyFont = Font.system(size: 11)
+    /// Every number the popover sets at body size: the percentages, the token
+    /// counts, the money. Monospaced digits, so a column of figures is tabular
+    /// — digits keep one advance whatever they are, and a row that ticks from
+    /// `61%` to `62%` doesn't reflow the text beside it.
     static let valueFont = Font.system(size: 11).monospacedDigit()
     static let sectionTitleFont = Font.system(size: 11, weight: .semibold)
     static let captionFontSize: CGFloat = 10
     static let captionFont = Font.system(size: captionFontSize)
-    /// The caption font as an `NSFont`, for measuring a label before SwiftUI
-    /// has laid it out — see ``PopoverChartAxis/yLabelWidth(of:)``. Built from
-    /// the same size as ``captionFont`` so the two can't drift apart.
+    /// ``captionFont`` for the caption-size text that is a *number*: the reset
+    /// countdowns, both chart axes, and the tables' window caption (a date
+    /// while a day is shown).
+    ///
+    /// The same rule ``valueFont`` follows one size down — the fonts differ
+    /// only in digit advance, so a numeric caption still reads as a caption
+    /// beside a label set in ``captionFont``. Labels and column headings keep
+    /// the proportional font: only digits gain from a fixed advance, and
+    /// widening the letters of `Estimated cost` would cost the column the
+    /// width it was measured for.
+    static let captionValueFont = Font.system(size: captionFontSize).monospacedDigit()
+    /// The proportional caption font as an `NSFont`, kept as the measuring
+    /// counterpart of ``captionFont`` — and as what ``PopoverFontTests``
+    /// compares ``captionValueNSFont`` against, since the whole rule is that
+    /// the two differ. Built from the same size as ``captionFont`` so they
+    /// can't drift apart.
+    ///
+    /// Nothing in the popover measures in it: the one column that is measured
+    /// before layout is the chart's y-labels, and those draw monospaced — see
+    /// ``captionValueNSFont`` and ``PopoverChartAxis/yLabelWidth(of:)``.
     static let captionNSFont = NSFont.systemFont(ofSize: captionFontSize)
+    /// ``captionValueFont`` as an `NSFont`, and the one the chart axis measures
+    /// its labels in — the axis draws them monospaced, so measuring them
+    /// proportionally would size the shared y-label column from a string
+    /// narrower than the one on screen.
+    static let captionValueNSFont = NSFont.monospacedDigitSystemFont(
+        ofSize: captionFontSize,
+        weight: .regular
+    )
 
     /// Claude's brand terracotta — the app's *only* colour.
     ///
@@ -158,8 +241,12 @@ enum PopoverMetrics {
     /// Two literals switched on appearance, not one fixed color: `#CA7C5E`
     /// measured ≈3.17:1 against a light popover background, below the 4.5:1
     /// WCAG 2.2 AA minimum for this caption-size text. `#A85E3E` clears 4.5:1
-    /// on white (≈4.84:1); `#E88A5C` clears it against the dark popover
-    /// background (≈6.2:1).
+    /// on white; `#E88A5C` clears it against the dark popover background.
+    ///
+    /// Both are then **muted by ``saturationReduction``** — see that constant —
+    /// so what actually paints is `#9B634B` light (≈4.90:1 on white) and
+    /// `#D6906E` dark (≈6.05:1 on the card). Same hue, same lightness, so the
+    /// AA headroom the two literals were picked for survives the muting.
     ///
     /// The only thing allowed to use anything else is a chart band — see
     /// ``chartBandColor(_:of:)``, which shades exactly these two literals.
@@ -167,11 +254,30 @@ enum PopoverMetrics {
 
     /// ``brandColor`` before SwiftUI wraps it, so a measuring test can resolve
     /// it against a named `NSAppearance`.
+    ///
+    /// Taken off the band ramp's strong end rather than from its own literal:
+    /// band 0 *is* the brand colour (``chartBandColor(_:of:)``), and two
+    /// separately-muted copies of one hex could drift apart.
     static let brandNSColor = NSColor(name: nil) { appearance in
-        appearance.isDarkPopover
-            ? NSColor(srgbHex: 0xE88A5C)
-            : NSColor(srgbHex: 0xA85E3E)
+        (appearance.isDarkPopover ? BandRamp.dark : BandRamp.light).strongColor
     }
+
+    /// How much of the terracotta's saturation is taken out before anything is
+    /// painted with it — 25%, i.e. the hue and the lightness of every literal
+    /// below are kept and the saturation is multiplied by 0.75.
+    ///
+    /// Applied once, in HSL, at the ramp's two ends (``BandRamp``), which is
+    /// the only place the literals are read: the brand colour, every quota
+    /// bar, every chart band and every table dot are all derived from those,
+    /// so nothing takes the unmuted hue and no call site is tuned by hand.
+    ///
+    /// The measured cost is small and goes the right way for text: the light
+    /// brand ink moves 4.84:1 → 4.90:1 on white and the dark one 6.15:1 → 6.05:1
+    /// on the card, both still clear of the 4.5:1 AA floor. What it does spend
+    /// is the ramp's distance from grey — the palest light band reads 0.17 HSB
+    /// saturation where it read 0.22 — which is why
+    /// ``PopoverColorTests`` measures that end rather than trusting it.
+    static let saturationReduction: Double = 0.25
 
     /// How strongly a stacked chart paints its bands and the strokes that close
     /// the seams between them.
@@ -218,11 +324,11 @@ enum PopoverMetrics {
     ///
     /// The ends are bounded rather than run to white or black: the strong end
     /// still has to read against the dark popover and the pale end against the
-    /// light one. They are exactly the old ramp's first and last steps, so the
-    /// measured bounds are unchanged — WCAG contrast against white and against
-    /// the ≈`#232323` dark card, 4.84 → 1.80 in light and 6.15 → 2.29 in dark.
-    /// The pale end lands where the monochrome ramp before that ended
-    /// (`Color.primary` at 0.24 opacity measured 1.78:1 on white).
+    /// light one. They are the old ramp's first and last steps, muted by
+    /// ``saturationReduction`` like everything else — WCAG contrast against
+    /// white and against the ≈`#232323` dark card, 4.90 → 1.79 in light and
+    /// 6.05 → 2.26 in dark. The pale end lands where the monochrome ramp before
+    /// that ended (`Color.primary` at 0.24 opacity measured 1.78:1 on white).
     ///
     /// Measured for the stack heights the popover can actually draw — the
     /// source chart tops out at four bands (three entrypoints plus "Other"),
@@ -230,21 +336,21 @@ enum PopoverMetrics {
     ///
     /// | bands | light, on white | dark, on `#232323` |
     /// | --- | --- | --- |
-    /// | 2 | 4.84 / 1.80 | 6.15 / 2.29 |
-    /// | 3 | 4.84 / 2.88 / 1.80 | 6.15 / 4.05 / 2.29 |
-    /// | 4 | 4.84 / 3.40 / 2.45 / 1.80 | 6.15 / 4.70 / 3.35 / 2.29 |
-    /// | 5 | 4.84 / 3.69 / 2.88 / 2.27 / 1.80 | 6.15 / 5.03 / 4.05 / 3.04 / 2.29 |
+    /// | 2 | 4.90 / 1.79 | 6.05 / 2.26 |
+    /// | 3 | 4.90 / 2.87 / 1.79 | 6.05 / 3.89 / 2.26 |
+    /// | 4 | 4.90 / 3.41 / 2.44 / 1.79 | 6.05 / 4.54 / 3.26 / 2.26 |
+    /// | 5 | 4.90 / 3.72 / 2.87 / 2.25 / 1.79 | 6.05 / 4.89 / 3.89 / 2.98 / 2.26 |
     ///
-    /// The smallest step in that table is 1.22, against the 1.28 the fixed ramp
-    /// managed at *any* count. A sixth band would fall to ≈1.18, which is the
+    /// The smallest step in that table is 1.24, against the 1.28 the fixed ramp
+    /// managed at *any* count. A sixth band would fall below 1.2, which is the
     /// honest cost of spreading: more bands, smaller steps. Nothing in the
     /// popover can ask for one.
     ///
     /// **Saturation moves with lightness**, so two neighbours differ in two
     /// dimensions rather than one: interpolated in HSL between the two end
-    /// literals, the ramp runs 46% → 41% saturation as it lightens in the light
-    /// appearance (which is 0.63 → 0.22 measured as HSB, the figure `NSColor`
-    /// reports) and 75% → 47% as it darkens in the dark one. Held at the brand
+    /// literals, the ramp runs 35% → 31% saturation as it lightens in the light
+    /// appearance (which is 0.51 → 0.17 measured as HSB, the figure `NSColor`
+    /// reports) and 56% → 35% as it darkens in the dark one. Held at the brand
     /// value instead, the darker dark-mode steps came out a vivid orange rather
     /// than terracotta.
     static func chartBandColor(_ index: Int, of count: Int) -> Color {
@@ -301,25 +407,35 @@ enum PopoverMetrics {
 /// lerp between the same two literals runs through muddier, greyer middles.
 private struct BandRamp {
     /// Light appearance: the brand terracotta, paling towards the white card
-    /// but stopping at 1.80:1 against it.
+    /// but stopping at 1.79:1 against it.
     static let light = BandRamp(strong: 0xA85E3E, pale: 0xDCBAAB)
     /// Dark appearance: the brand terracotta, darkening towards the ≈`#232323`
-    /// card but stopping at 2.29:1 against it.
+    /// card but stopping at 2.26:1 against it.
     static let dark = BandRamp(strong: 0xE88A5C, pale: 0x844C30)
 
     private let strong: HSL
     private let pale: HSL
 
+    /// The literals are the *unmuted* terracotta, and are muted here — the one
+    /// place they are read. Doing it at construction rather than per shade
+    /// keeps `color(at:)` a straight interpolation, and since HSL saturation is
+    /// interpolated linearly, muting the two ends is the same colour as muting
+    /// every shade between them.
     init(strong: UInt32, pale: UInt32) {
-        self.strong = HSL(srgbHex: strong)
-        self.pale = HSL(srgbHex: pale)
+        self.strong = HSL(srgbHex: strong).desaturated(by: PopoverMetrics.saturationReduction)
+        self.pale = HSL(srgbHex: pale).desaturated(by: PopoverMetrics.saturationReduction)
     }
+
+    /// The strong end on its own — what ``PopoverMetrics/brandNSColor`` paints,
+    /// so the brand colour and band 0 are the same value by construction.
+    var strongColor: NSColor { strong.nsColor }
 
     /// The shade at `position`, `0` being the brand colour itself.
     ///
-    /// Both ends round-trip to the literals they were measured as, which is
-    /// what lets ``PopoverMetrics/chartBandColor(_:of:)`` promise that band 0
-    /// *is* ``PopoverMetrics/brandColor`` rather than something close to it.
+    /// Both ends round-trip to the muted literals they were measured as, and
+    /// position 0 is ``strongColor`` itself — which is what lets
+    /// ``PopoverMetrics/chartBandColor(_:of:)`` promise that band 0 *is*
+    /// ``PopoverMetrics/brandColor`` rather than something close to it.
     func color(at position: Double) -> NSColor {
         strong.blended(toward: pale, amount: position).nsColor
     }
@@ -361,6 +477,12 @@ private struct HSL {
         self.hue = hue
         self.saturation = saturation
         self.lightness = lightness
+    }
+
+    /// The same hue and lightness at a fraction less saturation — see
+    /// ``PopoverMetrics/saturationReduction``, the one caller.
+    func desaturated(by amount: Double) -> HSL {
+        HSL(hue: hue, saturation: saturation * (1 - amount), lightness: lightness)
     }
 
     /// Linear in all three axes, hue the short way round the wheel. Both ends
@@ -406,17 +528,4 @@ private extension NSAppearance {
     /// a name compare, so a vibrant or high-contrast variant resolves to the
     /// side of the pair it actually looks like.
     var isDarkPopover: Bool { bestMatch(from: [.aqua, .darkAqua]) == .darkAqua }
-}
-
-private extension NSColor {
-    /// An opaque sRGB colour from a `0xRRGGBB` literal, so a ramp reads as the
-    /// hex values it was measured as.
-    convenience init(srgbHex hex: UInt32) {
-        self.init(
-            srgbRed: CGFloat((hex >> 16) & 0xFF) / 255,
-            green: CGFloat((hex >> 8) & 0xFF) / 255,
-            blue: CGFloat(hex & 0xFF) / 255,
-            alpha: 1
-        )
-    }
 }

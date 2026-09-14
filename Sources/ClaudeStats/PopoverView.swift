@@ -343,7 +343,7 @@ struct PopoverView: View {
     /// total is unverified — see ``QuotaScopedLimit``. Claiming either would be
     /// inventing a fact the source doesn't carry. The countdown column is
     /// empty when the entry has no `resets_at`, which is the common case — an
-    /// absent reset here means "not reported", not "reset pending" the way it
+    /// absent reset here means "not reported", not `pending` the way it
     /// does for the two account-wide bars.
     private func scopedWeeklyRow(_ limit: QuotaScopedLimit) -> some View {
         WindowBarView(
@@ -367,8 +367,13 @@ struct PopoverView: View {
     /// in a zero-decimal currency.
     ///
     /// The countdown column is empty because the payload reports no rollover
-    /// timestamp for the monthly cap; the value spans both trailing columns
-    /// instead, so it still ends flush with the countdowns above it.
+    /// timestamp for the monthly cap; the value spans both trailing columns —
+    /// and the gap in front of them — instead, so it still ends flush with the
+    /// countdowns above it. Hence the nested zero-spacing stack: the bar and
+    /// the value have no ``PopoverMetrics/rowSpacing`` between them, because
+    /// that gap is part of what
+    /// ``PopoverMetrics/percentAndCountdownColumnWidth`` spans. Laid out with
+    /// the gap, this row's bar would come out 8 pt short of the bars above it.
     ///
     /// There is no absent-credits branch anywhere: no credits means no row —
     /// see ``UsageCredits`` on why that is the normal state and not an error.
@@ -380,12 +385,17 @@ struct PopoverView: View {
                 .truncationMode(.tail)
                 .frame(width: PopoverMetrics.labelColumnWidth, alignment: .leading)
 
-            UsageBar(fraction: credits.window.fractionUsed, fillStyle: .hatched)
-                .frame(minWidth: 48)
+            HStack(spacing: 0) {
+                UsageBar(fraction: credits.window.fractionUsed, fillStyle: .hatched)
+                    .frame(minWidth: 48)
 
-            Text(DisplayFormat.moneySpend(used: credits.used, limit: credits.limit))
-                .font(PopoverMetrics.valueFont)
-                .frame(width: PopoverMetrics.percentAndCountdownColumnWidth, alignment: .trailing)
+                Text(DisplayFormat.moneySpend(used: credits.used, limit: credits.limit))
+                    .font(PopoverMetrics.valueFont)
+                    .frame(
+                        width: PopoverMetrics.percentAndCountdownColumnWidth,
+                        alignment: .trailing
+                    )
+            }
         }
         .accessibilityElement(children: .combine)
         .help(usageCreditsHelp(credits))
@@ -564,7 +574,10 @@ struct PopoverView: View {
             total: model.dailyHistory.total,
             days: model.dailyHistory.days,
             hoveredDay: hoveredDay,
-            restingCaption: chartWindowCaption
+            restingCaption: chartWindowCaption,
+            // Read from the model on every render rather than captured once, so
+            // flipping the preference in Settings changes the open popover.
+            restingRange: model.defaultDisplayRange
         )
         VStack(alignment: .leading, spacing: 6) {
             Text(title)

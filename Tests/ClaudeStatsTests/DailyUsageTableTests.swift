@@ -54,13 +54,18 @@ final class DailyUsageTableTests: XCTestCase {
         return try store.dailyUsage(days: 30)
     }
 
-    private func sourceTable(_ history: DailyUsageHistory, hoveredDay: Date? = nil) -> DailyUsageTable {
+    private func sourceTable(
+        _ history: DailyUsageHistory,
+        hoveredDay: Date? = nil,
+        restingRange: DefaultDisplayRange = .last30Days
+    ) -> DailyUsageTable {
         DailyUsageTable(
             series: DailyUsageSeries.sources(from: history),
             total: history.total,
             days: history.days,
             hoveredDay: hoveredDay,
-            restingCaption: "Last \(history.days.count) days"
+            restingCaption: "Last \(history.days.count) days",
+            restingRange: restingRange
         )
     }
 
@@ -231,6 +236,124 @@ final class DailyUsageTableTests: XCTestCase {
         // The quiet day has no note at all: below the threshold, the raw number
         // needs no qualifying.
         XCTAssertNil(DisplayFormat.cacheReadNote(modelTable(history, hoveredDay: history.days.first).shownUsage))
+    }
+
+    // MARK: - Columns
+
+    func testTheValueColumnsRunCostFirstThenTokens() throws {
+        // The two used to run the other way round. One order for the caption
+        // row, the value rows and VoiceOver, so what is read out and what is
+        // drawn can't disagree about which figure comes first.
+        XCTAssertEqual(DailyUsageTable.columnOrder, [.estimatedCost, .tokens])
+        XCTAssertEqual(
+            DailyUsageTable.columnOrder.map(\.heading),
+            ["Estimated cost", "Tokens"]
+        )
+        XCTAssertEqual(
+            DailyUsageTable.columnOrder.map(\.width),
+            [PopoverMetrics.tableCostColumnWidth, PopoverMetrics.tableTokenColumnWidth]
+        )
+        // Every column the table knows about is placed, so a third one can't be
+        // added and silently never drawn.
+        XCTAssertEqual(Set(DailyUsageTable.columnOrder), Set(DailyUsageTable.Column.allCases))
+    }
+
+    func testEachColumnReadsItsOwnFigureOffTheRow() throws {
+        let table = sourceTable(try makeHistory())
+        let row = table.totalRow
+
+        XCTAssertEqual(
+            DailyUsageTable.Column.estimatedCost.text(of: row),
+            DisplayFormat.cost(row.cost)
+        )
+        XCTAssertEqual(
+            DailyUsageTable.Column.tokens.text(of: row),
+            DisplayFormat.tokens(row.usage.totalTokens)
+        )
+        // Money at full strength, tokens dimmed — the emphasis went with the
+        // column, not with the position.
+        XCTAssertFalse(DailyUsageTable.Column.estimatedCost.isSecondary)
+        XCTAssertTrue(DailyUsageTable.Column.tokens.isSecondary)
+    }
+
+    func testVoiceOverReadsTheColumnsInTheOrderTheyAreDrawn() throws {
+        let table = sourceTable(try makeHistory())
+        let row = table.totalRow
+
+        XCTAssertEqual(
+            table.spokenValue(of: row),
+            "\(DisplayFormat.cost(row.cost)) estimated, \(DisplayFormat.tokens(row.usage.totalTokens)) tokens"
+        )
+    }
+
+    // MARK: - Resting range
+
+    func testTheLatestDaySettingRestsOnTheNewestDayInsteadOfTheWholeWindow() throws {
+        let history = try makeHistory()
+        let window = sourceTable(history)
+        let day = sourceTable(history, restingRange: .latestDay)
+        let index = history.days.count - 1
+
+        // Same table, different default: every figure is the newest day's, and
+        // the caption says which day rather than how many.
+        XCTAssertEqual(day.restingIndex, index)
+        XCTAssertNil(window.restingIndex)
+        XCTAssertEqual(day.caption, PopoverChartHover.label(for: try XCTUnwrap(history.days.last)))
+        XCTAssertEqual(window.caption, "Last \(history.days.count) days")
+        XCTAssertEqual(day.totalRow.usage, history.total[index].usage)
+        XCTAssertNotEqual(day.totalRow.usage, window.totalRow.usage)
+        for (row, band) in zip(day.bandRows, DailyUsageSeries.sources(from: history)) {
+            XCTAssertEqual(row.usage, band.points[index].usage)
+            XCTAssertEqual(row.cost, band.points[index].estimatedCostUSD, accuracy: 1e-9)
+        }
+    }
+
+    func testHoveringWinsOverTheLatestDaySetting() throws {
+        let history = try makeHistory()
+        let hovered = try XCTUnwrap(history.days.first)
+        let table = sourceTable(history, hoveredDay: hovered, restingRange: .latestDay)
+
+        // The pointer is a deliberate act and the setting is only a default, so
+        // pointing at an older day has to show that day — otherwise the chart's
+        // hover would be dead for anyone who picked the single-day default.
+        XCTAssertEqual(table.shownIndex, 0)
+        XCTAssertEqual(table.caption, PopoverChartHover.label(for: hovered))
+        XCTAssertEqual(table.totalRow.usage, history.total[0].usage)
+    }
+
+    func testTheLatestDayFollowsTheWindowRatherThanAStoredDate() throws {
+        // "Latest" is resolved by position on every render, so midnight sliding
+        // the window — or a poll rebuilding it — moves the reading along
+        // instead of stranding the table on a day that has dropped out.
+        let history = try makeHistory()
+        let shorter = DailyUsageHistory(
+            days: Array(history.days.dropLast()),
+            total: Array(history.total.dropLast()),
+            bySource: history.bySource.mapValues { Array($0.dropLast()) },
+            byModelFamily: history.byModelFamily.mapValues { Array($0.dropLast()) }
+        )
+        let table = sourceTable(shorter, restingRange: .latestDay)
+
+        XCTAssertEqual(table.restingIndex, shorter.days.count - 1)
+        XCTAssertEqual(table.caption, PopoverChartHover.label(for: try XCTUnwrap(shorter.days.last)))
+        XCTAssertEqual(table.totalRow.usage, try XCTUnwrap(shorter.total.last).usage)
+    }
+
+    func testAnEmptyWindowHasNoLatestDayToRestOn() {
+        // Not rendered in that state — the section draws "No local usage yet" —
+        // but the single-day default must not index into an empty window.
+        let table = DailyUsageTable(
+            series: DailyUsageSeries.sources(from: .empty),
+            total: [],
+            days: [],
+            hoveredDay: nil,
+            restingCaption: "Last 0 days",
+            restingRange: .latestDay
+        )
+
+        XCTAssertNil(table.restingIndex)
+        XCTAssertEqual(table.caption, "Last 0 days")
+        XCTAssertEqual(table.totalRow.usage, .zero)
     }
 
     // MARK: - Empty window

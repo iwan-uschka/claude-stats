@@ -109,7 +109,7 @@ final class PopoverChartAlignmentTests: XCTestCase {
         // automatic — see ``PopoverChartAxis/yValues(upTo:count:)``.
         let charts = stackedCharts(days: days(30))
         let widest = charts.cost.yLabels
-            .map { ($0 as NSString).size(withAttributes: [.font: PopoverMetrics.captionNSFont]).width }
+            .map { ($0 as NSString).size(withAttributes: [.font: PopoverMetrics.captionValueNSFont]).width }
             .max()
 
         XCTAssertEqual(charts.cost.naturalYLabelWidth, try XCTUnwrap(widest), accuracy: 0.01)

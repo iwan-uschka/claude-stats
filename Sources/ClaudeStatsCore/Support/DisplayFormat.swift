@@ -52,12 +52,18 @@ public enum DisplayFormat {
         return "\(seconds)s"
     }
 
-    /// Countdown for a quota window: `2h 14m`, or `reset pending` once the
-    /// deadline has passed / is unknown. Bare duration, no "resets in" — the
-    /// column sits to the right of a bar labelled `5-hour`/`7-day`, so the time
-    /// alone reads as the time until it resets.
+    /// Countdown for a quota window: `2h 14m`, or `pending` once the deadline
+    /// has passed / is unknown. Bare duration, no "resets in" — the column sits
+    /// to the right of a bar labelled `5-hour`/`7-day`, so the time alone reads
+    /// as the time until it resets.
+    ///
+    /// `pending` rather than `reset pending` for the same reason the prefix
+    /// went: the word "reset" is already what the column *is*. It was the
+    /// widest string this column ever held (66.5 pt against the countdowns' 41)
+    /// and so the thing sizing it, which is width the bars were paying for —
+    /// see ``PopoverMetrics/countdownColumnWidth``.
     public static func resetCountdown(_ interval: TimeInterval?) -> String {
-        guard let interval, interval > 0 else { return "reset pending" }
+        guard let interval, interval > 0 else { return "pending" }
         return duration(interval)
     }
 
@@ -74,8 +80,10 @@ public enum DisplayFormat {
 
     // MARK: - Numbers
 
-    /// Compact token count: `2.1G`, `2.1M`, `640k`, `840`. One decimal place,
-    /// with a trailing `.0` trimmed so round numbers stay short.
+    /// Compact token count: `2.1G`, `2.1M`, `640.0k`, `840`. Always one
+    /// decimal place once a unit applies — `5G` reads as a rounder, more
+    /// finished number than `5.0G` actually is, and a fixed decimal keeps a
+    /// column of them lining up on the point.
     ///
     /// `G` and `T`, not `B` and `Tn`: the ladder starts at `k` and `M`, which
     /// are SI prefixes, so the next two are giga and tera. It carries as far as
@@ -87,18 +95,25 @@ public enum DisplayFormat {
         let sign = count < 0 ? "-" : ""
 
         if magnitude >= 1_000_000_000_000 {
-            return sign + scaled(Double(magnitude) / 1_000_000_000_000) + "T"
+            return sign + oneDecimal(Double(magnitude) / 1_000_000_000_000) + "T"
         }
         if magnitude >= 1_000_000_000 {
-            return sign + scaled(Double(magnitude) / 1_000_000_000) + "G"
+            return sign + oneDecimal(Double(magnitude) / 1_000_000_000) + "G"
         }
         if magnitude >= 1_000_000 {
-            return sign + scaled(Double(magnitude) / 1_000_000) + "M"
+            return sign + oneDecimal(Double(magnitude) / 1_000_000) + "M"
         }
         if magnitude >= 1_000 {
-            return sign + scaled(Double(magnitude) / 1_000) + "k"
+            return sign + oneDecimal(Double(magnitude) / 1_000) + "k"
         }
         return "\(count)"
+    }
+
+    /// One forced decimal place, unlike ``scaled(_:)`` which trims a round
+    /// one — the token ladder wants every value the same length; the percent
+    /// label ``scaled(_:)`` also feeds wants the opposite, `99%` not `99.0%`.
+    private static func oneDecimal(_ value: Double) -> String {
+        String(format: "%.1f", value)
     }
 
     // MARK: - Axis labels
@@ -106,7 +121,7 @@ public enum DisplayFormat {
     /// One SI unit for a whole axis, decided by its largest value.
     ///
     /// ``tokens(_:)`` scales every number on its own, which is right for a row
-    /// — `640k` beside `2.1G` are two different readings. On an axis it is
+    /// — `640.0k` beside `2.1G` are two different readings. On an axis it is
     /// wrong: `1.5G / 1G / 500M / 0` makes the reader convert `500M` into
     /// `0.5G` to see that the steps are even. One unit for the column, and the
     /// steps read themselves: `1.5G / 1.0G / 0.5G / 0`.
@@ -176,7 +191,7 @@ public enum DisplayFormat {
     // MARK: - Token splits
 
     /// The four-way breakdown behind a token total, for a tooltip:
-    /// `in 9.9k · out 4.7M · cache write 36.3M · cache read 453M`.
+    /// `in 9.9k · out 4.7M · cache write 36.3M · cache read 453.0M`.
     public static func tokenSplit(_ usage: TokenUsage) -> String {
         "in \(tokens(usage.inputTokens))"
             + " · out \(tokens(usage.outputTokens))"
@@ -336,10 +351,17 @@ public enum DisplayFormat {
 
     /// Placeholder shown in the countdown column of a window nothing reported.
     ///
-    /// Not "reset pending" — that says the window exists and its reset is due.
-    /// This says we have no reading at all, which is the normal state between a
+    /// Not `pending` — that says the window exists and its reset is due. This
+    /// says we have no reading at all, which is the normal state between a
     /// rollover and the session's next API call.
-    public static let unknownWindowCountdown = "no reading"
+    ///
+    /// `no data` rather than the `no reading` it read before: this is the one
+    /// placeholder that shares its row with ``unknownWindowPercent`` rather
+    /// than with a percentage, and at 51.2 pt it came within 0.8 pt of that em
+    /// dash once the countdown column was narrowed to 51 pt — see
+    /// ``PopoverMetrics/countdownColumnWidth``. `no data` measures 36.2 and
+    /// leaves 14.8 pt of air.
+    public static let unknownWindowCountdown = "no data"
 
     /// Percent column for a possibly-absent quota window: the percentage, or
     /// ``unknownWindowPercent`` when no source reported the window.
@@ -352,7 +374,7 @@ public enum DisplayFormat {
     ///
     /// Three outcomes, in order: no window at all →
     /// ``unknownWindowCountdown``; a window whose reset is unknown or already
-    /// past → `reset pending`, or the empty string when the caller says this
+    /// past → `pending`, or the empty string when the caller says this
     /// row's missing `resets_at` means "not reported" rather than "pending"
     /// (see ``QuotaScopedLimit``); otherwise the countdown itself.
     public static func windowCountdown(
