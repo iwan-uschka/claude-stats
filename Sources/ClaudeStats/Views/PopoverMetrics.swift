@@ -72,12 +72,26 @@ enum PopoverMetrics {
     static let chartMargin: CGFloat = 6
     /// How many days at the end of the window get no x-axis tick.
     ///
-    /// A tick's label is centred on it and truncated at the chart's trailing
-    /// edge, so a tick in the last few days renders as `1…` however the plot is
-    /// inset — the label simply has nowhere to sit. Four days is about half of
-    /// a `16. Aug.`-sized label at this chart's scale. Nothing is lost by it:
+    /// A tick's label starts at the tick and runs to the right of it — Swift
+    /// Charts anchors a dated label to the interval it opens — and is truncated
+    /// at the chart's trailing edge, so a tick in the last few days renders as
+    /// `1…` however the plot is inset: the label has nowhere to sit. Four days
+    /// is about a `16. Aug.`-sized label at this chart's scale. Nothing is lost:
     /// the right edge of a trailing window is always today.
     static let chartXAxisEdgeMarginDays = 4
+    /// Gutter the x scale keeps at each end of the plot.
+    ///
+    /// The days are plotted on their own midnights, so the first and last of
+    /// them land on the plot's own edges — and the dot marking a hovered day is
+    /// centred on its mark, which leaves half of it outside the plot on the day
+    /// most likely to be hovered: today. Wide enough for that dot's radius
+    /// (``chartHoverPointSize`` is an area, so about 2.3 pt) with a little over.
+    ///
+    /// The scale's range, not the chart's padding: insetting the plot itself
+    /// would move the axis away from the alignment the rows above and below
+    /// keep, and this has to inset marks and ticks by the same amount or it
+    /// would reintroduce the offset it is sitting next to.
+    static let chartXScaleEdgePadding: CGFloat = 3
     /// Stroke width of a single-series chart line. Heavier than a hairline so
     /// the curve reads as data rather than as a gridline at 72 pt, and lighter
     /// than 2 so a spiky day keeps its shape instead of blurring into a wedge.

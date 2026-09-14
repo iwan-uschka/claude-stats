@@ -31,10 +31,10 @@ final class PopoverChartHoverTests: XCTestCase {
     func testAPointerInsideADaySnapsToTheNearestMidnight() throws {
         let window = days(30)
 
-        // Every mark is encoded `unit: .day`, so it is drawn on its own
-        // midnight — which puts the afternoon of the 3rd nearer the 4th's mark
-        // than the 3rd's. Snapping to the *mark*, not to the calendar day, is
-        // what makes the rule land on the point the eye is aiming at.
+        // Every mark is drawn on its own midnight — which puts the afternoon of
+        // the 3rd nearer the 4th's mark than the 3rd's. Snapping to the *mark*,
+        // not to the calendar day, is what makes the rule land on the point the
+        // eye is aiming at.
         XCTAssertEqual(PopoverChartHover.nearestDay(to: try date("2026-07-03T02:00:00.000Z"), in: window), window[2])
         XCTAssertEqual(PopoverChartHover.nearestDay(to: try date("2026-07-03T20:00:00.000Z"), in: window), window[3])
     }

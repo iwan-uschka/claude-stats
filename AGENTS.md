@@ -592,13 +592,13 @@ Tokens by source
                                     labels across a 340 pt popover would be
                                     mush, so it is one label a week and three
                                     values up the y. **Ticks stop four days
-                                    short of the right edge**: a label is centred
-                                    on its tick and truncated at the chart's
-                                    trailing bound, so a tick any closer renders
-                                    as `1…` no matter how the plot is inset
-                                    (tried: padding the chart, then padding the
-                                    plot area — neither helps, the label has
-                                    nowhere to sit). Nothing is lost by it, since
+                                    short of the right edge**: a label starts at
+                                    its tick, runs to the right of it, and is
+                                    truncated at the chart's trailing bound, so
+                                    a tick any closer renders as `1…` no matter
+                                    how the plot is inset (tried: padding the
+                                    chart, then padding the plot area — neither
+                                    helps, the label has nowhere to sit). Nothing is lost by it, since
                                     the right edge of a trailing window is always
                                     today.
 
@@ -700,13 +700,13 @@ Tokens by source
                                     labels across a 340 pt popover would be
                                     mush, so it is one label a week and three
                                     values up the y. **Ticks stop four days
-                                    short of the right edge**: a label is centred
-                                    on its tick and truncated at the chart's
-                                    trailing bound, so a tick any closer renders
-                                    as `1…` no matter how the plot is inset
-                                    (tried: padding the chart, then padding the
-                                    plot area — neither helps, the label has
-                                    nowhere to sit). Nothing is lost by it, since
+                                    short of the right edge**: a label starts at
+                                    its tick, runs to the right of it, and is
+                                    truncated at the chart's trailing bound, so
+                                    a tick any closer renders as `1…` no matter
+                                    how the plot is inset (tried: padding the
+                                    chart, then padding the plot area — neither
+                                    helps, the label has nowhere to sit). Nothing is lost by it, since
                                     the right edge of a trailing window is always
                                     today.
 
@@ -850,6 +850,30 @@ Today                              $3.05
                                     pointing at a day exactly is not available.
                                     Not `.chartXSelection`, which answers to
                                     click and drag on macOS rather than to hover.
+
+                                    **Marks, rule and ticks share one x.** Every
+                                    mark is plotted on a plain `Date`, never
+                                    `unit: .day`: binning a date draws the mark
+                                    at the *centre* of its bin, so the curve,
+                                    the bands, the rule and the dots all sat
+                                    half a day — a measured 4 pt — right of the
+                                    tick naming the day they were on.
+                                    `PopoverChartAlignmentTests` renders both
+                                    charts and measures the rule against the
+                                    tick, which is the only way to see this at
+                                    all: `ChartProxy` answers for the scale, not
+                                    for where a mark landed, and every other
+                                    test passed throughout.
+
+                                    Midnights on a plain scale land on the
+                                    plot's own edges, so the scale keeps a 3 pt
+                                    gutter at each end
+                                    (`chartXScale(range: .plotDimension(…))`,
+                                    not chart padding, which would pull the axis
+                                    out of the popover's alignment). Without it
+                                    half the hover dot on *today* — the day most
+                                    likely to be hovered — falls outside the
+                                    plot.
 
                                     **Hover moves nothing but the highlight.**
                                     Both marks carry values already plotted, so

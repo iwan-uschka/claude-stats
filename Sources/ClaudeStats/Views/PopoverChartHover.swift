@@ -13,9 +13,13 @@ enum PopoverChartHover {
     /// Snapping is the mechanism, not a refinement: thirty days across a plot
     /// roughly 250 pt wide is about 8 pt per day, so there is no such thing as
     /// pointing at a day exactly. Nearest-midnight is the right measure because
-    /// every mark is encoded `unit: .day` and therefore sits on its own
-    /// midnight — the day under the pointer at noon is already half-way to its
-    /// successor's mark.
+    /// every mark is plotted on a plain date and therefore sits on its own
+    /// midnight, the same instant its axis tick is drawn at — the day under the
+    /// pointer at noon is already half-way to its successor's mark.
+    ///
+    /// Plain dates, note, not `unit: .day`: binning a date draws the mark at
+    /// the *centre* of its bin, half a day right of the tick naming it. See
+    /// ``PopoverChartAlignmentTests``.
     static func nearestDay(to date: Date, in days: [Date]) -> Date? {
         guard var best = days.first else { return nil }
         var bestDistance = abs(best.timeIntervalSince(date))

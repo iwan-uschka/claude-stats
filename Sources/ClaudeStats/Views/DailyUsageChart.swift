@@ -119,8 +119,13 @@ struct DailyUsageChart: View {
     var body: some View {
         Chart {
             ForEach(records) { record in
+                // A plain date, deliberately not `unit: .day`: binning draws
+                // the mark at the centre of its bin, half a day right of the
+                // tick that names the day — the data is already one point per
+                // local midnight with no gaps, so binning buys nothing and
+                // costs the alignment. Pinned by ``PopoverChartAlignmentTests``.
                 AreaMark(
-                    x: .value("Day", record.day, unit: .day),
+                    x: .value("Day", record.day),
                     y: .value("Tokens", record.tokens)
                 )
                 .foregroundStyle(by: .value("Source", record.series))
@@ -135,12 +140,12 @@ struct DailyUsageChart: View {
                 // Every mark here carries a value the chart already plots — the
                 // day is one of `days`, each dot sits on a band edge the stack
                 // already draws — so no scale widens and no axis moves.
-                RuleMark(x: .value("Day", days[index], unit: .day))
+                RuleMark(x: .value("Day", days[index]))
                     .lineStyle(StrokeStyle(lineWidth: 0.5))
                     .foregroundStyle(Color.primary.opacity(0.25))
                 ForEach(stackTops(at: index)) { top in
                     PointMark(
-                        x: .value("Day", days[index], unit: .day),
+                        x: .value("Day", days[index]),
                         y: .value("Tokens", top.tokens)
                     )
                     .symbolSize(PopoverMetrics.chartHoverPointSize)
@@ -158,6 +163,10 @@ struct DailyUsageChart: View {
             range: series.map { Color.primary.opacity($0.shade) }
         )
         .chartLegend(.hidden)
+        .chartXScale(range: .plotDimension(
+            startPadding: PopoverMetrics.chartXScaleEdgePadding,
+            endPadding: PopoverMetrics.chartXScaleEdgePadding
+        ))
         .chartXAxis {
             AxisMarks(values: tickDays) { value in
                 AxisTick(length: PopoverMetrics.chartTickLength, stroke: StrokeStyle(lineWidth: 0.5))

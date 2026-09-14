@@ -57,8 +57,13 @@ struct DailyCostChart: View {
     var body: some View {
         Chart {
             ForEach(records) { record in
+                // A plain date, deliberately not `unit: .day`: binning draws
+                // the mark at the centre of its bin, half a day right of the
+                // tick that names the day — the data is already one point per
+                // local midnight with no gaps, so binning buys nothing and
+                // costs the alignment. Pinned by ``PopoverChartAlignmentTests``.
                 LineMark(
-                    x: .value("Day", record.day, unit: .day),
+                    x: .value("Day", record.day),
                     y: .value("Estimated cost", record.cost)
                 )
                 .interpolationMethod(.monotone)
@@ -75,11 +80,11 @@ struct DailyCostChart: View {
                 // depend on hover: the leading edge sits wherever the widest
                 // y-label ends, so a rescale would slide the curve sideways
                 // under a stationary pointer and change the day it is on.
-                RuleMark(x: .value("Day", days[index], unit: .day))
+                RuleMark(x: .value("Day", days[index]))
                     .lineStyle(StrokeStyle(lineWidth: 0.5))
                     .foregroundStyle(Color.primary.opacity(0.25))
                 PointMark(
-                    x: .value("Day", days[index], unit: .day),
+                    x: .value("Day", days[index]),
                     y: .value("Estimated cost", points[index].estimatedCostUSD)
                 )
                 .symbolSize(PopoverMetrics.chartHoverPointSize)
@@ -87,6 +92,10 @@ struct DailyCostChart: View {
             }
         }
         .chartYScale(domain: .automatic(includesZero: true))
+        .chartXScale(range: .plotDimension(
+            startPadding: PopoverMetrics.chartXScaleEdgePadding,
+            endPadding: PopoverMetrics.chartXScaleEdgePadding
+        ))
         .chartXAxis {
             AxisMarks(values: tickDays) { _ in
                 AxisTick(length: PopoverMetrics.chartTickLength, stroke: StrokeStyle(lineWidth: 0.5))
