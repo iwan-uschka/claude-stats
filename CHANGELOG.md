@@ -92,6 +92,11 @@
 - The periodic CPU spike while a session is running costs about a third less,
   and peaks lower: the corpus scan that runs on every write no longer rebuilds
   each file's path once per sort comparison. Bigger corpora gain the most.
+- The popover stalls less while a session is running: the work each refresh
+  does on the main thread is down to about a quarter of what it was. Working
+  out which model family a logged message belongs to no longer runs a
+  locale-aware text search, which cost around thirty times what matching the
+  bytes costs and was paid several times per message, every refresh.
 - Switching accounts no longer mixes in a stale reading from the previous
   login. Existing installs need to update the statusline script (Settings →
   Quota source → Update Script) to get per-account stamping; until then they
