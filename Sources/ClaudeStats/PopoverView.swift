@@ -536,9 +536,10 @@ struct PopoverView: View {
 
     /// The popover's actions, including "Clear Quota Cache".
     ///
-    /// That button sits here rather than under the quota rows it acts on: in
-    /// the quota section it floated after the other accounts' groups, reading
-    /// as though it belonged to the last one. It is deliberately not gated on
+    /// That button sits here rather than under the quota rows it acts on: the
+    /// quota section is limited to the active account's own numbers (see
+    /// `AGENTS.md`, "Only the active account is shown"), so there is no natural
+    /// place for a manual action among them. It is deliberately not gated on
     /// `snapshot == nil` — the whole point is to clear a value that looks live
     /// but is wrong, every session's cache file agreeing on a bad number, so it
     /// has to be reachable while a number is on screen.

@@ -219,9 +219,9 @@ enum PopoverMetrics {
     /// Claude's brand terracotta — the app's *only* colour.
     ///
     /// Everything that isn't monochrome is this one value at full strength:
-    /// the promo link, the Claude mark in the popover header, the account
-    /// markers, the staleness warning, the sample-data and error lines, and
-    /// the menu bar's dev-build dot. Not `.accentColor` (which follows the
+    /// the promo link, the Claude mark in the popover header, the staleness
+    /// warning, the sample-data and error lines, and the menu bar's dev-build
+    /// dot. Not `.accentColor` (which follows the
     /// user's system accent, usually blue, and reads as an unrelated OS
     /// affordance rather than Claude's own), and no longer the system's
     /// `.orange`/`.red`: a warning in orange, an error in red and a link in
