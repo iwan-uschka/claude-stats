@@ -273,6 +273,12 @@ struct PopoverView: View {
             HStack(spacing: 0) {
                 UsageBar(fraction: credits.window.fractionUsed, fillStyle: .hatched)
                     .frame(minWidth: 48)
+                    // The percent `Text` beside it already states this
+                    // reading — see `WindowBarView`'s own
+                    // `.accessibilityHidden(window == nil)` for the same
+                    // reasoning, minus the conditional: this row always has a
+                    // window, so the bar's own reading is always redundant.
+                    .accessibilityHidden(true)
 
                 Text(DisplayFormat.windowPercent(credits.window))
                     .font(PopoverMetrics.valueFont)
@@ -292,8 +298,8 @@ struct PopoverView: View {
 
     private func usageCreditsHelp(_ credits: UsageCredits) -> String {
         var text = "Extra usage credits for this month, as Claude Code reports them:"
-            + " \(DisplayFormat.moneySpend(used: credits.used, limit: credits.limit)) spent"
-            + " of the monthly limit. The cap is monthly and the payload reports no"
+            + " \(DisplayFormat.moneySpend(used: credits.used, limit: credits.limit)) spent."
+            + " The cap is monthly and the payload reports no"
             + " reset time for it, so there is no countdown."
         if credits.limitReached {
             text += " The monthly limit has been reached — extra usage is paused until it resets."

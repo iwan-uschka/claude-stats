@@ -313,9 +313,11 @@ public enum DisplayFormat {
 
     /// The credits row's tooltip sentence: `€0.00 of €33.00`.
     ///
-    /// Spoken, not read off the row — the row itself shows a percentage plus
+    /// Not read off the row — the row itself shows a percentage plus
     /// ``creditsLimitCaption(_:locale:)``, but the amount actually spent isn't
-    /// on the row at all, so the tooltip states it in full.
+    /// on the row at all, so the tooltip states it in full. Not spoken by
+    /// VoiceOver either: the row's combined accessibility element reads its
+    /// visible texts, and `.help()` tooltips aren't among them.
     public static func moneySpend(
         used: MoneyAmount,
         limit: MoneyAmount,

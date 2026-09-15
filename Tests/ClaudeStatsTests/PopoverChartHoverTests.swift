@@ -350,7 +350,13 @@ final class PopoverChartHoverTests: XCTestCase {
         for countdown in ["11d 11h", "6d 23h", "2h 14m", "59m", "pending", "no data"] {
             let gap = PopoverMetrics.trailingValueColumnWidth
                 - width(countdown, PopoverMetrics.captionValueNSFont)
-            XCTAssertGreaterThanOrEqual(gap, 9.5, "\(countdown) crowds the reading beside it")
+            // `11d 11h` is still the binding string among these at 40.9 of the
+            // column's 59 pt, leaving ~18.1 pt of real margin; a floor of 17
+            // leaves ~1.1 pt of headroom, in line with this file's other
+            // floors (see the `100%` case above) rather than the ~0.1 pt an
+            // unrecalibrated floor of 9.5 — carried over from the narrower
+            // 51 pt column this measured before — would leave now.
+            XCTAssertGreaterThanOrEqual(gap, 17, "\(countdown) crowds the reading beside it")
         }
     }
 

@@ -368,8 +368,9 @@ final class DisplayFormatTests: XCTestCase {
         )
     }
 
-    /// The value column of the credits row: money on both sides, never a
-    /// percentage.
+    /// The credits row's tooltip sentence: money spent and the limit it's
+    /// measured against, spoken in full since neither appears together on the
+    /// row itself.
     func testMoneySpendReadsUsedOfLimit() {
         XCTAssertEqual(
             DisplayFormat.moneySpend(

@@ -213,9 +213,11 @@ Two independent tiers, deliberately decoupled:
        - **Money is formatted from the payload's own `currency` and
          `exponent`** via `DisplayFormat.money(_:locale:)` — never a hardcoded
          symbol, never a hardcoded `/100`, since a zero-decimal currency reports
-         `exponent: 0` and would otherwise render 100× too small. The value
-         column shows `€0.00 of €33.00`, not a percentage: 0% of an unstated
-         budget says nothing.
+         `exponent: 0` and would otherwise render 100× too small. The row shows
+         the percentage of the cap used, in the same percent column every
+         quota row shares, plus an `of <limit>` caption in the trailing
+         column; the amount actually spent is stated in full only in the
+         row's tooltip.
        - The cap is **monthly** (`extra_usage.monthly_limit` restates
          `spend.limit`) and the payload reports no reset timestamp for it, so
          the countdown column stays empty. `extra_usage.spend_limit_reached` is
@@ -607,34 +609,39 @@ me@example.com                  cached
                                     gave up went to the bar, now 123 pt wide.
                                     Tooltips and VoiceOver still say "5-hour
                                     window" — nothing competes for width there.
-                                    **The percentage and the countdown sit
-                                    flush against each other**, with no
-                                    `rowSpacing` between their columns: both are
-                                    right-aligned in columns wider than anything
-                                    they hold, so a frame gap on top of that
-                                    only pushed the percentage back against the
-                                    bar.
-                                    **The percentage's right edge sits 261 pt
+                                    **The bar, the percentage and the trailing
+                                    reading all sit flush against each other**
+                                    in one zero-spacing stack, so the row's
+                                    only real `rowSpacing` is the gap before
+                                    the bar: both trailing columns are
+                                    right-aligned in columns wider than
+                                    anything they hold, so a frame gap on top
+                                    of that would only have pushed the
+                                    percentage back against the bar.
+                                    **The percentage's right edge sits 253 pt
                                     from the row's leading edge**, which is the
                                     number the column widths are fitted to
                                     rather than a consequence of them — it was
                                     242, and moving it right is what the bar's
-                                    123 pt (from 104) is made of. Every point
-                                    came from the countdown column, 70 → 51 pt,
-                                    and none of it was spent on the gaps or on
-                                    the percent column (still 42). Paying for
-                                    it took **both countdown placeholders**:
-                                    `reset pending` → `pending` (66.5 → 39.0 pt,
-                                    it was what sized the column) and
-                                    `no reading` → `no data` (51.2 → 36.2), the
-                                    latter because it shares its row with the em
-                                    dash and would have been left 0.8 pt clear
-                                    of it. What is left is genuinely pinned:
-                                    the label column by `Sonnet weekly` (76.2 of
-                                    80), the percent column by `99.9%` (34.6 of
-                                    42), the countdown column by the longest
-                                    countdown the formatter can make, `11d 11h`
-                                    (40.9 of 51).
+                                    123 pt (from 104) is made of. The trailing
+                                    column is `rowSpacing + countdownColumnWidth`
+                                    = 59 pt, wider than any countdown string
+                                    needs — the slack is there for the
+                                    usage-credits row's `of <limit>` caption,
+                                    which shares this same column. Paying for
+                                    the bar's growth took **both countdown
+                                    placeholders**: `reset pending` → `pending`
+                                    (66.5 → 39.0 pt, it was what sized the
+                                    column) and `no reading` → `no data`
+                                    (51.2 → 36.2), the latter because it shares
+                                    its row with the em dash and would have
+                                    been left 0.8 pt clear of it. What is left
+                                    is genuinely pinned: the label column by
+                                    `Sonnet weekly` (76.2 of 80), the percent
+                                    column by `99.9%` (34.6 of 42), the
+                                    trailing column by the longest countdown
+                                    the formatter can make, `11d 11h` (40.9 of
+                                    59).
 5-hour      ░░░░░░░░░░  —      no data
                                   ← how either of the two rows above renders
                                     while no quota source reports that window
@@ -654,27 +661,30 @@ Fable weekly ░░░░░░░░░  0%
                                     Claude Code's own scoped weekly limit and
                                     deliberately claims no denominator for the
                                     percentage.
-Usage credits ▨▨░░░░░░   €0.00 of €33.00
+Usage credits ▨▨░░░░░░ 0%  of €33.00
                                   ← org usage credits, from `utilization.spend`
                                     cross-checked against `extra_usage`. Only
                                     when credits are actually on — no credits
                                     means no row at all, no placeholder, no
                                     error. Hatched fill, because it measures
                                     money against a monthly cap rather than a
-                                    rate-limit window. The value column is
-                                    money (formatted from the payload's own
-                                    `currency`/`exponent`), not a percentage,
-                                    and spans the percent + countdown columns
-                                    *and the gap in front of them* (101 pt):
-                                    the monthly cap has no reported reset, so
-                                    there is no countdown. The gap is in that
-                                    span because the two columns alone are now
-                                    93 pt and the widest locale's figure
-                                    (`20,87 € of 33,00 €`) is 99.8 — borrowing
-                                    it is what keeps this row's bar the same
-                                    123 pt as the bars above, which is why the
-                                    row nests the bar and the value in a
-                                    zero-spacing stack. The tooltip names
+                                    rate-limit window. The row shares the same
+                                    percent and trailing-value columns every
+                                    quota row does: the percentage lands in
+                                    `percentColumnWidth`, and the trailing
+                                    column carries `of <limit>`
+                                    (`creditsLimitCaption`) instead of a
+                                    countdown — the monthly cap has no reported
+                                    reset. That trailing column is sized to
+                                    `of 999,00 €` (57.2 pt at
+                                    ``captionValueFont``), the widest
+                                    three-digit, two-decimal limit in the
+                                    widest locale this formats; a four-digit
+                                    limit truncates. The bar's own accessibility
+                                    reading is hidden, since the percent `Text`
+                                    beside it already states it. The tooltip
+                                    states the amount actually spent in full —
+                                    it is nowhere on the row itself — and names
                                     the monthly framing and says when
                                     `spend_limit_reached` is set.
 +50% weekly limits promo through Aug 31 · clau.de/cc-50-promo
