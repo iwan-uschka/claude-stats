@@ -37,26 +37,34 @@ struct WindowBarView: View {
                 .truncationMode(.tail)
                 .frame(width: PopoverMetrics.labelColumnWidth, alignment: .leading)
 
-            // An unknown window draws the empty track — the same pixels as 0%,
-            // but the two text columns say which of the two it is. The bar's own
-            // "0%" accessibility value would put back the number nobody
-            // reported, so it's hidden from the row's combined announcement.
-            UsageBar(fraction: window?.fractionUsed ?? 0)
-                .frame(minWidth: 48)
-                .accessibilityHidden(window == nil)
-
-            // The two readings sit flush against each other, with no
-            // `rowSpacing` between them. Both are right-aligned in columns
-            // wider than anything they hold, so `62%` still stands 21 pt clear
-            // of `2h 2m` without one; a frame gap on top of that only pushed
-            // the percentage back towards the bar.
+            // The bar and both readings sit in one zero-spacing stack — no
+            // `rowSpacing` between any of them — so every row's percent
+            // column starts at the same x regardless of what its own
+            // trailing reading needs (a countdown here, `of €33.00` on
+            // ``PopoverView``'s usage-credits row). That single shared shape
+            // is also why the bar is a member of this stack rather than the
+            // row's own direct child: see
+            // ``PopoverMetrics/trailingValueColumnWidth``.
             //
-            // The percentage's right edge lands 261 pt from the row's leading
+            // Both readings are still right-aligned in columns wider than
+            // anything they hold, so `62%` stands clear of `2h 2m` on the
+            // column widths' own slack alone.
+            //
+            // The percentage's right edge lands 253 pt from the row's leading
             // edge, and the bar takes everything in front of it — see
-            // ``PopoverMetrics/countdownColumnWidth``, which is where those
-            // points came from, and ``PopoverMetrics/quotaBarWidth``, where
-            // they went.
+            // ``PopoverMetrics/trailingValueColumnWidth``, which is where
+            // those points came from, and ``PopoverMetrics/quotaBarWidth``,
+            // where they went.
             HStack(spacing: 0) {
+                // An unknown window draws the empty track — the same pixels as
+                // 0%, but the two text columns say which of the two it is. The
+                // bar's own "0%" accessibility value would put back the number
+                // nobody reported, so it's hidden from the row's combined
+                // announcement.
+                UsageBar(fraction: window?.fractionUsed ?? 0)
+                    .frame(minWidth: 48)
+                    .accessibilityHidden(window == nil)
+
                 Text(DisplayFormat.windowPercent(window))
                     .font(PopoverMetrics.valueFont)
                     .lineLimit(1)
@@ -75,7 +83,7 @@ struct WindowBarView: View {
                     // must truncate rather than grow the row to two lines.
                     .lineLimit(1)
                     .foregroundStyle(.secondary)
-                    .frame(width: PopoverMetrics.countdownColumnWidth, alignment: .trailing)
+                    .frame(width: PopoverMetrics.trailingValueColumnWidth, alignment: .trailing)
             }
         }
         .accessibilityElement(children: .combine)

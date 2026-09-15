@@ -368,8 +368,9 @@ final class DisplayFormatTests: XCTestCase {
         )
     }
 
-    /// The value column of the credits row: money on both sides, never a
-    /// percentage.
+    /// The credits row's tooltip sentence: money spent and the limit it's
+    /// measured against, spoken in full since neither appears together on the
+    /// row itself.
     func testMoneySpendReadsUsedOfLimit() {
         XCTAssertEqual(
             DisplayFormat.moneySpend(
@@ -386,6 +387,18 @@ final class DisplayFormatTests: XCTestCase {
                 locale: enUS
             ),
             "¥1,200 of ¥50,000"
+        )
+    }
+
+    /// The credits row's own trailing caption: the limit alone, prefixed so
+    /// it reads as a continuation of the percentage beside it.
+    func testCreditsLimitCaptionReadsOfLimit() {
+        XCTAssertEqual(
+            DisplayFormat.creditsLimitCaption(
+                MoneyAmount(amountMinor: 3_300, currency: "EUR", exponent: 2),
+                locale: enUS
+            ),
+            "of €33.00"
         )
     }
 

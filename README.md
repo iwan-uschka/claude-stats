@@ -28,7 +28,7 @@ Pre-built releases (macOS app bundle, zipped) are available on the
 
 - Menu bar glyph showing 5-hour and 7-day quota usage plus a per-model weekly limit as three thin bars, tinted for light/dark mode automatically — the third bar is empty when Claude Code reports no scoped limit
 - A fourth, hatched bar for organisation usage credits, shown only while Claude Code reports any — most accounts never see it
-- Popover with per-window usage and reset countdowns, one row per per-model weekly limit Claude Code reports, and a usage-credits row showing money spent against the monthly cap (`€0.00 of €33.00`, in whatever currency the account is billed in)
+- Popover with per-window usage and reset countdowns, one row per per-model weekly limit Claude Code reports, and a usage-credits row showing the percentage of the monthly cap used (`0%  of €33.00`, in whatever currency the account is billed in; the amount spent is in its tooltip)
 - Two matching 30-day blocks with dated axes — **By source** (CLI / VS Code / SDK-agents, plus an "Other" band for anything unrecognised) stacking tokens, **By model** (Sonnet / Opus / Haiku / Fable, plus "Other") stacking estimated spend — each over a table of that window's tokens and cost per band, with a total the two blocks share
 - Estimated spend computed locally from Anthropic's published per-token prices, so on a subscription it is what the usage would have cost, not what was billed
 - Hover either chart to read one day back: that block's table swaps its caption for the day's date and every number with it, so a spike gets a figure without a tooltip covering the plot — and hovering one block leaves the other alone

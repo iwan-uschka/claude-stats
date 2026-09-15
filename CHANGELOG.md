@@ -12,6 +12,8 @@
 - The 30-day history is no longer recomputed on the main thread for every
   session-log change, popover open or account switch — only for new data or a
   new day.
+- The usage-credits row now shows a percentage and `of <limit>`, lined up with
+  the quota rows above it; the amount spent is in its tooltip.
 
 ### Removed
 - Other accounts' quota rows are gone from the popover; only the logged-in
