@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.9.11] - 2026-09-15
+
 ### Added
 - Switching Claude Code to another account now clears the quota cache
   automatically, as "Clear Quota Cache" does. Noticed on the next quota poll.
