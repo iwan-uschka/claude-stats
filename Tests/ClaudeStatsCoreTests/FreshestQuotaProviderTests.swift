@@ -574,6 +574,32 @@ final class FreshestQuotaProviderTests: XCTestCase {
         XCTAssertEqual(carried?.fiveHour?.percentUsed, 62)
     }
 
+    /// Who is logged in comes from the shared account reader, whatever the two
+    /// sources are doing — a poll that throws still has to see a switch.
+    func testCurrentAccountIsAnsweredEvenWhenBothSourcesFail() async {
+        let provider = FreshestQuotaProvider(
+            statusline: StubProvider(.failure(.noQuotaSourceAvailable)),
+            cachedState: StubProvider(.failure(.noQuotaSourceAvailable)),
+            activeAccount: StubActiveAccount(reading: ActiveAccountReading(account: exampleOrg))
+        )
+
+        let account = await provider.currentAccount()
+
+        XCTAssertEqual(account, exampleOrg)
+    }
+
+    func testCurrentAccountIsNilWhenTheStateFileNamesNobody() async {
+        let provider = FreshestQuotaProvider(
+            statusline: StubProvider(.failure(.noQuotaSourceAvailable)),
+            cachedState: StubProvider(.failure(.noQuotaSourceAvailable)),
+            activeAccount: StubActiveAccount(reading: .unknown)
+        )
+
+        let account = await provider.currentAccount()
+
+        XCTAssertNil(account)
+    }
+
     // MARK: - Clearing
 
     /// Only the statusline cache is this app's to delete; `~/.claude.json`

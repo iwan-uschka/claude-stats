@@ -208,14 +208,28 @@ public struct FreshestQuotaProvider: QuotaProviding {
         return snapshot
     }
 
+    /// The logged-in account, from the same ``ActiveAccountProviding`` instance
+    /// the statusline reader groups by.
+    ///
+    /// Sharing it is what keeps this cheap: the reader is fingerprint-cached,
+    /// so asking here right beside a ``currentSnapshot()`` costs one `open` and
+    /// one `fstat`, not a second parse of the state file. And it is answered
+    /// whatever the two quota sources are doing — a poll that throws still
+    /// knows who is logged in, which is what `AppModel`'s account-switch
+    /// detection needs (see ``QuotaProviding/currentAccount()``).
+    public func currentAccount() async -> QuotaAccount? {
+        activeAccount.readActiveAccount().account
+    }
+
     /// Clears the statusline cache only — the per-session directory plus the
     /// legacy single file.
     ///
     /// Those files are this app's own; the other source is Claude Code's live
     /// state file, which is not ours to delete — see
     /// ``CachedUtilizationReader/clearCache()``. So this stays the escape hatch
-    /// for a stuck statusline reading, and after it runs the bars fall back to
-    /// the cached-state numbers instead of going empty.
+    /// for a stuck statusline reading (and the cleanup `AppModel` runs after an
+    /// account switch), and after it runs the bars fall back to the
+    /// cached-state numbers instead of going empty.
     public func clearCache() throws {
         try statusline.clearCache()
     }

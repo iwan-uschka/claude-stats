@@ -78,11 +78,12 @@ final class AppModel: ObservableObject {
     /// cold start, filled in from the rejected reading the error carries) and
     /// this is shown as a warning, not an error. See `runQuotaPoll()`.
     @Published private(set) var quotaWarning: String?
-    /// Set by ``clearQuotaCache()`` and shown in place of an error banner while
-    /// the cache is deliberately empty — the next reading has to come from
-    /// Claude Code's own next statusline render, which is expected to take a
-    /// moment. Cleared as soon as any poll comes back with real data (or with a
-    /// genuine failure, which is not this state).
+    /// Set by ``clearQuotaCache()`` — or by the automatic clear after an account
+    /// switch, in its own wording (see ``QuotaCacheClear``) — and shown in place
+    /// of an error banner while the cache is deliberately empty: the next
+    /// reading has to come from Claude Code's own next statusline render, which
+    /// is expected to take a moment. Cleared as soon as any poll comes back with
+    /// real data (or with a genuine failure, which is not this state).
     @Published private(set) var quotaCacheClearedNotice: String?
 
     /// Every still-live failure, not just the highest-priority one — the
@@ -99,6 +100,17 @@ final class AppModel: ObservableObject {
     /// State of the file the last `promoNotices` came from, so an unchanged
     /// file costs one `open` + one `fstat` instead of a 145 KB parse.
     private var lastPromoFingerprint: ClaudeStateFileFingerprint?
+    /// The uuid of the last account a poll saw logged in, for spotting a login
+    /// switch — see ``noteActiveAccount(_:)``.
+    ///
+    /// In memory only, deliberately: the first poll after a launch has nothing
+    /// to compare against and clears nothing. A switch made while the app
+    /// wasn't running is left to per-account grouping and the mislabel guard,
+    /// which keep the other login's files off the bars anyway — the automatic
+    /// clear is a tidy-up on top of them, not what makes the bars correct.
+    /// Holds the last *known* uuid — a poll that can't tell who is logged in
+    /// leaves it alone rather than resetting it.
+    private var lastKnownAccountUuid: String?
 
     /// Minimum time between live quota polls. Refreshes are triggered by opening
     /// the popover or by new session activity, not by a repeating timer; manual
@@ -213,11 +225,35 @@ final class AppModel: ObservableObject {
     /// that window (a retry from ``clearQuotaCache()``, or a plain
     /// ``refresh()``) leaves the notice in place rather than clobbering it
     /// with a red error banner for the same expected condition.
+    ///
+    /// Every poll first asks who is logged in
+    /// (``QuotaProviding/currentAccount()``), before and independently of the
+    /// snapshot, so a switch is seen even on a poll whose read would throw —
+    /// the usual outcome right after one. When ``noteActiveAccount(_:)``
+    /// reports a switch, this poll hands over to the shared clear path instead
+    /// of reading a snapshot the clear would drop straight away; the retry
+    /// ladder that path starts does the reading.
+    ///
+    /// That hand-over can't loop or cut itself off. The remembered uuid is
+    /// updated before the clear runs, so the ladder's own polls see the same
+    /// account and pass straight through. The clear cancels `refreshTask` —
+    /// this very poll — but only after its last suspension point, and the poll
+    /// returns immediately after. And a poll that was cancelled while it was
+    /// asking bails before touching the remembered uuid, so a superseded answer
+    /// can never be recorded over a newer one.
     private func runQuotaPoll() -> Task<Void, Never> {
         Task { [quotaProvider] in
             // The read hits disk, so a poll already superseded by a newer one
             // bails before paying for it.
             guard !Task.isCancelled else { return }
+            let account = await quotaProvider.currentAccount()
+            // Nothing between this guard and the clear suspends, so no newer
+            // poll can start in between and be cancelled by it.
+            guard !Task.isCancelled else { return }
+            if let account, self.noteActiveAccount(account) {
+                self.performQuotaCacheClear(.accountSwitch(account))
+                return
+            }
             // The per-branch guards below stay: `currentSnapshot()` is the
             // longest await here, and a poll cancelled during it must not
             // clobber `snapshot`/`quotaError` with a superseded result.
@@ -304,13 +340,56 @@ final class AppModel: ObservableObject {
     /// If the delete itself fails, none of the above happens: the existing
     /// snapshot/notice state is left untouched and the failure is surfaced via
     /// ``quotaError`` instead.
+    ///
+    /// The same body also runs on its own, without the button, once a poll
+    /// notices Claude Code's login has switched to a different account — see
+    /// ``noteActiveAccount(_:)``. Only the notice's wording differs (see
+    /// ``QuotaCacheClear``); both go through ``performQuotaCacheClear(_:)`` so
+    /// the two can't drift apart.
     func clearQuotaCache() {
+        performQuotaCacheClear(.manual)
+    }
+
+    /// Why the statusline cache is being cleared — which decides the notice
+    /// shown while the bars wait for a fresh render, and nothing else.
+    enum QuotaCacheClear: Equatable {
+        /// The "Clear Quota Cache" button.
+        case manual
+        /// A poll saw Claude Code logged in as a different account than the
+        /// one before; carries the new one, to name it.
+        case accountSwitch(QuotaAccount)
+
+        static let manualNotice =
+            "Statusline cache cleared — the bars fall back to Claude Code's own cached reading until the next statusline render."
+
+        /// Names the new account rather than restating the manual text: the
+        /// user didn't press anything, so "cache cleared" on its own would read
+        /// as something the app did unprompted, for no stated reason.
+        static func accountSwitchNotice(for account: QuotaAccount) -> String {
+            "Account switched to \(account.displayName) — statusline cache cleared, waiting for its first statusline render."
+        }
+
+        var notice: String {
+            switch self {
+            case .manual: return Self.manualNotice
+            case .accountSwitch(let account): return Self.accountSwitchNotice(for: account)
+            }
+        }
+    }
+
+    /// Shared body of ``clearQuotaCache()`` and the automatic clear after an
+    /// account switch — see the former for what each step is for.
+    private func performQuotaCacheClear(_ reason: QuotaCacheClear) {
         do {
             try quotaProvider.clearCache()
         } catch {
             // The delete itself failed — nothing was actually cleared, so don't
             // show the "cleared" notice or start a repoll; surface the real
-            // failure instead.
+            // failure instead. For an automatic clear the switch still counts
+            // as handled (the uuid was already recorded): retrying the delete
+            // on every poll would pin this error over the bars for as long as
+            // the fault lasts, while per-account grouping keeps the old
+            // login's files off them regardless.
             quotaError = error.localizedDescription
             reloadLocalStats()
             return
@@ -319,12 +398,36 @@ final class AppModel: ObservableObject {
         snapshot = nil
         quotaError = nil
         quotaWarning = nil
-        quotaCacheClearedNotice = "Statusline cache cleared — the bars fall back to Claude Code's own cached reading until the next statusline render."
+        quotaCacheClearedNotice = reason.notice
 
         reloadLocalStats()
 
         refreshTask?.cancel()
         pollAfterInstall()
+    }
+
+    /// Records the account a poll just saw and says whether it is a switch
+    /// worth clearing the cache for: `true` only for a known account followed
+    /// by a *different* known account.
+    ///
+    /// - The first account seen after launch is recorded, never a switch —
+    ///   there is nothing to compare it with.
+    /// - Unknown (no state file, a half-written one, no `oauthAccount`) never
+    ///   reaches here and never overwrites the record. So known → unknown
+    ///   clears nothing, and unknown → known clears nothing *unless* the
+    ///   account that comes back differs from the last known one: A → unknown
+    ///   → B is a switch, because the state file blinking out mid-swap is
+    ///   exactly how a login change can look to a poll.
+    /// - The same uuid again is not a switch, which is also what stops the
+    ///   clear's own retry ladder from triggering another clear.
+    ///
+    /// Latency is up to one ``quotaPollInterval``: the state file lives in
+    /// `$HOME`, which isn't watched, so a switch is only noticed by the next
+    /// poll.
+    private func noteActiveAccount(_ account: QuotaAccount) -> Bool {
+        defer { lastKnownAccountUuid = account.uuid }
+        guard let previous = lastKnownAccountUuid else { return false }
+        return previous != account.uuid
     }
 
     /// Right after installing the hook — or after ``clearQuotaCache()`` — the
@@ -513,8 +616,7 @@ extension AppModel {
     /// notice explaining what the popover is waiting for.
     static func previewCacheCleared() -> AppModel {
         let model = preview(snapshot: nil)
-        model.quotaCacheClearedNotice =
-            "Statusline cache cleared — the bars fall back to Claude Code's own cached reading until the next statusline render."
+        model.quotaCacheClearedNotice = QuotaCacheClear.manualNotice
         return model
     }
 

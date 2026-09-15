@@ -355,7 +355,9 @@ public struct StatuslineCacheReader: QuotaProviding, OtherAccountReadingsReporti
     /// The escape hatch for a reading that looks stuck or wrong: per-session
     /// files stop one quiet session from overwriting a busy one, but they can't
     /// help if every file on disk is somehow wrong. Removing them makes the next
-    /// statusline render the sole source of what's on screen. Until one happens,
+    /// statusline render the sole source of what's on screen. (`AppModel` also
+    /// runs it through ``FreshestQuotaProvider`` after an account switch, when
+    /// the previous login's files are of no further use.) Until one happens,
     /// ``currentSnapshot()`` throws
     /// ``ClaudeStatsError/noQuotaSourceAvailable`` — expected, not a failure.
     /// Best-effort on absence: a missing directory or file is not an error,
