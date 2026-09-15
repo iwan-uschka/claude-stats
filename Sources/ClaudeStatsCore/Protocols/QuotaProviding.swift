@@ -48,21 +48,6 @@ public protocol QuotaProviding: Sendable {
     /// to bypass.
     func currentUsageCredits() async throws -> UsageCreditsReading
 
-    /// Latest reading for every account this source can see **other** than the
-    /// active one, one merged snapshot each, newest capture first.
-    ///
-    /// Decoration, so unlike ``currentSnapshot()`` it never throws and is never
-    /// gated on staleness: the popover renders each of these with its own
-    /// freshness tag, and an account whose readings went cold is exactly the
-    /// thing the user wants to see. An empty array is the normal answer — one
-    /// account, or a source that cannot tell accounts apart at all, which is
-    /// why the default implementation returns one.
-    ///
-    /// A group whose windows have all rolled over contributes nothing and is
-    /// left out entirely: with no live window there is no row to draw, only a
-    /// label over two "no reading" lines.
-    func otherAccountSnapshots() async -> [QuotaSnapshot]
-
     /// Discards whatever on-disk or cached state backs this source, so the next
     /// ``currentSnapshot()`` reflects only data written after this call.
     ///
@@ -87,8 +72,26 @@ extension QuotaProviding {
             disabledReason: snapshot.usageCreditsDisabledReason
         )
     }
+}
 
-    public func otherAccountSnapshots() async -> [QuotaSnapshot] { [] }
+/// A quota source that can see readings for accounts other than the active
+/// one, and can say whether it has any — the single question
+/// ``FreshestQuotaProvider`` needs answered to tell "readings exist, none of
+/// them this account's" from "nothing on disk at all" (see its "Accounts"
+/// note).
+///
+/// Internal and separate from ``QuotaProviding`` on purpose. The protocol used
+/// to carry a public `otherAccountSnapshots()` that built a full snapshot per
+/// inactive account for the popover to list; that display is gone (see
+/// `AGENTS.md`, "Only the active account is shown"), and this yes/no is all
+/// that is left of it. ``StatuslineCacheReader`` is the only real conformer; a
+/// statusline source that doesn't conform can't tell accounts apart, and
+/// ``FreshestQuotaProvider`` treats it as having no other accounts.
+protocol OtherAccountReadingsReporting: Sendable {
+    /// `true` when some account group other than the one the active reading
+    /// comes from still holds a live window. Never throws: a file-level fault
+    /// is the snapshot path's to report, and here it simply means "no".
+    func hasReadingsForOtherAccounts() -> Bool
 }
 
 /// The reference the mislabel guard compares a statusline reading against — see

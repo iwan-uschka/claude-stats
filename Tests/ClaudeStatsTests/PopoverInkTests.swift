@@ -95,43 +95,6 @@ final class PopoverInkTests: XCTestCase {
         }
     }
 
-    // MARK: - Account markers
-
-    func testTheAccountStateMarkersAddNoColourToTheCard() throws {
-        // The checkmark and the cross are monochrome, inheriting the ink of the
-        // row they sit in. They were briefly brand terracotta on the reading
-        // that the one-colour rule meant everything non-ink should be that
-        // colour; it doesn't — the rule is that nothing takes a colour of its
-        // *own*, and two terracotta badges in the card's two most prominent
-        // rows pull the eye to the least urgent thing on it.
-        //
-        // Measured as a difference rather than by hunting an 11 pt glyph:
-        // `showsAccountStateMarkers` is the one thing that differs between
-        // these two models, the quota rows behind them are identical, and the
-        // other account's own rows are secondary-ink text. So every terracotta
-        // pixel in one card has a twin in the other — unless a marker took ink.
-        let now = Self.renderDate
-        var active = MockQuotaProvider.sampleSnapshot(now: now)
-        active.account = MockQuotaProvider.sampleAccount()
-        let other = MockQuotaProvider.sampleOtherAccountSnapshot(now: now)
-
-        for (name, appearance, card) in Self.cards {
-            let withMarkers = AppModel.preview(snapshot: active, otherAccounts: [other])
-            let withoutMarkers = AppModel.preview(snapshot: active, otherAccounts: [])
-            XCTAssertTrue(withMarkers.showsAccountStateMarkers, "the fixture must show markers")
-            XCTAssertFalse(withoutMarkers.showsAccountStateMarkers, "the fixture must not show markers")
-
-            let marked = try render(withMarkers, appearance: appearance, card: card)
-            let bare = try render(withoutMarkers, appearance: appearance, card: card)
-
-            XCTAssertEqual(
-                terracottaCount(in: marked),
-                terracottaCount(in: bare),
-                "the \(name) account markers painted \(terracottaCount(in: marked) - terracottaCount(in: bare)) pixels of brand ink"
-            )
-        }
-    }
-
     // MARK: - Warning, error and sample-data lines
 
     func testTheWarningErrorAndSampleDataLinesAreSetInTheBrandColour() throws {

@@ -985,10 +985,8 @@ final class StatuslineCacheReaderTests: XCTestCase {
 
         // The legacy file's later reset would have won a cross-account merge.
         XCTAssertEqual(snapshot.fiveHour?.percentUsed, 10)
-        let others = await reader.otherAccountSnapshots()
-        XCTAssertEqual(others.count, 1)
-        XCTAssertNil(others.first?.account)
-        XCTAssertEqual(others.first?.fiveHour?.percentUsed, 90)
+        // …and it still counts as a group of its own, beside the served one.
+        XCTAssertTrue(reader.hasReadingsForOtherAccounts())
     }
 
     /// The `utilization` copy is per-login too — it is lifted out of
@@ -1026,65 +1024,49 @@ final class StatuslineCacheReaderTests: XCTestCase {
 
     // MARK: - Other accounts
 
-    /// Everything except the group that served, newest first, each carrying its
-    /// own account and its own capture time.
-    func testOtherAccountSnapshotsExcludeTheActiveGroup() async throws {
+    /// The group that served is never "another account": with only the
+    /// active account's files on disk the answer is no, and one more stamped
+    /// group beside it turns it to yes.
+    func testOtherAccountReadingsExcludeTheActiveGroup() async throws {
         try write(session: "current", cache(
             capturedAt: now.addingTimeInterval(-30),
             windowJSON("five_hour", percent: 4, resetsAt: now.addingTimeInterval(3600)),
             account: exampleOrg
         ))
+        let reader = makeReader(activeAccount: ActiveAccountReading(account: exampleOrg))
+        XCTAssertFalse(reader.hasReadingsForOtherAccounts())
+
         try write(session: "left-behind", cache(
             capturedAt: now.addingTimeInterval(-3 * 3600),
             windowJSON("seven_day", percent: 56, resetsAt: now.addingTimeInterval(20 * 3600)),
             account: otherOrg
         ))
-        try write(session: "unstamped", cache(
-            capturedAt: now.addingTimeInterval(-2 * 3600),
-            windowJSON("seven_day", percent: 31, resetsAt: now.addingTimeInterval(20 * 3600))
-        ))
-
-        let others = await makeReader(
-            activeAccount: ActiveAccountReading(account: exampleOrg)
-        ).otherAccountSnapshots()
-
-        XCTAssertEqual(others.map { $0.account }, [nil, otherOrg])
-        XCTAssertEqual(others.map { $0.sevenDay?.percentUsed }, [31, 56])
-        // Ungated on staleness — these rows carry their own freshness tag, and
-        // an account nobody is logged in as is exactly the cold one.
-        XCTAssertTrue(others.allSatisfy { $0.isStale(asOf: now) })
+        // Ungated on staleness: a cold other account, captured hours ago, is
+        // still proof that readings exist on this Mac.
+        XCTAssertTrue(reader.hasReadingsForOtherAccounts())
     }
 
     /// The state file names an account with no matching group — the same setup
     /// `testActiveAccountWithNoFilesReportsNoQuotaSourceAvailable` throws on.
-    /// Every group on disk, the unstamped one included, is then "other":
-    /// nothing is currently being served, and that is what lets
-    /// `FreshestQuotaProvider` tell "readings exist, none of them this
-    /// account's" from "nothing at all".
-    func testOtherAccountSnapshotsIncludeEveryGroupWhenTheActiveAccountHasNone() async throws {
-        try write(session: "other", cache(
-            capturedAt: now.addingTimeInterval(-30),
-            windowJSON("five_hour", percent: 56, resetsAt: now.addingTimeInterval(3600)),
-            account: otherOrg
-        ))
+    /// Every group on disk is then "other": nothing is currently being served,
+    /// and that is what lets `FreshestQuotaProvider` tell "readings exist,
+    /// none of them this account's" from "nothing at all". The unstamped group
+    /// counts on its own.
+    func testOtherAccountReadingsIncludeEveryGroupWhenTheActiveAccountHasNone() async throws {
         try write(session: "unstamped", cache(
             capturedAt: now.addingTimeInterval(-20),
             windowJSON("five_hour", percent: 12, resetsAt: now.addingTimeInterval(3600))
         ))
 
-        let others = await makeReader(
+        XCTAssertTrue(makeReader(
             activeAccount: ActiveAccountReading(account: exampleOrg)
-        ).otherAccountSnapshots()
-
-        XCTAssertEqual(others.map { $0.account }, [nil, otherOrg])
-        XCTAssertEqual(others.map { $0.fiveHour?.percentUsed }, [12, 56])
+        ).hasReadingsForOtherAccounts())
     }
 
-    /// A group whose every window has rolled over has nothing to draw: no
-    /// label, no two "no reading" lines. This is the rule that keeps the
-    /// unknown-account group from appearing on a machine whose only unstamped
-    /// files are ancient.
-    func testOtherAccountGroupWithNoLiveWindowIsLeftOut() async throws {
+    /// A group whose every window has rolled over would merge into no snapshot
+    /// at all, so it doesn't count: a machine whose only other files are
+    /// ancient gets the plain "no quota source" advice, not two empty bars.
+    func testOtherAccountGroupWithNoLiveWindowDoesNotCount() async throws {
         try write(session: "current", cache(
             capturedAt: now.addingTimeInterval(-30),
             windowJSON("five_hour", percent: 4, resetsAt: now.addingTimeInterval(3600)),
@@ -1096,32 +1078,41 @@ final class StatuslineCacheReaderTests: XCTestCase {
             account: otherOrg
         ))
 
-        let others = await makeReader(
+        XCTAssertFalse(makeReader(
             activeAccount: ActiveAccountReading(account: exampleOrg)
-        ).otherAccountSnapshots()
-
-        XCTAssertEqual(others, [])
+        ).hasReadingsForOtherAccounts())
     }
 
-    /// One account, the ordinary case: nothing to list beside it.
-    func testSingleAccountHasNoOtherAccounts() async throws {
+    /// One live window is enough, and a window with no `resets_at` can't be
+    /// shown to have expired — the merge's rule 1, applied the same way.
+    func testOtherAccountGroupWithOneLiveWindowCounts() async throws {
+        try write(session: "half-expired", cache(
+            capturedAt: now.addingTimeInterval(-600),
+            windowJSON("five_hour", percent: 56, resetsAt: now.addingTimeInterval(-60)),
+            windowJSON("seven_day", percent: 31, resetsAt: nil),
+            account: otherOrg
+        ))
+
+        XCTAssertTrue(makeReader(
+            activeAccount: ActiveAccountReading(account: exampleOrg)
+        ).hasReadingsForOtherAccounts())
+    }
+
+    /// One account, the ordinary case: nothing beside it.
+    func testSingleAccountHasNoOtherAccountReadings() async throws {
         try write(filteredCache(capturedAt: now.addingTimeInterval(-30)))
 
-        let others = await makeReader().otherAccountSnapshots()
-
-        XCTAssertEqual(others, [])
+        XCTAssertFalse(makeReader().hasReadingsForOtherAccounts())
     }
 
-    /// Decoration, never a failure: a file-level fault is the snapshot path's
-    /// to report, and these rows just don't appear.
-    func testOtherAccountSnapshotsNeverThrow() async throws {
+    /// Never a failure: a file-level fault is the snapshot path's to report,
+    /// and here it just means no.
+    func testOtherAccountReadingsNeverThrow() async throws {
         try write(session: "broken-a", "{ this is not json")
-        var others = await makeReader().otherAccountSnapshots()
-        XCTAssertEqual(others, [])
+        XCTAssertFalse(makeReader().hasReadingsForOtherAccounts())
 
         try FileManager.default.removeItem(at: sessionDirectory)
-        others = await makeReader().otherAccountSnapshots()
-        XCTAssertEqual(others, [])
+        XCTAssertFalse(makeReader().hasReadingsForOtherAccounts())
     }
 
     // MARK: - The mislabel guard
@@ -1275,13 +1266,27 @@ final class StatuslineCacheReaderTests: XCTestCase {
             account: exampleOrg
         ))
 
-        let others = await makeReader(activeAccount: ActiveAccountReading(
+        XCTAssertTrue(makeReader(activeAccount: ActiveAccountReading(
             account: exampleOrg,
             reference: reference(exampleOrg, sevenDayResetsIn: 4 * 3600)
-        )).otherAccountSnapshots()
+        )).hasReadingsForOtherAccounts())
+    }
 
-        XCTAssertEqual(others.map { $0.account }, [otherOrg])
-        XCTAssertEqual(others.first?.sevenDay?.percentUsed, 56)
+    /// The reverse: a reading the guard drops is not "another account's"
+    /// either. Stamped with the active account but carrying a foreign 7-day
+    /// window, it is removed before grouping, so it can't make an account with
+    /// nothing else on disk look like one whose readings merely aren't there.
+    func testReadingDroppedByTheGuardDoesNotCountAsAnotherAccount() async throws {
+        try write(session: "mislabelled", cache(
+            capturedAt: now.addingTimeInterval(-10),
+            windowJSON("seven_day", percent: 56, resetsAt: now.addingTimeInterval(20 * 3600)),
+            account: exampleOrg
+        ))
+
+        XCTAssertFalse(makeReader(activeAccount: ActiveAccountReading(
+            account: exampleOrg,
+            reference: reference(exampleOrg, sevenDayResetsIn: 4 * 3600)
+        )).hasReadingsForOtherAccounts())
     }
 
     // MARK: - Default path

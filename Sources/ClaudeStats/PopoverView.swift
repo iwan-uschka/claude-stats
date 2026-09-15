@@ -154,7 +154,6 @@ struct PopoverView: View {
                     .foregroundStyle(quotaFallbackStyle)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            otherAccountsSection
         }
     }
 
@@ -166,25 +165,17 @@ struct PopoverView: View {
     /// actually said which one (see ``AppModel/quotaSectionTitle``); the
     /// tooltip is the one thing that still distinguishes a named account from
     /// the unstamped fallback, since the title itself deliberately reads as a
-    /// section name in that case.
+    /// section name in that case. Only the active account is ever shown —
+    /// see `AGENTS.md` for why the inactive-account rows were removed.
     ///
     /// The tag is trailing rather than on a line of its own: it is metadata
     /// about the numbers below, and the title row has the width for it.
     private var quotaTitleRow: some View {
         HStack {
-            HStack(spacing: PopoverMetrics.accountMarkerSpacing) {
-                if model.showsAccountStateMarkers {
-                    accountStateMarker(active: true)
-                }
-                Text(model.quotaSectionTitle)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-            }
-            // Marker and title are one row, not two swipe stops: on its own the
-            // checkmark reads as a bare "Active account" image next to an
-            // unrelated name.
-            .accessibilityElement(children: .combine)
-            .help(accountHelp(for: model.snapshot))
+            Text(model.quotaSectionTitle)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .help(accountHelp(for: model.snapshot))
             Spacer(minLength: PopoverMetrics.rowSpacing)
             if let snapshot = model.snapshot {
                 sourceTagLine(for: snapshot)
@@ -207,116 +198,6 @@ struct PopoverView: View {
             if let notice = model.promoNotice(for: bar) {
                 promoNoticeLine(notice)
             }
-        }
-    }
-
-    /// One collapsed group per account this Mac has readings for *other* than
-    /// the active one — what is left behind after switching the global login.
-    ///
-    /// Each group starts closed, so the popover's height doesn't grow by a
-    /// whole second account's worth of rows for readings the user is not
-    /// currently living in. The collapsed row is a cross icon and the account
-    /// name, nothing else — no summary percentage, which would be a number
-    /// about an account the bars above aren't describing. It pairs with the
-    /// checkmark ``quotaTitleRow`` takes on once these groups exist, and is set
-    /// in the same ``PopoverMetrics/sectionTitleFont`` in secondary ink, one
-    /// step dimmer than the active title, so the two read as one list of
-    /// accounts rather than as a section and a footnote under it.
-    ///
-    /// The whole row is one plain `Button`, not a ``DisclosureGroup``: a
-    /// disclosure toggles from its chevron alone, and puts that chevron on the
-    /// left where it reports the group's *state*. Here the caret is trailing
-    /// and names the **action** instead — `chevron.down` on a closed row means
-    /// "reveal below", `chevron.up` on an open one means "collapse" — which is
-    /// the one thing a reader of a collapsed row wants to know.
-    ///
-    /// Separated by whitespace alone — ``PopoverMetrics/accountGroupSpacing``,
-    /// no divider and no indent. A `Divider()` per group is what the popover
-    /// used to do, and it collided with the dividers that mark the top-level
-    /// sections: the same line meant both "next section" and "next account".
-    ///
-    /// Expanded, the content is exactly what used to render inline: the same
-    /// rows and the same "no reading" rendering as the active account, each
-    /// under the same ``sourceTagLine(for:)`` rule — in practice absent, since
-    /// these groups come from statusline files, which carry no `cached` marker.
-    /// That includes the usage-credits row and its `disabled_reason` tooltip:
-    /// `spend` normally only reaches us for the active login, but a cache file
-    /// written just before a switch can still carry one, and showing a stale
-    /// reading beats silently dropping a reading the other rows would have
-    /// shown. Empty on a one-account machine, which is every machine until the
-    /// user switches accounts.
-    ///
-    /// Which groups are open lives on ``AppModel/expandedOtherAccounts`` rather
-    /// than in `@State` here, so it survives the popover being closed and
-    /// reopened, and a poll rebuilding the rows — and is deliberately not
-    /// persisted across launches, since the set of other accounts isn't
-    /// either.
-    @ViewBuilder
-    private var otherAccountsSection: some View {
-        // Explicitly guarded rather than left to an empty `ForEach`, so the
-        // one-account machine — every machine until the user switches logins —
-        // puts nothing at all into the quota `VStack` here.
-        if !model.otherAccountSnapshots.isEmpty {
-            VStack(alignment: .leading, spacing: PopoverMetrics.accountGroupSpacing) {
-                ForEach(Array(model.otherAccountSnapshots.enumerated()), id: \.offset) { _, snapshot in
-                    let expanded = model.isOtherAccountExpanded(snapshot)
-                    VStack(alignment: .leading, spacing: PopoverMetrics.quotaRowSpacing) {
-                        Button {
-                            model.toggleOtherAccountExpansion(for: snapshot)
-                        } label: {
-                            HStack(spacing: PopoverMetrics.accountMarkerSpacing) {
-                                accountStateMarker(active: false)
-                                // An unstamped group is genuinely "we don't know", not a
-                                // nameless account — see `AppModel.otherAccountTitle(for:)`.
-                                Text(model.otherAccountTitle(for: snapshot))
-                                    .lineLimit(1)
-                                    .truncationMode(.tail)
-                                Spacer(minLength: PopoverMetrics.rowSpacing)
-                                // The caret names the action, not the state:
-                                // pointing down on a closed row because
-                                // clicking reveals rows below it, up on an open
-                                // one because clicking folds them away. It
-                                // inherits the row's ink, so it reads as part
-                                // of the label rather than as a control bolted
-                                // to its end.
-                                Image(systemName: expanded ? "chevron.up" : "chevron.down")
-                                    .accessibilityHidden(true)
-                            }
-                            .font(PopoverMetrics.sectionTitleFont)
-                            // Secondary ink on purpose, against the active
-                            // title's primary: same weight, one step dimmer, so
-                            // the row reads as an account heading that is not
-                            // the one the bars above describe. Icon, name and
-                            // caret all inherit it.
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .help(accountHelp(for: snapshot))
-                        .accessibilityAddTraits(.isButton)
-                        .accessibilityValue(expanded ? "expanded" : "collapsed")
-
-                        if expanded {
-                            VStack(alignment: .leading, spacing: 4) {
-                                WindowBarView(title: QuotaWindowKind.fiveHour.title, window: snapshot.fiveHour, now: now)
-                                WindowBarView(title: QuotaWindowKind.sevenDay.title, window: snapshot.sevenDay, now: now)
-                                ForEach(snapshot.scopedWeekly) { limit in
-                                    scopedWeeklyRow(limit)
-                                }
-                                if let credits = snapshot.usageCredits {
-                                    usageCreditsRow(credits)
-                                }
-                                sourceTagLine(for: snapshot)
-                            }
-                        }
-                    }
-                }
-            }
-            // The quota `VStack` already spaces its rows; this tops the first
-            // group's gap up to `accountGroupSpacing` so it reads as separated
-            // from the bars rather than as one more row under them.
-            .padding(.top, PopoverMetrics.accountGroupSpacing - PopoverMetrics.quotaRowSpacing)
         }
     }
 
@@ -417,11 +298,7 @@ struct PopoverView: View {
     /// freshness is not displayed; an over-threshold reading surfaces as the
     /// terracotta warning line under the bars instead.
     ///
-    /// Trailing on the active account's title row (see ``quotaTitleRow``) and
-    /// at the foot of an expanded other-account group, which has no title row
-    /// of its own. Those groups come from statusline files, so in practice
-    /// the foot stays empty; it is rendered from the same rule so the two
-    /// places can't drift.
+    /// Trailing on the active account's title row (see ``quotaTitleRow``).
     @ViewBuilder
     private func sourceTagLine(for snapshot: QuotaSnapshot) -> some View {
         if let tag = DisplayFormat.sourceTag(confidence: snapshot.confidence) {
@@ -432,27 +309,7 @@ struct PopoverView: View {
         }
     }
 
-    /// The active/inactive marker in front of an account name: the same
-    /// checkmark Settings shows next to "Statusline hook installed", and a
-    /// cross for a login nobody is signed in as. Deliberately uncoloured —
-    /// they inherit the title's ink, primary on the active account and
-    /// secondary on a collapsed one — because "inactive" is a state, not a
-    /// fault; the shapes alone carry the contrast. Shown only while both
-    /// kinds exist, see ``AppModel/showsAccountStateMarkers``.
-    ///
-    /// They were briefly brand terracotta, on the reading that the one-colour
-    /// rule meant *everything* non-ink should be that colour. It doesn't: the
-    /// rule says nothing may take a colour of its own, not that a monochrome
-    /// glyph has to take Claude's. Two terracotta badges in the two most
-    /// prominent rows of the card pulled the eye to the least urgent thing on
-    /// it, and left the row's own ink saying nothing about which account it is.
-    private func accountStateMarker(active: Bool) -> some View {
-        Image(systemName: active ? "checkmark.circle.fill" : "xmark.circle.fill")
-            .accessibilityLabel(active ? "Active account" : "Inactive account")
-    }
-
-    /// Tooltip for an account title or disclosure label: which account the
-    /// rows describe, plus the `disabled_reason` for missing usage credits
+    /// Tooltip for the quota section's title: which account the rows describe, plus the `disabled_reason` for missing usage credits
     /// when the payload gave one.
     ///
     /// That reason has nowhere else to go: with no credits there is no credits
@@ -679,9 +536,10 @@ struct PopoverView: View {
 
     /// The popover's actions, including "Clear Quota Cache".
     ///
-    /// That button sits here rather than under the quota rows it acts on: in
-    /// the quota section it floated after the other accounts' groups, reading
-    /// as though it belonged to the last one. It is deliberately not gated on
+    /// That button sits here rather than under the quota rows it acts on: the
+    /// quota section is limited to the active account's own numbers (see
+    /// `AGENTS.md`, "Only the active account is shown"), so there is no natural
+    /// place for a manual action among them. It is deliberately not gated on
     /// `snapshot == nil` — the whole point is to clear a value that looks live
     /// but is wrong, every session's cache file agreeing on a bad number, so it
     /// has to be reachable while a number is on screen.
@@ -725,14 +583,6 @@ struct PopoverView: View {
         model: .preview(snapshot: nil, error: ClaudeStatsError.noQuotaSourceAvailable.localizedDescription),
         clock: PopoverClock()
     )
-}
-
-#Preview("Popover — two accounts") {
-    PopoverView(model: .previewTwoAccounts(), clock: PopoverClock())
-}
-
-#Preview("Popover — two accounts, other one expanded") {
-    PopoverView(model: .previewTwoAccounts(expanded: true), clock: PopoverClock())
 }
 
 #Preview("Popover — stale warning") {

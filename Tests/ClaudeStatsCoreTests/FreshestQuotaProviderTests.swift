@@ -6,7 +6,7 @@ final class FreshestQuotaProviderTests: XCTestCase {
 
     /// A ``QuotaProviding`` whose every call is scripted, and which records
     /// whether ``clearCache()`` reached it.
-    private struct StubProvider: QuotaProviding {
+    private struct StubProvider: QuotaProviding, OtherAccountReadingsReporting {
         final class Box: @unchecked Sendable {
             var clearCacheCallCount = 0
         }
@@ -20,18 +20,16 @@ final class FreshestQuotaProviderTests: XCTestCase {
         /// Same idea as `scopedWeeklyResult`, for the credits half of the
         /// staleness bypass.
         let usageCreditsResult: Result<UsageCreditsReading, ClaudeStatsError>?
-        /// Readings for accounts other than the active one. Empty unless a test
-        /// says otherwise — which is also what keeps the *other* tests away
-        /// from a real `~/.claude.json`: the provider only asks who is logged
-        /// in once this is non-empty.
-        let otherAccounts: [QuotaSnapshot]
+        /// Whether some account other than the active one has readings.
+        /// `false` unless a test says otherwise.
+        let otherAccounts: Bool
         let box = Box()
 
         init(
             _ result: Result<QuotaSnapshot, ClaudeStatsError>,
             scopedWeekly scopedWeeklyResult: Result<[QuotaScopedLimit], ClaudeStatsError>? = nil,
             usageCredits usageCreditsResult: Result<UsageCreditsReading, ClaudeStatsError>? = nil,
-            otherAccounts: [QuotaSnapshot] = []
+            otherAccounts: Bool = false
         ) {
             self.result = result
             self.scopedWeeklyResult = scopedWeeklyResult
@@ -39,7 +37,7 @@ final class FreshestQuotaProviderTests: XCTestCase {
             self.otherAccounts = otherAccounts
         }
 
-        func otherAccountSnapshots() async -> [QuotaSnapshot] { otherAccounts }
+        func hasReadingsForOtherAccounts() -> Bool { otherAccounts }
 
         func currentSnapshot() async throws -> QuotaSnapshot {
             try result.get()
@@ -483,40 +481,16 @@ final class FreshestQuotaProviderTests: XCTestCase {
         func readActiveAccount() -> ActiveAccountReading { reading }
     }
 
-    private let otherOrg = QuotaAccount(
-        uuid: "7d2b6a10-3c55-4f8e-9a21-0b4c5d6e7f80", organizationName: "Other Org")
     private let exampleOrg = QuotaAccount(
         uuid: "0f9c1d3e-8a4b-4c2d-9e1f-6b7a8c9d0e1f", organizationName: "Example Org")
-
-    /// Other accounts come from the statusline cache alone — the backup source
-    /// reads a file that only ever describes the current login.
-    func testOtherAccountSnapshotsComeFromTheStatuslineSource() async {
-        var other = snapshot(.official, percent: 56, capturedAgo: 3_600)
-        other.account = otherOrg
-        let provider = FreshestQuotaProvider(
-            statusline: StubProvider(
-                .success(snapshot(.official, percent: 4, capturedAgo: 30)),
-                otherAccounts: [other]
-            ),
-            cachedState: StubProvider(.success(snapshot(.cachedOfficial, percent: 11, capturedAgo: 900))),
-            activeAccount: StubActiveAccount(reading: ActiveAccountReading(account: exampleOrg))
-        )
-
-        let others = await provider.otherAccountSnapshots()
-
-        XCTAssertEqual(others.map { $0.account }, [otherOrg])
-        XCTAssertEqual(others.first?.fiveHour?.percentUsed, 56)
-    }
 
     /// The one case the primary/backup ladder can't express: there *are*
     /// readings, none of them this login's, and the backup has nothing either.
     /// "No reading" for the active account beats both an error and somebody
     /// else's numbers.
     func testActiveAccountWithNoReadingAnywhereIsNoReadingNotAnError() async throws {
-        var other = snapshot(.official, percent: 56, capturedAgo: 3_600)
-        other.account = otherOrg
         let provider = FreshestQuotaProvider(
-            statusline: StubProvider(.failure(.noQuotaSourceAvailable), otherAccounts: [other]),
+            statusline: StubProvider(.failure(.noQuotaSourceAvailable), otherAccounts: true),
             cachedState: StubProvider(.failure(.noQuotaSourceAvailable)),
             activeAccount: StubActiveAccount(reading: ActiveAccountReading(account: exampleOrg)),
             now: { self.now }
@@ -530,6 +504,26 @@ final class FreshestQuotaProviderTests: XCTestCase {
         // Dated now: what was observed now is the *absence*, and another
         // account's file must not put its age on this account's tag.
         XCTAssertEqual(result.capturedAt, now)
+    }
+
+    /// A statusline source that doesn't conform to
+    /// ``OtherAccountReadingsReporting`` can't tell accounts apart, so it has no
+    /// other account to point at: the error stands, exactly as it did when the
+    /// protocol's default reported no other accounts.
+    func testStatuslineThatCannotTellAccountsApartStillThrows() async {
+        struct UngroupedProvider: QuotaProviding {
+            func currentSnapshot() async throws -> QuotaSnapshot { throw ClaudeStatsError.noQuotaSourceAvailable }
+            func clearCache() throws {}
+        }
+        let provider = FreshestQuotaProvider(
+            statusline: UngroupedProvider(),
+            cachedState: StubProvider(.failure(.noQuotaSourceAvailable)),
+            activeAccount: StubActiveAccount(reading: ActiveAccountReading(account: exampleOrg))
+        )
+
+        await assertThrows(.noQuotaSourceAvailable) {
+            try await provider.currentSnapshot()
+        }
     }
 
     /// Nothing on disk for any account is still the old error — "Claude Code
@@ -550,10 +544,8 @@ final class FreshestQuotaProviderTests: XCTestCase {
     /// With no state file to name the active account there is nothing to report
     /// an empty reading *for*, so the error stands.
     func testUnknownActiveAccountWithOtherReadingsStillThrows() async {
-        var other = snapshot(.official, percent: 56, capturedAgo: 3_600)
-        other.account = otherOrg
         let provider = FreshestQuotaProvider(
-            statusline: StubProvider(.failure(.noQuotaSourceAvailable), otherAccounts: [other]),
+            statusline: StubProvider(.failure(.noQuotaSourceAvailable), otherAccounts: true),
             cachedState: StubProvider(.failure(.noQuotaSourceAvailable)),
             activeAccount: StubActiveAccount(reading: .unknown)
         )
@@ -566,13 +558,11 @@ final class FreshestQuotaProviderTests: XCTestCase {
     /// A stale reading is a reading: it keeps winning the error slot, and is
     /// not replaced by an empty "no reading" snapshot.
     func testStaleActiveReadingIsNotReplacedByAnEmptyOne() async {
-        var other = snapshot(.official, percent: 56, capturedAgo: 3_600)
-        other.account = otherOrg
         let provider = FreshestQuotaProvider(
             statusline: StubProvider(
                 .failure(.staleQuotaSource(
                     snapshot: snapshot(.official, percent: 62, capturedAgo: 1_200), age: 1_200)),
-                otherAccounts: [other]
+                otherAccounts: true
             ),
             cachedState: StubProvider(.failure(.noQuotaSourceAvailable)),
             activeAccount: StubActiveAccount(reading: ActiveAccountReading(account: exampleOrg))

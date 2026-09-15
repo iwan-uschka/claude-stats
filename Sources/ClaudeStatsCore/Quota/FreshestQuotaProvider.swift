@@ -169,11 +169,15 @@ public struct FreshestQuotaProvider: QuotaProviding {
     /// account's freshness tag.
     private func emptyActiveAccountReading() async -> QuotaSnapshot? {
         // Account check first: it is a mostly-cached read of the state file,
-        // while `otherAccountSnapshots()` re-lists and re-parses every session
-        // cache file. With no account named there is nothing to report the
-        // absence *for*, so the expensive scan is never worth paying for.
+        // while `hasReadingsForOtherAccounts()` re-lists and re-parses every
+        // session cache file. With no account named there is nothing to report
+        // the absence *for*, so the expensive scan is never worth paying for.
+        // A statusline source that can't tell accounts apart has no other
+        // accounts to point at — see `OtherAccountReadingsReporting`.
         guard let account = activeAccount.readActiveAccount().account else { return nil }
-        guard !(await statusline.otherAccountSnapshots()).isEmpty else { return nil }
+        guard let grouped = statusline as? any OtherAccountReadingsReporting,
+            grouped.hasReadingsForOtherAccounts()
+        else { return nil }
         return QuotaSnapshot(
             fiveHour: nil,
             sevenDay: nil,
@@ -181,13 +185,6 @@ public struct FreshestQuotaProvider: QuotaProviding {
             capturedAt: now(),
             account: account
         )
-    }
-
-    /// Straight through from the statusline cache — it is the only source that
-    /// can see more than one account, since ``CachedUtilizationReader`` reads a
-    /// file that only ever describes the current login.
-    public func otherAccountSnapshots() async -> [QuotaSnapshot] {
-        await statusline.otherAccountSnapshots()
     }
 
     /// Fills the two fields a hook reading can legitimately arrive without —

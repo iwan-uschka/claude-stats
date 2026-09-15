@@ -7,9 +7,6 @@ import XCTest
 final class AppModelTests: XCTestCase {
     private actor ScriptedQuotaProvider: QuotaProviding {
         var result: Result<QuotaSnapshot, Error> = .failure(ClaudeStatsError.noQuotaSourceAvailable)
-        /// Readings for accounts other than the active one — empty on the
-        /// one-account machine most of these tests describe.
-        var otherAccounts: [QuotaSnapshot] = []
         /// Incremented on every `currentSnapshot()` read, so tests can
         /// deterministically wait for an async poll to actually run instead of
         /// relying on a published-property condition that may already be true
@@ -23,12 +20,6 @@ final class AppModelTests: XCTestCase {
         func setResult(_ result: Result<QuotaSnapshot, Error>) {
             self.result = result
         }
-
-        func setOtherAccounts(_ snapshots: [QuotaSnapshot]) {
-            self.otherAccounts = snapshots
-        }
-
-        func otherAccountSnapshots() async -> [QuotaSnapshot] { otherAccounts }
 
         func currentSnapshot() async throws -> QuotaSnapshot {
             callCount += 1
@@ -521,7 +512,7 @@ final class AppModelTests: XCTestCase {
 
     /// End to end: two accounts' cache files on disk, and the account Claude
     /// Code is logged in as decides which one the bars show — the other one is
-    /// listed below rather than merged in or dropped.
+    /// neither merged in nor displayed.
     func testActiveAccountFromTheStateFileDecidesWhichReadingIsShown() async throws {
         let directory = try makeScratchCacheDirectory()
         let sessions = directory.appendingPathComponent(
@@ -540,212 +531,38 @@ final class AppModelTests: XCTestCase {
 
         XCTAssertEqual(model.snapshot?.account, Self.exampleOrg)
         XCTAssertEqual(model.snapshot?.fiveHour?.percentUsed, 4)
-        XCTAssertEqual(model.otherAccountSnapshots.map { $0.account }, [Self.otherOrg])
-        XCTAssertEqual(model.otherAccountSnapshots.first?.fiveHour?.percentUsed, 56)
         XCTAssertNil(model.quotaError)
     }
 
-    /// One account: nothing to list, so no group appears. The unstamped
-    /// ("Unknown account") group is the same rule — it only shows up when it
-    /// isn't the group serving the bars.
-    func testSingleAccountLeavesTheOtherAccountsListEmpty() async throws {
-        let directory = try makeScratchCacheDirectory()
-        let sessions = directory.appendingPathComponent(
-            StatuslineCacheReader.sessionCacheDirectoryName, isDirectory: true)
-        let now = Date()
-        try writeCacheFile(in: sessions, session: "only", account: nil,
-                           fiveHourPercent: 12, capturedAt: now.addingTimeInterval(-30),
-                           resetsAt: now.addingTimeInterval(3600))
-
-        let model = makeModel(quota: makeAccountAwareProvider(
-            cacheDirectory: directory, activeAccount: nil))
-        await model.refresh(force: true)?.value
-
-        XCTAssertEqual(model.snapshot?.fiveHour?.percentUsed, 12)
-        XCTAssertNil(model.snapshot?.account)
-        XCTAssertTrue(model.otherAccountSnapshots.isEmpty)
-    }
-
-    /// The label on each other-account group: the account's own name when the
-    /// reading was stamped, and an explicit "we don't know" when it wasn't —
-    /// never a blank line and never the neighbouring account's name. Always
-    /// prefixed, so a collapsed row says these readings are not the ones the
-    /// bars above describe.
-    func testOtherAccountTitleNamesTheAccountOrSaysItIsUnknown() {
-        let model = makeModel(quota: ScriptedQuotaProvider())
+    /// The quota section's own title: the account's name when the reading was
+    /// stamped, and the section's own name when nothing on disk said whose
+    /// reading this is — never a guessed account.
+    func testQuotaSectionTitleNamesTheAccountOrFallsBackToQuota() async {
         var stamped = MockQuotaProvider.sampleSnapshot()
         stamped.account = Self.otherOrg
 
-        XCTAssertEqual(model.otherAccountTitle(for: stamped), "Other Org")
-        XCTAssertEqual(
-            model.otherAccountTitle(for: MockQuotaProvider.sampleSnapshot()),
-            "Unknown account"
-        )
-    }
-
-    /// The quota section's own title, across all four states it has to cover.
-    ///
-    /// The checkmark marker is the interesting half: it exists to contrast
-    /// with the crossed inactive groups below, so on the one-account machine —
-    /// every machine until the user switches logins — it stays off and the
-    /// bare account name (or the section's own name, when nothing on disk said
-    /// whose reading this is) stands alone.
-    func testQuotaSectionTitleNamesTheAccountAndOnlyMarksItWhenThereAreOthers() async {
-        var stamped = MockQuotaProvider.sampleSnapshot()
-        stamped.account = Self.otherOrg
-        let unstamped = MockQuotaProvider.sampleSnapshot()
-        var other = MockQuotaProvider.sampleSnapshot()
-        other.account = Self.exampleOrg
-
-        func titledModel(
-            active: QuotaSnapshot?,
-            others: [QuotaSnapshot]
-        ) async -> AppModel {
+        func titledModel(active: QuotaSnapshot?) async -> AppModel {
             let provider = ScriptedQuotaProvider()
             await provider.setResult(active.map { .success($0) }
                 ?? .failure(ClaudeStatsError.noQuotaSourceAvailable))
-            await provider.setOtherAccounts(others)
             let model = makeModel(quota: provider)
             await model.refresh(force: true)?.value
             return model
         }
 
-        // One account, stamped: the account's own name, no state marker.
-        let alone = await titledModel(active: stamped, others: [])
-        XCTAssertEqual(alone.snapshot?.account, Self.otherOrg)
-        XCTAssertEqual(alone.quotaSectionTitle, "Other Org")
-        XCTAssertFalse(alone.showsAccountStateMarkers)
+        // Stamped: the account's own name.
+        let named = await titledModel(active: stamped)
+        XCTAssertEqual(named.snapshot?.account, Self.otherOrg)
+        XCTAssertEqual(named.quotaSectionTitle, "Other Org")
 
-        // One account, unstamped: the section names itself rather than guessing.
-        let anonymous = await titledModel(active: unstamped, others: [])
+        // Unstamped: the section names itself rather than guessing.
+        let anonymous = await titledModel(active: MockQuotaProvider.sampleSnapshot())
         XCTAssertEqual(anonymous.quotaSectionTitle, "Quota")
-        XCTAssertFalse(anonymous.showsAccountStateMarkers)
 
         // No snapshot at all is the same case — there is no account to name.
-        let empty = await titledModel(active: nil, others: [])
+        let empty = await titledModel(active: nil)
         XCTAssertNil(empty.snapshot)
         XCTAssertEqual(empty.quotaSectionTitle, "Quota")
-
-        // Two accounts, stamped: the name, with the checkmark marker on
-        // against the crossed inactive group below.
-        let switched = await titledModel(active: stamped, others: [other])
-        XCTAssertFalse(switched.otherAccountSnapshots.isEmpty)
-        XCTAssertEqual(switched.quotaSectionTitle, "Other Org")
-        XCTAssertTrue(switched.showsAccountStateMarkers)
-
-        // Two accounts, and the active one's reading is unstamped: the marker
-        // still draws the contrast, and the title says it names nobody.
-        let switchedAnonymous = await titledModel(active: unstamped, others: [other])
-        XCTAssertEqual(switchedAnonymous.quotaSectionTitle, "Unknown account")
-        XCTAssertTrue(switchedAnonymous.showsAccountStateMarkers)
-    }
-
-    /// Every other-account group starts collapsed, and toggling one leaves the
-    /// others alone — the popover rebuilds those rows on every poll, so the
-    /// open/closed state has to live on the model, keyed per group.
-    func testOtherAccountGroupsStartCollapsedAndToggleIndependently() {
-        let model = makeModel(quota: ScriptedQuotaProvider())
-        var stamped = MockQuotaProvider.sampleSnapshot()
-        stamped.account = Self.otherOrg
-        let unstamped = MockQuotaProvider.sampleSnapshot()
-
-        XCTAssertTrue(model.expandedOtherAccounts.isEmpty)
-        XCTAssertFalse(model.isOtherAccountExpanded(stamped))
-        XCTAssertFalse(model.isOtherAccountExpanded(unstamped))
-
-        model.toggleOtherAccountExpansion(for: stamped)
-        XCTAssertTrue(model.isOtherAccountExpanded(stamped))
-        XCTAssertEqual(model.expandedOtherAccounts, [Self.otherOrg.uuid])
-        // One group opening must not open the others.
-        XCTAssertFalse(model.isOtherAccountExpanded(unstamped))
-
-        model.toggleOtherAccountExpansion(for: unstamped)
-        XCTAssertEqual(model.expandedOtherAccounts, [Self.otherOrg.uuid, "unknown"])
-
-        model.toggleOtherAccountExpansion(for: stamped)
-        XCTAssertFalse(model.isOtherAccountExpanded(stamped))
-        XCTAssertEqual(model.expandedOtherAccounts, ["unknown"])
-    }
-
-    /// The expansion key is the grouping key, so a refresh that hands back an
-    /// equal-but-new snapshot for the same account keeps that group open.
-    func testExpansionSurvivesASnapshotBeingRebuiltForTheSameAccount() {
-        let model = makeModel(quota: ScriptedQuotaProvider())
-        var first = MockQuotaProvider.sampleSnapshot()
-        first.account = Self.otherOrg
-        model.toggleOtherAccountExpansion(for: first)
-
-        // Same account, a different (fresher) reading — what a poll produces.
-        var second = MockQuotaProvider.sampleSnapshot(now: Date().addingTimeInterval(60))
-        second.account = Self.otherOrg
-
-        XCTAssertTrue(model.isOtherAccountExpanded(second))
-        XCTAssertFalse(
-            model.isOtherAccountExpanded(MockQuotaProvider.sampleSnapshot()),
-            "a different group must not inherit the open state"
-        )
-    }
-
-    /// A click anywhere on an inactive account's row flips the group, and the
-    /// caret the row draws reads the same state back — the row is one button,
-    /// so the two can never disagree.
-    func testToggleOtherAccountExpansionFlipsTheGroupsState() {
-        let model = makeModel(quota: ScriptedQuotaProvider())
-        var snapshot = MockQuotaProvider.sampleSnapshot()
-        snapshot.account = Self.otherOrg
-
-        XCTAssertFalse(model.isOtherAccountExpanded(snapshot))
-        model.toggleOtherAccountExpansion(for: snapshot)
-        XCTAssertTrue(model.isOtherAccountExpanded(snapshot))
-        XCTAssertEqual(model.expandedOtherAccounts, [Self.otherOrg.uuid])
-        model.toggleOtherAccountExpansion(for: snapshot)
-        XCTAssertFalse(model.isOtherAccountExpanded(snapshot))
-        XCTAssertTrue(model.expandedOtherAccounts.isEmpty)
-    }
-
-    /// The other accounts' rows come from the same files the active account's
-    /// reading does, and they survive its failure — a quota source that went
-    /// quiet for *this* login says nothing about the other one's readings.
-    func testOtherAccountsArePublishedEvenWhenTheActiveReadingFails() async {
-        let provider = ScriptedQuotaProvider()
-        var other = MockQuotaProvider.sampleSnapshot()
-        other.account = Self.otherOrg
-        await provider.setOtherAccounts([other])
-        await provider.setResult(.failure(ClaudeStatsError.noQuotaSourceAvailable))
-        let model = makeModel(quota: provider)
-
-        model.refresh(force: true)
-        await waitUntil { model.quotaError != nil }
-
-        XCTAssertNil(model.snapshot)
-        XCTAssertEqual(model.otherAccountSnapshots, [other])
-    }
-
-    /// "Clear Quota Cache" deletes every session file, the other accounts'
-    /// included, so their rows go with the active account's reading instead of
-    /// staying on screen as the only numbers.
-    func testClearQuotaCacheAlsoDropsTheOtherAccountsRows() async {
-        let provider = ScriptedQuotaProvider()
-        var other = MockQuotaProvider.sampleSnapshot()
-        other.account = Self.otherOrg
-        await provider.setOtherAccounts([other])
-        await provider.setResult(.success(MockQuotaProvider.sampleSnapshot()))
-        let model = makeModel(quota: provider)
-        model.refresh(force: true)
-        await waitUntil { !model.otherAccountSnapshots.isEmpty }
-
-        await provider.setOtherAccounts([])
-        await provider.setResult(.failure(ClaudeStatsError.noQuotaSourceAvailable))
-        let callsBeforeClear = await provider.callCount
-        model.clearQuotaCache()
-
-        XCTAssertTrue(model.otherAccountSnapshots.isEmpty)
-        // The synchronous clear is only half of it: wait for the repoll the
-        // clear kicks off and check the rows stay gone once it has answered.
-        await waitUntil(timeout: 5) { await provider.callCount > callsBeforeClear }
-        let callsAfterClear = await provider.callCount
-        XCTAssertGreaterThan(callsAfterClear, callsBeforeClear)
-        XCTAssertTrue(model.otherAccountSnapshots.isEmpty)
     }
 
     // MARK: - Promo notices
@@ -956,27 +773,21 @@ final class AppModelTests: XCTestCase {
 
     // MARK: - README showcase fixture
 
-    func testShowcaseFixtureShowsTwoAccountsWithGenericNames() throws {
+    func testShowcaseFixtureTitlesTheQuotaSectionWithAGenericAccount() throws {
         let model = AppModel.previewShowcase(now: Date())
 
         // This fixture *is* the README screenshot, so what it carries is a
-        // published claim about what the app looks like. A single-account shot
-        // says nothing about a machine logged into two, which is the case the
-        // account grouping exists for — pinned here because a refactor that
-        // dropped the second account would break no other test and no build.
+        // published claim about what the app looks like: the quota section
+        // titled with the logged-in account, as it is on every stamped reading.
         let active = try XCTUnwrap(model.snapshot?.account)
-        let other = try XCTUnwrap(model.otherAccountSnapshots.first?.account)
-        XCTAssertEqual(model.otherAccountSnapshots.count, 1)
-        XCTAssertNotEqual(active.uuid, other.uuid)
+        XCTAssertEqual(model.quotaSectionTitle, active.displayName)
 
         // And generic, because the picture is published: no real address and no
         // real organisation. `example.com` is reserved for exactly this by
         // RFC 2606, so it can never collide with someone's actual account.
-        for account in [active, other] {
-            XCTAssertTrue(
-                try XCTUnwrap(account.email).hasSuffix("@example.com"),
-                "\(account.displayName) is not a reserved example address"
-            )
-        }
+        XCTAssertTrue(
+            try XCTUnwrap(active.email).hasSuffix("@example.com"),
+            "\(active.displayName) is not a reserved example address"
+        )
     }
 }
