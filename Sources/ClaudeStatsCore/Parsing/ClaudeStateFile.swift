@@ -36,7 +36,7 @@ public struct ClaudeStateFileFingerprint: Sendable, Hashable {
 ///
 /// ## The fingerprint gate
 ///
-/// The file is ~145 KB and Claude Code rewrites it constantly for reasons that
+/// The file is ~170 KB and Claude Code rewrites it constantly for reasons that
 /// have nothing to do with us (`numStartups`, `seenNotifications`, …). Callers
 /// pass the fingerprint of whatever they last parsed; when the file still
 /// matches it, this returns ``LoadResult/unchanged`` after one `open` and one
@@ -44,7 +44,7 @@ public struct ClaudeStateFileFingerprint: Sendable, Hashable {
 ///
 /// The `open` → `fstat`-on-that-descriptor → read-that-descriptor sequence is
 /// the same single-descriptor trick as
-/// `StatuslineCacheReader.readFileWithModificationDate(at:)`, at nanosecond
+/// `StatuslineCacheReader.readFileWithStat(atPath:)`, at nanosecond
 /// mtime + inode resolution: two separate syscalls could otherwise straddle an
 /// atomic `mktemp` + `rename` and pair one file's bytes with another's stat.
 ///

@@ -767,10 +767,42 @@ final class StatuslineCacheReaderTests: XCTestCase {
         }
     }
 
+    /// A malformed file's fingerprint still matches on the next poll, so the
+    /// cache serves the same `CachedFile` back rather than re-parsing — it
+    /// must stay malformed rather than falling out of ``StatuslineCacheReader``'s
+    /// notion of "seen" entirely.
+    func testMalformedFileStaysMalformedOnASubsequentCachedRead() async throws {
+        try write("{ this is not json")
+        let reader = makeReader()
+
+        let message1 = await assertThrowsUnexpectedQuotaResponse {
+            try await reader.currentSnapshot()
+        }
+        XCTAssertNotNil(message1)
+
+        // Same bytes, same fingerprint — served from the cache, and still malformed.
+        let message2 = await assertThrowsUnexpectedQuotaResponse {
+            try await reader.currentSnapshot()
+        }
+        XCTAssertNotNil(message2)
+    }
+
     /// Files that aren't ours don't take part — the directory is ours, but a
     /// stray `.txt` in it shouldn't become a parse failure.
     func testNonJSONFilesInTheDirectoryAreIgnored() async throws {
         try Data("garbage".utf8).write(to: sessionDirectory.appendingPathComponent("notes.txt"))
+        try write(filteredCache(capturedAt: now.addingTimeInterval(-30)))
+
+        let snapshot = try await makeReader().currentSnapshot()
+
+        XCTAssertEqual(try XCTUnwrap(snapshot.fiveHour).percentUsed, 23.5, accuracy: 0.001)
+    }
+
+    /// `cacheFilePaths()` filters dot-files by hand (`FileManager.contentsOfDirectory(atPath:)`
+    /// takes no `.skipsHiddenFiles` option) — a dot-prefixed file must not leak
+    /// into the merge.
+    func testDotFilesInTheDirectoryAreIgnored() async throws {
+        try Data("{}".utf8).write(to: sessionDirectory.appendingPathComponent(".hidden.json"))
         try write(filteredCache(capturedAt: now.addingTimeInterval(-30)))
 
         let snapshot = try await makeReader().currentSnapshot()
@@ -889,7 +921,11 @@ final class StatuslineCacheReaderTests: XCTestCase {
 
     /// An unchanged file is served from the last parse rather than read again:
     /// contents that lie under an untouched fingerprint are not seen, and a file
-    /// that can no longer even be opened still answers — it was never opened.
+    /// that can no longer even be opened still answers with the last-parsed
+    /// value rather than throwing. (Under a root test runner, `open()` bypasses
+    /// the permission check, so this step alone wouldn't catch a regression —
+    /// but a real re-open would also pick up `sameSizedRewrite`'s 67.5 instead
+    /// of the still-cached 23.5, which this step still asserts against.)
     func testUnchangedFileIsServedFromTheCacheWithoutBeingOpened() async throws {
         let capturedAt = now.addingTimeInterval(-30)
         let url = try write(filteredCache(capturedAt: capturedAt))

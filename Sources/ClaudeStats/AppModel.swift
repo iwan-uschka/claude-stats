@@ -237,16 +237,24 @@ final class AppModel: ObservableObject {
     ///
     /// `localStats` is that history already read — by
     /// `ClaudeStatsApp.rebuildUsageStore`, on the rebuild queue — so the main
-    /// actor only assigns it. Without one it is read here. Either way it is
-    /// checked against today afterwards, so a load computed just before
-    /// midnight and delivered just after is read again rather than kept.
+    /// actor only assigns it. Without one it is read here. A successful load
+    /// is also checked against today afterwards, so one computed just before
+    /// midnight and delivered just after is read again rather than kept; a
+    /// failed load is not retried immediately, since the store hasn't changed.
     func updateUsageStore(_ newStore: any UsageStoring, localStats: LocalStatsLoad? = nil) {
         usageStore = newStore
         dailyHistoryDay = nil
-        if let localStats {
-            apply(localStats)
+        guard let localStats else {
+            reloadLocalStats()
+            return
         }
-        reloadLocalStats()
+        apply(localStats)
+        // Only a successful load can be stale-dated (computed just before
+        // midnight); a failure isn't worth immediately retrying against the
+        // same, unchanged store — the next natural reload will retry it.
+        if case .history = localStats.outcome {
+            reloadLocalStats()
+        }
     }
 
     /// Reload everything. The quota network poll is throttled to

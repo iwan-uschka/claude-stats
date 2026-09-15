@@ -342,7 +342,7 @@ Two independent tiers, deliberately decoupled:
        watching `$HOME` recursively is not an acceptable cost for one cached
        feature flag. Reads ride the throttled quota refresh instead (≥30s,
        ≤300s; manual Refresh always re-reads), gated on a nanosecond-mtime +
-       inode + size fingerprint so an unchanged 145 KB file costs one `open`
+       inode + size fingerprint so an unchanged 170 KB file costs one `open`
        plus one `fstat`, not a parse.
      - **Hidden when `cachedGrowthBookFeaturesAt` is older than 7 days**, and
        when it is missing entirely (unknown age ≠ fresh). **The file's mtime is

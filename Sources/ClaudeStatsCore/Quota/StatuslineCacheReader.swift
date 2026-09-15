@@ -201,7 +201,10 @@ import os
 /// file that is new or changed is read and parsed exactly as before, from one
 /// descriptor, and its fingerprint is taken from that same descriptor's
 /// `fstat`, so it always describes the bytes that were parsed. The helper
-/// script's `mktemp` + `mv` rewrite gives every write a new inode.
+/// script's `mktemp` + `mv` rewrite gives every write a new inode — for
+/// session files. The legacy file (see "One file per session, not one file")
+/// predates that script and its write pattern isn't known, so it is always
+/// read and parsed fresh rather than served from the fingerprint cache.
 ///
 /// The listing itself stays, but works on path strings rather than `URL`s —
 /// see ``cacheFilePaths()``.
@@ -501,7 +504,13 @@ public struct StatuslineCacheReader: QuotaProviding, OtherAccountReadingsReporti
 
         for (path, isSessionFile) in cacheFilePaths() {
             let file: CachedFile
-            if let cached = previous[path], FileFingerprint(path: path) == cached.fingerprint {
+            // Session files are always written by this repo's own helper
+            // script, whose `mktemp` + `mv` rewrite guarantees a fresh inode
+            // on every write — so an unchanged fingerprint means unchanged
+            // bytes. The legacy file predates that script and its write
+            // pattern isn't known, so it always takes the slow path: it's a
+            // single low-frequency file, not the thing this cache targets.
+            if isSessionFile, let cached = previous[path], FileFingerprint(path: path) == cached.fingerprint {
                 file = cached
             } else {
                 guard let parsed = parseFile(atPath: path) else { continue }

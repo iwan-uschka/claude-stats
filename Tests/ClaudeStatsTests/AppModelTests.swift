@@ -410,8 +410,8 @@ final class AppModelTests: XCTestCase {
         let loaded = model.dailyHistory
         XCTAssertFalse(loaded.isEmpty)
 
-        // `updateUsageStore(_:)` reloads as it swaps, so this is the failing
-        // reload — no extra test double needed to script one.
+        // `updateUsageStore(_:localStats:)` with no load reads as it swaps, so
+        // this is the failing reload — no extra test double needed to script one.
         model.updateUsageStore(FailingUsageStore())
 
         XCTAssertNotNil(model.localStatsError)
@@ -556,6 +556,23 @@ final class AppModelTests: XCTestCase {
 
         XCTAssertEqual(fresh.dailyUsageCallCount, 2)
         XCTAssertEqual(model.dailyHistory.days.last, Self.utc.startOfDay(for: clock.now))
+    }
+
+    /// A handed-over load that failed isn't worth retrying immediately against
+    /// the same, unchanged store — that would just pay the main-actor cost the
+    /// handoff exists to avoid. The next natural reload still retries it.
+    func testAHandedOverFailureIsNotImmediatelyRetried() {
+        let clock = TestClock(Self.midday)
+        let model = makeClockedModel(store: MockUsageStore(calendar: Self.utc, now: { clock.now }), clock: clock)
+        let fresh = CountingUsageStore(backing: MockUsageStore(calendar: Self.utc, now: { clock.now }))
+        fresh.failsDailyUsage = true
+        let failed = LocalStatsLoad.load(from: fresh, calendar: Self.utc, now: clock.now)
+        XCTAssertEqual(fresh.dailyUsageCallCount, 1)
+
+        model.updateUsageStore(fresh, localStats: failed)
+
+        XCTAssertEqual(fresh.dailyUsageCallCount, 1)
+        XCTAssertNotNil(model.localStatsError)
     }
 
     /// A failed read is not remembered as an answer: the next reload tries the
