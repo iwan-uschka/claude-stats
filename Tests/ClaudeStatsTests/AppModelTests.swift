@@ -16,9 +16,35 @@ final class AppModelTests: XCTestCase {
         /// `clearCache()` itself has to be `nonisolated`; only the single
         /// `@MainActor` test that sets it ever touches this.
         nonisolated(unsafe) var clearCacheError: Error?
+        /// Every `clearCache()` attempt, including ones that throw. Same
+        /// `nonisolated(unsafe)` reasoning as `clearCacheError`: only ever
+        /// touched from the `@MainActor` model and test.
+        nonisolated(unsafe) var clearCacheCallCount = 0
+        /// What `currentAccount()` reports — the login a poll sees.
+        var account: QuotaAccount?
+        /// When set, the next `currentAccount()` suspends until
+        /// `releaseHeldAccountRead()`, answering with the account as it was when
+        /// the call began — how a test gets a poll to be superseded mid-read.
+        private var holdNextAccountRead = false
+        private var heldAccountRead: CheckedContinuation<Void, Never>?
 
         func setResult(_ result: Result<QuotaSnapshot, Error>) {
             self.result = result
+        }
+
+        func setAccount(_ account: QuotaAccount?) {
+            self.account = account
+        }
+
+        func holdNextAccountReadUntilReleased() {
+            holdNextAccountRead = true
+        }
+
+        var isHoldingAnAccountRead: Bool { heldAccountRead != nil }
+
+        func releaseHeldAccountRead() {
+            heldAccountRead?.resume()
+            heldAccountRead = nil
         }
 
         func currentSnapshot() async throws -> QuotaSnapshot {
@@ -26,9 +52,19 @@ final class AppModelTests: XCTestCase {
             return try result.get()
         }
 
+        func currentAccount() async -> QuotaAccount? {
+            let answer = account
+            if holdNextAccountRead {
+                holdNextAccountRead = false
+                await withCheckedContinuation { heldAccountRead = $0 }
+            }
+            return answer
+        }
+
         /// `nonisolated` because the protocol requirement is synchronous; there is
         /// no on-disk state here, so the scripted `result` stays as set.
         nonisolated func clearCache() throws {
+            clearCacheCallCount += 1
             if let clearCacheError { throw clearCacheError }
         }
     }
@@ -238,7 +274,7 @@ final class AppModelTests: XCTestCase {
         XCTAssertNil(model.snapshot)
         XCTAssertNil(model.quotaError)
         XCTAssertNil(model.quotaWarning)
-        XCTAssertNotNil(model.quotaCacheClearedNotice)
+        XCTAssertEqual(model.quotaCacheClearedNotice, AppModel.QuotaCacheClear.manualNotice)
     }
 
     func testClearQuotaCacheOnStaleSourceSetsWarningAndDropsNotice() async {
@@ -563,6 +599,147 @@ final class AppModelTests: XCTestCase {
         let empty = await titledModel(active: nil)
         XCTAssertNil(empty.snapshot)
         XCTAssertEqual(empty.quotaSectionTitle, "Quota")
+    }
+
+    // MARK: - Account switch clears the cache
+
+    /// A provider answering every poll with a reading, logged in as `account`.
+    private func makeSwitchingProvider(account: QuotaAccount?) async -> ScriptedQuotaProvider {
+        let provider = ScriptedQuotaProvider()
+        await provider.setResult(.success(MockQuotaProvider.sampleSnapshot()))
+        await provider.setAccount(account)
+        return provider
+    }
+
+    /// Polls once per entry, logged in as that account (`nil` = the state file
+    /// said nothing), and returns how many cache clears that sequence caused.
+    private func clearsCaused(by accounts: [QuotaAccount?]) async -> Int {
+        let provider = await makeSwitchingProvider(account: nil)
+        let model = makeModel(quota: provider)
+        for account in accounts {
+            await provider.setAccount(account)
+            await model.refresh(force: true)?.value
+        }
+        return provider.clearCacheCallCount
+    }
+
+    /// Known → different known: the old login's cache goes, the popover says
+    /// why in its own words, and the retry ladder polls again — without that
+    /// repoll, which sees the same new account, clearing a second time.
+    func testAccountSwitchClearsTheCacheAndRepolls() async {
+        let provider = await makeSwitchingProvider(account: Self.exampleOrg)
+        let model = makeModel(quota: provider)
+        await model.refresh(force: true)?.value
+        XCTAssertNotNil(model.snapshot)
+
+        // Right after a switch the new account usually has no reading yet.
+        await provider.setAccount(Self.otherOrg)
+        await provider.setResult(.failure(ClaudeStatsError.noQuotaSourceAvailable))
+        let callsBeforeSwitch = await provider.callCount
+        await model.refresh(force: true)?.value
+
+        XCTAssertEqual(provider.clearCacheCallCount, 1)
+        XCTAssertNil(model.snapshot)
+        XCTAssertNil(model.quotaError)
+        XCTAssertEqual(
+            model.quotaCacheClearedNotice,
+            AppModel.QuotaCacheClear.accountSwitchNotice(for: Self.otherOrg))
+        // The switching poll hands over instead of reading a snapshot itself.
+        let callsAfterSwitch = await provider.callCount
+        XCTAssertEqual(callsAfterSwitch, callsBeforeSwitch)
+
+        // The ladder's first attempt lands after its 2s delay.
+        await waitUntil(timeout: 5) { await provider.callCount > callsBeforeSwitch }
+        XCTAssertEqual(provider.clearCacheCallCount, 1, "the repoll must not clear again")
+        // `noQuotaSourceAvailable` is expected while the notice is up.
+        XCTAssertNil(model.quotaError)
+        XCTAssertNotNil(model.quotaCacheClearedNotice)
+    }
+
+    /// The automatic notice names what happened; the manual text would claim
+    /// the user pressed a button they didn't.
+    func testAccountSwitchNoticeIsWordedDifferentlyFromTheManualOne() {
+        let notice = AppModel.QuotaCacheClear.accountSwitchNotice(for: Self.otherOrg)
+        XCTAssertNotEqual(notice, AppModel.QuotaCacheClear.manualNotice)
+        XCTAssertTrue(notice.contains(Self.otherOrg.displayName), notice)
+    }
+
+    /// The first account seen after launch has nothing to be compared with.
+    func testFirstPollAfterLaunchDoesNotClear() async {
+        let provider = await makeSwitchingProvider(account: Self.exampleOrg)
+        let model = makeModel(quota: provider)
+
+        await model.refresh(force: true)?.value
+
+        XCTAssertEqual(provider.clearCacheCallCount, 0)
+        XCTAssertNotNil(model.snapshot)
+        XCTAssertNil(model.quotaCacheClearedNotice)
+    }
+
+    func testSameAccountAgainDoesNotClear() async {
+        let clears = await clearsCaused(by: [Self.exampleOrg, Self.exampleOrg, Self.exampleOrg])
+        XCTAssertEqual(clears, 0)
+    }
+
+    /// A state file that can't name the login — absent, half-written — is not
+    /// a switch in either direction.
+    func testUnknownAndKnownTransitionsDoNotClear() async {
+        let clears = await clearsCaused(by: [nil, Self.exampleOrg, nil, Self.exampleOrg, nil])
+        XCTAssertEqual(clears, 0)
+    }
+
+    /// The last *known* account is what counts: the file blinking out mid-swap
+    /// must not hide a switch from A to B.
+    func testSwitchAcrossAnUnknownPollStillClears() async {
+        let clears = await clearsCaused(by: [Self.exampleOrg, nil, Self.otherOrg])
+        XCTAssertEqual(clears, 1)
+    }
+
+    /// Same contract as the button: nothing was cleared, so no notice and no
+    /// dropped snapshot — the failure shows instead. The switch still counts as
+    /// handled, so the next poll reads normally rather than retrying the delete.
+    func testAccountSwitchDeleteFailureSurfacesErrorAndNoNotice() async {
+        let provider = await makeSwitchingProvider(account: Self.exampleOrg)
+        let model = makeModel(quota: provider)
+        await model.refresh(force: true)?.value
+        let shown = model.snapshot
+
+        provider.clearCacheError = ClaudeStatsError.unexpectedQuotaResponse("disk full")
+        await provider.setAccount(Self.otherOrg)
+        await model.refresh(force: true)?.value
+
+        XCTAssertEqual(provider.clearCacheCallCount, 1)
+        XCTAssertNotNil(model.quotaError)
+        XCTAssertNil(model.quotaCacheClearedNotice)
+        XCTAssertEqual(model.snapshot, shown)
+
+        await model.refresh(force: true)?.value
+        XCTAssertEqual(provider.clearCacheCallCount, 1)
+    }
+
+    /// A poll superseded while it was asking who is logged in must not record
+    /// its out-of-date answer: here it saw B, but by the time it resumed a newer
+    /// poll had already seen A. Recording B would make the next A poll look
+    /// like a switch back.
+    func testCancelledPollDoesNotRecordTheAccountItSaw() async {
+        let provider = await makeSwitchingProvider(account: Self.exampleOrg)
+        let model = makeModel(quota: provider)
+        await model.refresh(force: true)?.value
+
+        await provider.setAccount(Self.otherOrg)
+        await provider.holdNextAccountReadUntilReleased()
+        let superseded = model.refresh(force: true)
+        await waitUntil { await provider.isHoldingAnAccountRead }
+
+        await provider.setAccount(Self.exampleOrg)
+        await model.refresh(force: true)?.value
+        await provider.releaseHeldAccountRead()
+        await superseded?.value
+        XCTAssertEqual(provider.clearCacheCallCount, 0)
+
+        await model.refresh(force: true)?.value
+        XCTAssertEqual(provider.clearCacheCallCount, 0)
+        XCTAssertNil(model.quotaCacheClearedNotice)
     }
 
     // MARK: - Promo notices

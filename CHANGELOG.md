@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+- Switching Claude Code to another account now clears the quota cache
+  automatically, as "Clear Quota Cache" does. Noticed on the next quota poll.
+
 ### Removed
 - Other accounts' quota rows are gone from the popover; only the logged-in
   account is shown. Those rows were a frozen copy that could never update, and

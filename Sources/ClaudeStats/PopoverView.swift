@@ -145,7 +145,8 @@ struct PopoverView: View {
                 quotaWindowRow(.sevenDay, window: nil)
                 promoNoticeLines
                 // The cleared-cache notice wins over both fallbacks: it names a
-                // state the user just caused on purpose, so it explains the empty
+                // state the user just caused — a manual clear, or swapping the
+                // login, which clears the cache too — so it explains the empty
                 // bars better than "none yet" or a staleness warning would.
                 Text(model.quotaCacheClearedNotice
                     ?? model.quotaWarning

@@ -106,6 +106,27 @@ Two independent tiers, deliberately decoupled:
        fractional seconds) and is far below the gap between two real 7-day
        windows. Readings with no `seven_day` are never dropped (nothing to
        compare), and with no cached reference everything is accepted.
+     - **An account switch clears the statusline cache on its own.** Every
+       poll asks `QuotaProviding.currentAccount()` (on `FreshestQuotaProvider`,
+       the same fingerprint-cached `ActiveAccountReader` the statusline reader
+       groups by — so no second parse) *before* reading the snapshot, which is
+       why a switch is seen even when that poll would throw — the usual
+       outcome right after one. Not `snapshot.account`: a failed poll has no
+       snapshot and an unstamped one names nobody. `AppModel` keeps the last
+       *known* uuid in memory only; known → different known runs the same body
+       as "Clear Quota Cache" (delete, retry ladder, a failed delete surfaces as
+       `quotaError`) with its own notice, "Account switched to <name> — …".
+       Nothing clears on the first poll after launch, on unknown → known or on
+       known → unknown; known → unknown → *different* known does clear, because
+       the unknown poll doesn't overwrite the remembered uuid. Two limits, both
+       accepted: detection waits for the next quota poll — the state file is in
+       `$HOME`, which isn't watched, and polls are triggered by opening the
+       popover or by session activity (throttled to `quotaPollInterval`), not by
+       a timer — so with neither, a switch goes unnoticed until one happens; and
+       an idle session can still re-render the old account's numbers into a
+       fresh, new-account-stamped file *after* the clear — so the clear does not
+       replace the mislabel guard above, which stays the defence against exactly
+       that.
      - **Only the active account is shown — the inactive-account rows were
        removed, don't re-add them.** The popover used to list every other
        account group below the active one, collapsed, with ✓/✕ markers. It went
@@ -1141,7 +1162,9 @@ real-but-old reading keeps the last numbers with a terracotta staleness warning.
 "Clear Quota Cache" deletes the statusline cache only — the whole per-session
 directory plus the legacy single file; `~/.claude.json` is Claude Code's, not
 ours — so the bars fall back to the cached-state numbers rather than going
-empty.
+empty. The same clear runs without the button when a poll sees Claude Code
+logged in as a different account (see "An account switch clears the
+statusline cache on its own" above).
 
 ### Settings
 

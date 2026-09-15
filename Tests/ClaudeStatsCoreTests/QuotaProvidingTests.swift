@@ -36,4 +36,17 @@ final class QuotaProvidingTests: XCTestCase {
         XCTAssertEqual(reading.credits, snapshot.usageCredits)
         XCTAssertEqual(reading.disabledReason, snapshot.usageCreditsDisabledReason)
     }
+
+    /// A source with no view of the state file answers "don't know" — even
+    /// when its snapshot is stamped — so it can never trigger `AppModel`'s
+    /// automatic cache clear.
+    func testDefaultCurrentAccountIsNil() async {
+        var snapshot = MockQuotaProvider.sampleSnapshot()
+        snapshot.account = MockQuotaProvider.sampleAccount()
+        let provider = MockQuotaProvider(snapshot: snapshot)
+
+        let account = await provider.currentAccount()
+
+        XCTAssertNil(account)
+    }
 }

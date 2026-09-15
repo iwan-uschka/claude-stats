@@ -48,12 +48,35 @@ public protocol QuotaProviding: Sendable {
     /// to bypass.
     func currentUsageCredits() async throws -> UsageCreditsReading
 
+    /// The account Claude Code is logged in as right now, or `nil` when this
+    /// source can't say.
+    ///
+    /// Answered independently of ``currentSnapshot()`` on purpose: `AppModel`
+    /// watches it for an account switch, and a switch has to be seen on a poll
+    /// that throws too — right after one, the new account usually has no
+    /// statusline reading yet, so the poll that should notice is exactly the one
+    /// that ends in ``ClaudeStatsError/noQuotaSourceAvailable``. A snapshot's own
+    /// ``QuotaSnapshot/account`` can't serve: there is none on a failed poll, and
+    /// an unstamped reading carries none either.
+    ///
+    /// **Never throws**, for the reason ``ActiveAccountProviding`` doesn't.
+    /// ``FreshestQuotaProvider`` overrides this with the one
+    /// ``ActiveAccountReader`` it already shares with its statusline reader. The
+    /// default implementation returns `nil` — "don't know" — which is right for
+    /// a source that has no view of the state file, and which never triggers an
+    /// automatic cache clear.
+    func currentAccount() async -> QuotaAccount?
+
     /// Discards whatever on-disk or cached state backs this source, so the next
     /// ``currentSnapshot()`` reflects only data written after this call.
     ///
-    /// A manual escape hatch, not part of the normal refresh path: it exists for
-    /// a reading that looks stuck or wrong, which a plain re-read of the same
-    /// cache can't fix. For a source that composes multiple readers (see
+    /// Not part of the normal refresh path. It exists for a reading that looks
+    /// stuck or wrong, which a plain re-read of the same cache can't fix — the
+    /// manual "Clear Quota Cache" button — and `AppModel` also runs it once when
+    /// ``currentAccount()`` reports a switch to a different account, whose
+    /// predecessor's cache files are of no further use.
+    ///
+    /// For a source that composes multiple readers (see
     /// ``FreshestQuotaProvider``), this only guarantees *this* source's own
     /// state is discarded — another composed source may still produce a
     /// reading on the next call.
@@ -72,6 +95,8 @@ extension QuotaProviding {
             disabledReason: snapshot.usageCreditsDisabledReason
         )
     }
+
+    public func currentAccount() async -> QuotaAccount? { nil }
 }
 
 /// A quota source that can see readings for accounts other than the active
