@@ -23,24 +23,23 @@ enum PopoverMetrics {
     /// 42 rather than the 38 it was measured at, and the extra 4 pt is the
     /// point of it: the reading is right-aligned, so a column wider than the
     /// number is clear space between the bar's trailing edge and the first
-    /// digit. At 38 an ordinary `62%` (24.2 pt) stood 21.8 pt from the bar —
-    /// visibly crowding the bar it was meant to be read apart from.
+    /// digit.
     ///
-    /// The column's *width* has not moved since; its **right edge** has, from
-    /// 242 pt to 261 pt measured from the content's leading edge, which is where
-    /// the percentages sit today. That edge is
-    /// `labelColumnWidth + rowSpacing + quotaBarWidth + rowSpacing +
-    /// percentColumnWidth`, so every point the countdown column gave up moved it
-    /// right and widened the bar by the same amount rather than padding this
-    /// one. See ``countdownColumnWidth`` for what paid for it.
+    /// The column sits flush against the bar on every row — no
+    /// ``rowSpacing`` between them — so this column's own slack is the *only*
+    /// clearance a wide reading gets; see ``trailingValueColumnWidth`` for why
+    /// there's no real gap there to help. Its right edge is
+    /// `labelColumnWidth + rowSpacing + quotaBarWidth + percentColumnWidth`
+    /// (253 pt from the content's leading edge) — the one ``rowSpacing`` in
+    /// that sum is the gap before the bar, not after it.
     static let percentColumnWidth: CGFloat = 42
-    /// Width of the trailing reset-countdown column.
+    /// The longest reset-countdown string the formatter can produce, `11d 11h`
+    /// (40.9 pt at ``captionValueFont``) — the tightest content any row's
+    /// trailing reading has to hold. Not itself a column width any row
+    /// applies; see ``trailingValueColumnWidth``, which is.
     ///
-    /// 51, and the tightest column on the row: it is sized to the longest
-    /// countdown the formatter can produce, `11d 11h` (40.9 pt at
-    /// ``captionValueFont``), rather than to a placeholder. It was 70 while the
-    /// pending-reset placeholder read `reset pending` (66.5 pt) and 92 before
-    /// that, while the column read `resets in 2h 14m`.
+    /// It was 70 while the pending-reset placeholder read `reset pending`
+    /// (66.5 pt) and 92 before that, while the column read `resets in 2h 14m`.
     ///
     /// **Both placeholders were shortened to get here** — `reset pending` to
     /// `pending` (39.0 pt) and `no reading` to `no data` (36.2 pt), see
@@ -54,31 +53,35 @@ enum PopoverMetrics {
     ///
     /// The 19 pt this freed went to ``quotaBarWidth``, whole.
     static let countdownColumnWidth: CGFloat = 51
-    /// The trailing region of a row whose value is wider than a percentage and
-    /// which has no countdown to show — the usage-credits row's
-    /// `€0.00 of €33.00`. Ends flush with the countdowns above it.
+    /// The trailing reading column every row actually draws in — a countdown
+    /// on the three window rows, `of €33.00` on the usage-credits row.
     ///
-    /// **The two reading columns *and the gap in front of them*.** The gap is
-    /// in the sum, which it was not while the countdown column was 70 pt wide:
-    /// this value has to hold a usage-credits figure in the locale that spends
-    /// the most width on one (`20,87 € of 33,00 €`, 99.8 pt at ``valueFont``),
-    /// and two columns that now come to 93 pt cannot. Borrowing the gap instead
-    /// of widening the region is what keeps the credits row's bar exactly
-    /// ``quotaBarWidth`` — see ``PopoverView``'s `usageCreditsRow`, which lays
-    /// the bar and this column out in a nested zero-spacing stack for that
-    /// reason. The cost is paid only in the widest locale, where the figure's
-    /// box comes within 1.2 pt of the bar — about 3 pt of visible air once the
-    /// leading digit's side bearing is counted. `€0.00 of €33.00` leaves 14.5.
+    /// **``rowSpacing`` plus ``countdownColumnWidth``.** Every row lays its
+    /// bar, its percent and this column out in one nested zero-spacing
+    /// stack — bar, percent and trailing reading all flush against each
+    /// other, with the row's only real ``rowSpacing`` sitting *before* the
+    /// bar, between it and the label. That is what keeps every row's percent
+    /// column starting at the same x regardless of what follows it: a real
+    /// gap here, sized per row, would shift each row's percent by a different
+    /// amount depending on how wide its own trailing reading needed to be.
+    /// Removing it and folding its width into this column instead means the
+    /// column's width is the only thing that varies, never the percent's
+    /// position.
     ///
-    /// No ``rowSpacing`` *between* the two columns it spans: those sit flush
-    /// against each other — see ``WindowBarView``, which lays them out in a
-    /// nested zero-spacing stack of its own.
-    static let percentAndCountdownColumnWidth: CGFloat =
-        rowSpacing + percentColumnWidth + countdownColumnWidth
-    /// What a quota row's bar is left with: the content width less the three
-    /// fixed columns and the two gaps around the bar. 123 pt, up from 104 — the
-    /// whole of what ``countdownColumnWidth`` gave up, and nothing of it spent
-    /// on the gaps or on the columns beside it.
+    /// That buys 59 pt against the 51 pt of ``countdownColumnWidth`` alone —
+    /// more than any countdown string needs, but exactly enough for a
+    /// three-digit, two-decimal usage-credits limit in the widest
+    /// currency/locale this formats (`of 999,00 €`, 57.2 pt at
+    /// ``captionValueFont``; `of 33,00 €`, the common case, leaves 8.3 pt of
+    /// air). A four-digit limit (`of 1.000,00 €`, 66.7 pt) does not fit and
+    /// truncates.
+    static let trailingValueColumnWidth: CGFloat = rowSpacing + countdownColumnWidth
+    /// What a quota row's bar is left with: the content width less the label
+    /// column, the one real gap before the bar, the percent column and
+    /// ``trailingValueColumnWidth``. 123 pt, up from 104 — the whole of what
+    /// ``countdownColumnWidth`` gave up when it widened into
+    /// ``trailingValueColumnWidth``, and nothing of it spent on the columns
+    /// beside it.
     ///
     /// Derived, and deliberately not applied — ``UsageBar`` stays greedy, so
     /// every row's bar ends at the same x whatever the columns beside it are
@@ -87,8 +90,8 @@ enum PopoverMetrics {
     /// take the bar's width without a test noticing.
     static let quotaBarWidth: CGFloat =
         popoverWidth - 2 * contentPadding
-            - labelColumnWidth - percentColumnWidth - countdownColumnWidth
-            - 2 * rowSpacing
+            - labelColumnWidth - rowSpacing
+            - percentColumnWidth - trailingValueColumnWidth
     /// Width of the token column in a chart's table, both blocks sharing it.
     ///
     /// 48: the widest count a thirty-day sum plausibly reaches is `298.5M`

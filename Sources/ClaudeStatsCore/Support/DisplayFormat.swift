@@ -311,16 +311,24 @@ public enum DisplayFormat {
         return "\(amount.currency) \(amount.decimalValue)"
     }
 
-    /// The credits row's value column: `€0.00 of €33.00`.
+    /// The credits row's tooltip sentence: `€0.00 of €33.00`.
     ///
-    /// Deliberately money, not a percentage — the percentage is already the
-    /// bar, and "0%" of an unstated budget says nothing about how much is left.
+    /// Spoken, not read off the row — the row itself shows a percentage plus
+    /// ``creditsLimitCaption(_:locale:)``, but the amount actually spent isn't
+    /// on the row at all, so the tooltip states it in full.
     public static func moneySpend(
         used: MoneyAmount,
         limit: MoneyAmount,
         locale: Locale = .current
     ) -> String {
         "\(money(used, locale: locale)) of \(money(limit, locale: locale))"
+    }
+
+    /// The credits row's own trailing caption, beside its percent column:
+    /// `of €33.00`. The limit alone — what was spent is the bar and the
+    /// percentage beside it; this says what it's a percentage *of*.
+    public static func creditsLimitCaption(_ limit: MoneyAmount, locale: Locale = .current) -> String {
+        "of \(money(limit, locale: locale))"
     }
 
     /// Percent label for a 0...1 fraction: `62%`.

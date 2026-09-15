@@ -389,6 +389,18 @@ final class DisplayFormatTests: XCTestCase {
         )
     }
 
+    /// The credits row's own trailing caption: the limit alone, prefixed so
+    /// it reads as a continuation of the percentage beside it.
+    func testCreditsLimitCaptionReadsOfLimit() {
+        XCTAssertEqual(
+            DisplayFormat.creditsLimitCaption(
+                MoneyAmount(amountMinor: 3_300, currency: "EUR", exponent: 2),
+                locale: enUS
+            ),
+            "of €33.00"
+        )
+    }
+
     /// The locale decides placement and separators; the payload decides the
     /// currency and the number of decimals.
     func testMoneyFollowsTheGivenLocalesConventions() {

@@ -235,7 +235,12 @@ final class PopoverChartHoverTests: XCTestCase {
                 // ``WindowBarView`` draws this column in the monospaced-digit
                 // caption font, and monospacing widens the narrow digits — a
                 // proportional measurement would under-read the very strings
-                // this guard exists to keep inside 51 pt.
+                // this guard exists to keep inside the column actually applied,
+                // ``trailingValueColumnWidth`` (wider than
+                // ``PopoverMetrics/countdownColumnWidth`` itself, which is the
+                // tighter, hypothetical bound this asserts against — every
+                // countdown that fits 51 pt fits the real 59 pt column with
+                // room to spare).
                 width(reading, PopoverMetrics.captionValueNSFont),
                 PopoverMetrics.countdownColumnWidth,
                 "\(reading) overflows the countdown column"
@@ -243,26 +248,26 @@ final class PopoverChartHoverTests: XCTestCase {
         }
     }
 
-    /// The bar is whatever the row's three fixed columns and the two gaps
-    /// around it don't take — ``UsageBar`` is greedy — so a column widened for
-    /// its own sake is width taken off the bar. ``PopoverMetrics/quotaBarWidth``
-    /// is that leftover, and this is what keeps the constant and the docs
+    /// The bar is whatever the row's fixed columns and the one gap before it
+    /// don't take — ``UsageBar`` is greedy — so a column widened for its own
+    /// sake is width taken off the bar. ``PopoverMetrics/quotaBarWidth`` is
+    /// that leftover, and this is what keeps the constant and the docs
     /// agreeing.
     ///
     /// The equality below restates ``PopoverMetrics/quotaBarWidth``'s own
     /// formula, so it checks *internal consistency* — that the leftover is
-    /// still spelled out of the same three columns and two gaps — rather than a
-    /// rendered row: the constant is deliberately not applied, so no SwiftUI
-    /// layout runs here. The bound under it is the part that catches a column
-    /// growing at the bar's expense.
+    /// still spelled out of the same columns and the same one gap — rather
+    /// than a rendered row: the constant is deliberately not applied, so no
+    /// SwiftUI layout runs here. The bound under it is the part that catches a
+    /// column growing at the bar's expense.
     func testTheBarGetsWhatTheQuotaRowsFixedColumnsLeave() {
         let fixed = PopoverMetrics.labelColumnWidth
             + PopoverMetrics.percentColumnWidth
-            + PopoverMetrics.countdownColumnWidth
-            // Two gaps, not three: the percentage and the countdown sit flush
-            // against each other, which is where the bar's extra width came
-            // from.
-            + 2 * PopoverMetrics.rowSpacing
+            + PopoverMetrics.trailingValueColumnWidth
+            // One gap, not two: the bar, the percentage and the trailing
+            // reading all sit flush against each other — only the label has a
+            // real gap before what follows it.
+            + PopoverMetrics.rowSpacing
 
         XCTAssertEqual(Self.contentWidth - fixed, PopoverMetrics.quotaBarWidth, accuracy: 0.001)
         XCTAssertGreaterThanOrEqual(
@@ -272,68 +277,70 @@ final class PopoverChartHoverTests: XCTestCase {
         )
     }
 
-    /// Where the percentages' right edge lands, which is the *point* of the
-    /// column widths above rather than a consequence of them: 261 pt from the
-    /// row's leading edge, the position marked on the annotated screenshot this
-    /// layout was fitted to. Asserted as the sum the row actually lays out, so
-    /// a column that grows or shrinks without the bar absorbing the difference
+    /// Where the percentages' right edge lands, and — the point of this test —
+    /// the *same* edge on every row, credits row included: 253 pt from the
+    /// row's leading edge. Asserted as the sum the row actually lays out, so a
+    /// column that grows or shrinks without the bar absorbing the difference
     /// is caught here rather than by eye.
     func testThePercentagesRightEdgeSitsWhereTheLayoutWasFittedTo() {
         let percentRightEdge = PopoverMetrics.labelColumnWidth
             + PopoverMetrics.rowSpacing
             + PopoverMetrics.quotaBarWidth
-            + PopoverMetrics.rowSpacing
             + PopoverMetrics.percentColumnWidth
 
-        XCTAssertEqual(percentRightEdge, 261, accuracy: 0.001)
-        // And the countdown column is exactly the rest of the row, so the
-        // countdowns still end flush with the content's trailing edge.
+        XCTAssertEqual(percentRightEdge, 253, accuracy: 0.001)
+        // And the trailing column is exactly the rest of the row, so the
+        // countdowns (and the credits row's caption) still end flush with the
+        // content's trailing edge.
         XCTAssertEqual(
-            percentRightEdge + PopoverMetrics.countdownColumnWidth,
+            percentRightEdge + PopoverMetrics.trailingValueColumnWidth,
             Self.contentWidth,
             accuracy: 0.001
         )
     }
 
     /// The usage-credits row's bar is the same width as the quota bars above
-    /// it, which is why ``PopoverMetrics/percentAndCountdownColumnWidth``
-    /// includes the gap in front of it: that row lays the bar and the value out
-    /// with no `rowSpacing` between them (see ``PopoverView``'s
-    /// `usageCreditsRow`), so the two ways of spending the trailing 101 pt
-    /// leave the bar at the same x.
+    /// it — same formula, same ``PopoverMetrics/trailingValueColumnWidth`` —
+    /// because ``PopoverView``'s `usageCreditsRow` lays its bar, percent and
+    /// caption out in the exact same zero-spacing shape ``WindowBarView`` uses
+    /// for its bar, percent and countdown.
     func testTheCreditsRowsBarIsAsWideAsTheQuotaBars() {
         let creditsBar = Self.contentWidth
             - PopoverMetrics.labelColumnWidth
             - PopoverMetrics.rowSpacing
-            - PopoverMetrics.percentAndCountdownColumnWidth
+            - PopoverMetrics.percentColumnWidth
+            - PopoverMetrics.trailingValueColumnWidth
 
         XCTAssertEqual(creditsBar, PopoverMetrics.quotaBarWidth, accuracy: 0.001)
     }
 
-    /// Breathing room between the bar and the reading beside it: the bar's own
-    /// gap plus the slack in front of a right-aligned percentage. It used to be
-    /// 21.8 pt for an ordinary `62%`, which read as the number crowding the bar.
+    /// Breathing room between the bar and the reading beside it — the slack in
+    /// front of a right-aligned percentage sitting flush against the bar, with
+    /// no gap of its own to help. It used to be 21.8 pt for an ordinary `62%`,
+    /// back when a real ``PopoverMetrics/rowSpacing`` sat between the bar and
+    /// this column too; removing that gap (so every row's percent lines up on
+    /// one x — see ``PopoverMetrics/trailingValueColumnWidth``) cost this
+    /// column its half of it.
     func testThePercentageKeepsClearSpaceAfterTheBar() {
         for reading in ["0%", "62%", "100%"] {
-            let gap = PopoverMetrics.rowSpacing
-                + PopoverMetrics.percentColumnWidth
-                - width(reading, valueFont)
-            XCTAssertGreaterThanOrEqual(gap, 18, "\(reading) sits too close to the bar")
+            let gap = PopoverMetrics.percentColumnWidth - width(reading, valueFont)
+            // 10 rather than 18: `100%` is the tightest of these three at 31.2
+            // of the column's 42 pt, so the real margin is 10.8 pt and a floor
+            // of 10 leaves 0.8 pt of headroom — close enough that a font-metric
+            // change between macOS versions could fail this without the layout
+            // having moved. `99.9%`, wider still, is excluded: that string is
+            // what sized the column in the first place (see
+            // ``PopoverMetrics/percentColumnWidth``), not a reading expected to
+            // clear it.
+            XCTAssertGreaterThanOrEqual(gap, 10, "\(reading) sits too close to the bar")
         }
 
-        // The percentage keeps clear space on its *other* side too. This used
-        // to assert the countdown was the further of the two from the bar —
-        // that the row read bar → percentage → countdown rather than
-        // bar+percentage → countdown. It no longer holds and is no longer the
-        // rule: the percentage was moved deliberately to 261 pt (see
-        // ``testThePercentagesRightEdgeSitsWhereTheLayoutWasFittedTo``), which
-        // spent the countdown column's slack on the bar, so the two readings
-        // now sit closer to each other than the percentage does to the bar.
-        // What still has to hold is that they don't *touch*: every string the
-        // countdown column can show is right-aligned in it, so the air in front
-        // of it is the column width less the string.
-        // Measured in the font the column is *drawn* in — monospacing widens
-        // some digits, and `11d 11h` is the widest string it holds.
+        // The trailing reading keeps clear space on its *other* side too:
+        // every string it can show is right-aligned in
+        // ``PopoverMetrics/trailingValueColumnWidth``, so the air in front of
+        // it is that column's width less the string. Measured in the font the
+        // column is *drawn* in — monospacing widens some digits, and
+        // `11d 11h` is the widest string it holds.
         //
         // `59m` is the minutes-only maximum the formatter can reach, not a
         // two-digit number picked for width: ``DisplayFormat/duration(_:)``
@@ -341,30 +348,26 @@ final class PopoverChartHoverTests: XCTestCase {
         // minutes it takes from the remainder are `0...59` there. Anything
         // longer comes back as `2h 14m`, which is already in this list.
         for countdown in ["11d 11h", "6d 23h", "2h 14m", "59m", "pending", "no data"] {
-            let gap = PopoverMetrics.countdownColumnWidth
+            let gap = PopoverMetrics.trailingValueColumnWidth
                 - width(countdown, PopoverMetrics.captionValueNSFont)
-            // 9.5 rather than 10: `11d 11h` is the binding string at 40.9 of
-            // the column's 51 pt, so the real margin is 10.1 pt and a floor of
-            // 10 leaves a tenth of a point of headroom — close enough that a
-            // font-metric change between macOS versions could fail this without
-            // the layout having moved.
             XCTAssertGreaterThanOrEqual(gap, 9.5, "\(countdown) crowds the reading beside it")
         }
     }
 
-    func testTheMergedColumnHoldsACreditsValueInAWideLocale() {
-        // The value that sized the merged column, in the locale that spends the
-        // most width on it: comma separator, trailing symbol, space before it.
-        let text = DisplayFormat.moneySpend(
-            used: MoneyAmount(amountMinor: 2_087, currency: "EUR"),
-            limit: MoneyAmount(amountMinor: 3_300, currency: "EUR"),
+    /// The credits row's caption holds a three-digit, two-decimal limit —
+    /// the case ``PopoverMetrics/trailingValueColumnWidth`` documents itself
+    /// against — in the locale that spends the most width on one: comma
+    /// separator, trailing symbol, space before it.
+    func testTheCreditsLimitCaptionHoldsAThreeDigitAmountInAWideLocale() {
+        let text = DisplayFormat.creditsLimitCaption(
+            MoneyAmount(amountMinor: 99_900, currency: "EUR"),
             locale: Locale(identifier: "de_DE")
         )
 
         XCTAssertLessThanOrEqual(
-            width(text, valueFont),
-            PopoverMetrics.percentAndCountdownColumnWidth,
-            "\(text) overflows the merged credits column"
+            width(text, PopoverMetrics.captionValueNSFont),
+            PopoverMetrics.trailingValueColumnWidth,
+            "\(text) overflows the credits row's caption column"
         )
     }
 

@@ -241,21 +241,24 @@ struct PopoverView: View {
     /// rate-limit window — hence the hatched bar, which marks it as a different
     /// kind of measurement rather than a fourth window.
     ///
-    /// The value column shows money, not the percentage: `0%` of an unstated
-    /// budget says nothing, where `€0.00 of €33.00` says both. It is formatted
-    /// from the payload's own `currency` and `exponent` (see
-    /// ``DisplayFormat/money(_:locale:)``) — never a hardcoded symbol or a
-    /// hardcoded divide by 100, which would be silently wrong for an org billed
-    /// in a zero-decimal currency.
+    /// The percent and caption columns match the window rows above exactly —
+    /// same font, same secondary ink, same trailing edge — rather than the
+    /// single wide `€0.00 of €33.00` reading this row used to carry in place
+    /// of both. `63%` says what the bar already shows; `of €33.00` says what
+    /// it's a percentage of. What was spent moves to the row's tooltip (see
+    /// ``usageCreditsHelp(_:)``), which is the one place on the row that had
+    /// nowhere else for it to go.
     ///
-    /// The countdown column is empty because the payload reports no rollover
-    /// timestamp for the monthly cap; the value spans both trailing columns —
-    /// and the gap in front of them — instead, so it still ends flush with the
-    /// countdowns above it. Hence the nested zero-spacing stack: the bar and
-    /// the value have no ``PopoverMetrics/rowSpacing`` between them, because
-    /// that gap is part of what
-    /// ``PopoverMetrics/percentAndCountdownColumnWidth`` spans. Laid out with
-    /// the gap, this row's bar would come out 8 pt short of the bars above it.
+    /// The countdown column is empty on every window row because the payload
+    /// reports no rollover timestamp for the monthly cap; here it carries the
+    /// caption instead — the same ``PopoverMetrics/trailingValueColumnWidth``
+    /// every row's trailing reading uses, ``PopoverMetrics/rowSpacing`` wider
+    /// than a plain countdown needs, so a three-digit limit still fits. Same
+    /// nested zero-spacing stack as ``WindowBarView`` too: the bar, the
+    /// percent and the caption sit flush against each other with no real
+    /// spacing, which is what keeps this row's percent column starting at the
+    /// same x as the window rows' above it — see
+    /// ``PopoverMetrics/trailingValueColumnWidth``.
     ///
     /// There is no absent-credits branch anywhere: no credits means no row —
     /// see ``UsageCredits`` on why that is the normal state and not an error.
@@ -271,12 +274,16 @@ struct PopoverView: View {
                 UsageBar(fraction: credits.window.fractionUsed, fillStyle: .hatched)
                     .frame(minWidth: 48)
 
-                Text(DisplayFormat.moneySpend(used: credits.used, limit: credits.limit))
+                Text(DisplayFormat.windowPercent(credits.window))
                     .font(PopoverMetrics.valueFont)
-                    .frame(
-                        width: PopoverMetrics.percentAndCountdownColumnWidth,
-                        alignment: .trailing
-                    )
+                    .lineLimit(1)
+                    .frame(width: PopoverMetrics.percentColumnWidth, alignment: .trailing)
+
+                Text(DisplayFormat.creditsLimitCaption(credits.limit))
+                    .font(PopoverMetrics.captionValueFont)
+                    .lineLimit(1)
+                    .foregroundStyle(.secondary)
+                    .frame(width: PopoverMetrics.trailingValueColumnWidth, alignment: .trailing)
             }
         }
         .accessibilityElement(children: .combine)
