@@ -174,14 +174,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
             guard let index = self.corpusIndex else { return }
             let fresh = index.rebuild(changed: changes)
+            // Read here, beside the store it describes, so the main actor
+            // doesn't pay for the ~11 ms history walk on every rebuild — it
+            // only assigns the result.
+            let localStats = LocalStatsLoad.load(from: fresh)
             DispatchQueue.main.async {
-                self.model?.updateUsageStore(fresh)
-                // Local stats/breakdown already refreshed by `updateUsageStore`;
-                // this additionally re-reads the statusline cache, throttled
+                self.model?.updateUsageStore(fresh, localStats: localStats)
+                // The history is already published; `AppModel` caches it per
+                // store and day, so this refresh doesn't read it again. What it
+                // adds is a re-read of the statusline cache, throttled
                 // internally by `AppModel` so filesystem churn can't cause a
-                // read on every write. `reloadLocalData: false` skips redoing
-                // the three-window breakdown sum `updateUsageStore` just did.
-                self.model?.refresh(reloadLocalData: false)
+                // read on every write.
+                self.model?.refresh()
             }
         }
     }

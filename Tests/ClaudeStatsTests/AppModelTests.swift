@@ -88,8 +88,14 @@ final class AppModelTests: XCTestCase {
     /// ``ScriptedPromoNoticeProvider``: `UsageStoring` is synchronous and only
     /// the single `@MainActor` test using one ever touches it.
     private final class CountingUsageStore: UsageStoring, @unchecked Sendable {
-        private let backing = MockUsageStore()
+        private let backing: MockUsageStore
         private(set) var dailyUsageCallCount = 0
+        /// When set, `dailyUsage(days:)` throws — still counted.
+        var failsDailyUsage = false
+
+        init(backing: MockUsageStore = MockUsageStore()) {
+            self.backing = backing
+        }
         private(set) var breakdownCallCount = 0
         private(set) var modelUsageCallCount = 0
         private(set) var costTodayCallCount = 0
@@ -111,6 +117,7 @@ final class AppModelTests: XCTestCase {
 
         func dailyUsage(days: Int) throws -> DailyUsageHistory {
             dailyUsageCallCount += 1
+            if failsDailyUsage { throw FailingUsageStore.Failure() }
             return try backing.dailyUsage(days: days)
         }
     }
@@ -403,8 +410,8 @@ final class AppModelTests: XCTestCase {
         let loaded = model.dailyHistory
         XCTAssertFalse(loaded.isEmpty)
 
-        // `updateUsageStore(_:)` reloads as it swaps, so this is the failing
-        // reload — no extra test double needed to script one.
+        // `updateUsageStore(_:localStats:)` with no load reads as it swaps, so
+        // this is the failing reload — no extra test double needed to script one.
         model.updateUsageStore(FailingUsageStore())
 
         XCTAssertNotNil(model.localStatsError)
@@ -430,6 +437,170 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(store.breakdownCallCount, 0)
         XCTAssertEqual(store.modelUsageCallCount, 0)
         XCTAssertEqual(store.costTodayCallCount, 0)
+    }
+
+    // MARK: - Daily history caching
+
+    /// A settable clock, shared by the model and the store so both agree on
+    /// what "today" is. `@unchecked Sendable`: only the `@MainActor` test that
+    /// owns one ever touches it.
+    private final class TestClock: @unchecked Sendable {
+        var now: Date
+        init(_ now: Date) { self.now = now }
+    }
+
+    private static let utc: Calendar = {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        return calendar
+    }()
+
+    /// `2026-09-15T12:00:00Z` — midday, so a few hours either way stays on the
+    /// same UTC day.
+    private static let midday = Date(timeIntervalSince1970: 1_789_473_600)
+
+    private func makeClockedModel(store: any UsageStoring, clock: TestClock) -> AppModel {
+        AppModel(
+            quotaProvider: ScriptedQuotaProvider(),
+            usageStore: store,
+            promoNoticeProvider: MockPromoNoticeProvider(notices: []),
+            calendar: Self.utc,
+            now: { clock.now }
+        )
+    }
+
+    /// The history depends only on the store and the day, so reloading with
+    /// neither changed reads nothing — which is what makes a popover open, the
+    /// rebuild path's follow-up refresh and each account-switch ladder rung
+    /// free. Manual Refresh (`force`) included: the store is in memory, and a
+    /// second read can only say the same.
+    func testRefreshWithTheSameStoreOnTheSameDayDoesNotReadTheHistoryAgain() {
+        let clock = TestClock(Self.midday)
+        let store = CountingUsageStore(backing: MockUsageStore(calendar: Self.utc, now: { clock.now }))
+        let model = makeClockedModel(store: store, clock: clock)
+
+        model.refresh(force: true)
+        let loaded = model.dailyHistory
+        clock.now = Self.midday.addingTimeInterval(3 * 3600)
+        model.refresh(force: true)
+        model.refresh()
+
+        XCTAssertEqual(store.dailyUsageCallCount, 1)
+        XCTAssertEqual(model.dailyHistory, loaded)
+    }
+
+    /// A swapped store is a different answer: the new one is read once, and
+    /// the refresh that follows it doesn't read it again.
+    func testANewStoreIsReadOnceAndThenCached() {
+        let clock = TestClock(Self.midday)
+        let first = CountingUsageStore(backing: MockUsageStore(calendar: Self.utc, now: { clock.now }))
+        let model = makeClockedModel(store: first, clock: clock)
+        model.refresh(force: true)
+
+        let second = CountingUsageStore(backing: MockUsageStore(calendar: Self.utc, now: { clock.now }))
+        model.updateUsageStore(second)
+        model.refresh()
+
+        XCTAssertEqual(first.dailyUsageCallCount, 1)
+        XCTAssertEqual(second.dailyUsageCallCount, 1)
+    }
+
+    /// The rebuild path hands the history over already read, off the main
+    /// actor — the model publishes it without touching the store at all.
+    func testAHandedOverLoadIsPublishedWithoutReadingTheStore() {
+        let clock = TestClock(Self.midday)
+        let model = makeClockedModel(store: MockUsageStore(calendar: Self.utc, now: { clock.now }), clock: clock)
+        model.refresh(force: true)
+
+        let fresh = CountingUsageStore(backing: MockUsageStore(calendar: Self.utc, now: { clock.now }))
+        let load = LocalStatsLoad.load(from: fresh, calendar: Self.utc, now: clock.now)
+        XCTAssertEqual(fresh.dailyUsageCallCount, 1)
+
+        model.updateUsageStore(fresh, localStats: load)
+        model.refresh()
+
+        XCTAssertEqual(fresh.dailyUsageCallCount, 1)
+        XCTAssertEqual(LocalStatsLoad.Outcome.history(model.dailyHistory), load.outcome)
+        XCTAssertNil(model.localStatsError)
+    }
+
+    /// Midnight changes the answer without changing the store: the window
+    /// ends with "today", so the cached history must not survive into the
+    /// next day — the newest point has to move along.
+    func testDayRolloverReadsTheHistoryAgain() throws {
+        let clock = TestClock(Self.midday)
+        let store = CountingUsageStore(backing: MockUsageStore(calendar: Self.utc, now: { clock.now }))
+        let model = makeClockedModel(store: store, clock: clock)
+        model.refresh(force: true)
+        let today = Self.utc.startOfDay(for: Self.midday)
+        XCTAssertEqual(model.dailyHistory.days.last, today)
+
+        clock.now = Self.midday.addingTimeInterval(86_400)
+        model.refresh()
+
+        XCTAssertEqual(store.dailyUsageCallCount, 2)
+        XCTAssertEqual(model.dailyHistory.days.last, Self.utc.date(byAdding: .day, value: 1, to: today))
+    }
+
+    /// A load read just before midnight and delivered just after is labelled
+    /// with the day it was read on, so the model reads the store again rather
+    /// than showing yesterday's window as today's.
+    func testAHandedOverLoadFromYesterdayIsReadAgain() {
+        let clock = TestClock(Self.midday)
+        let model = makeClockedModel(store: MockUsageStore(calendar: Self.utc, now: { clock.now }), clock: clock)
+        let fresh = CountingUsageStore(backing: MockUsageStore(calendar: Self.utc, now: { clock.now }))
+        let stale = LocalStatsLoad.load(from: fresh, calendar: Self.utc, now: clock.now)
+
+        clock.now = Self.midday.addingTimeInterval(86_400)
+        model.updateUsageStore(fresh, localStats: stale)
+
+        XCTAssertEqual(fresh.dailyUsageCallCount, 2)
+        XCTAssertEqual(model.dailyHistory.days.last, Self.utc.startOfDay(for: clock.now))
+    }
+
+    /// A handed-over load that failed isn't worth retrying immediately against
+    /// the same, unchanged store — that would just pay the main-actor cost the
+    /// handoff exists to avoid. The next natural reload still retries it.
+    func testAHandedOverFailureIsNotImmediatelyRetried() {
+        let clock = TestClock(Self.midday)
+        let model = makeClockedModel(store: MockUsageStore(calendar: Self.utc, now: { clock.now }), clock: clock)
+        let fresh = CountingUsageStore(backing: MockUsageStore(calendar: Self.utc, now: { clock.now }))
+        fresh.failsDailyUsage = true
+        let failed = LocalStatsLoad.load(from: fresh, calendar: Self.utc, now: clock.now)
+        XCTAssertEqual(fresh.dailyUsageCallCount, 1)
+
+        model.updateUsageStore(fresh, localStats: failed)
+
+        XCTAssertEqual(fresh.dailyUsageCallCount, 1)
+        XCTAssertNotNil(model.localStatsError)
+    }
+
+    /// A failed read is not remembered as an answer: the next reload tries the
+    /// same store again, and recovers once it reads.
+    func testAFailedReadIsRetriedOnTheNextReload() {
+        let clock = TestClock(Self.midday)
+        let store = CountingUsageStore(backing: MockUsageStore(calendar: Self.utc, now: { clock.now }))
+        store.failsDailyUsage = true
+        let model = makeClockedModel(store: store, clock: clock)
+
+        model.refresh(force: true)
+        XCTAssertNotNil(model.localStatsError)
+
+        store.failsDailyUsage = false
+        model.refresh()
+
+        XCTAssertEqual(store.dailyUsageCallCount, 2)
+        XCTAssertNil(model.localStatsError)
+        XCTAssertFalse(model.dailyHistory.isEmpty)
+    }
+
+    /// The load itself: a throwing store becomes a failure carrying its
+    /// message, dated like a success.
+    func testLocalStatsLoadCarriesAFailureAndTheDayItWasReadOn() {
+        let load = LocalStatsLoad.load(from: FailingUsageStore(), calendar: Self.utc, now: Self.midday)
+
+        XCTAssertEqual(load.outcome, .failure("boom"))
+        XCTAssertEqual(load.day, Self.utc.startOfDay(for: Self.midday))
     }
 
     // MARK: - Usage credits

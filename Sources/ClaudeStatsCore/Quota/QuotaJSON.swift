@@ -80,12 +80,23 @@ enum QuotaJSON {
     }
 
     private static func iso8601Date(_ string: String) -> Date? {
+        fractionalISO8601.date(from: string) ?? wholeSecondISO8601.date(from: string)
+    }
+
+    /// Built once: creating an `ISO8601DateFormatter` costs far more than
+    /// parsing with one, and a changed state file parses a dozen of these
+    /// timestamps. `ISO8601DateFormatter` is thread-safe once configured.
+    nonisolated(unsafe) private static let fractionalISO8601: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = formatter.date(from: string) { return date }
+        return formatter
+    }()
+
+    nonisolated(unsafe) private static let wholeSecondISO8601: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]
-        return formatter.date(from: string)
-    }
+        return formatter
+    }()
 
     /// Builds a window from a per-window object. Returns `nil` when no
     /// percentage is present — an all-`nil` window carries no information and

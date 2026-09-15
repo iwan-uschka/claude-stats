@@ -1,3 +1,4 @@
+import os
 import XCTest
 @testable import ClaudeStatsCore
 
@@ -135,6 +136,19 @@ final class CachedUtilizationReaderTests: XCTestCase {
         XCTAssertEqual(sevenDayReset.timeIntervalSince1970, sevenDayResetEpoch, accuracy: 0.001)
         // Fractional seconds survive, so a countdown can't be a second off.
         XCTAssertEqual(snapshot.fiveHour?.timeUntilReset(from: now) ?? 0, 300, accuracy: 1)
+    }
+
+    /// Both ISO-8601 spellings parse, in either order, through the shared
+    /// formatters — the fractional one first, the whole-second one as the
+    /// fallback — so reusing one formatter can't leave it stuck on the other's
+    /// options.
+    func testWholeSecondAndFractionalISO8601BothParseRepeatedly() {
+        for _ in 0..<2 {
+            XCTAssertEqual(QuotaJSON.date("2026-08-28T23:00:00+00:00")?.timeIntervalSince1970, 1_787_958_000)
+            XCTAssertEqual(QuotaJSON.date("2026-08-28T23:00:00.401826+00:00")?.timeIntervalSince1970 ?? 0,
+                           sevenDayResetEpoch, accuracy: 0.001)
+        }
+        XCTAssertNil(QuotaJSON.date("not a date"))
     }
 
     /// `optionalWindows(in:)`'s documented contract: each window is
@@ -868,6 +882,152 @@ final class CachedUtilizationReaderTests: XCTestCase {
         """)
         let unattributed = try await makeReader().currentSnapshot()
         XCTAssertNil(unattributed.account)
+    }
+
+    // MARK: - The fingerprint gate
+
+    /// The shared fixture with the 5-hour figure swapped for another two-digit
+    /// one: the same length, so an in-place rewrite keeps both the size and the
+    /// inode half of the fingerprint, and restoring the mtime keeps the rest.
+    /// A re-parse sees 42; a cache hit still says 11.
+    private func sameSizedRewrite(fetchedAt: Date) -> String {
+        stateFile(fetchedAt: fetchedAt)
+            .replacingOccurrences(of: #""utilization": 11,"#, with: #""utilization": 42,"#)
+    }
+
+    /// A whole-second stamp, so restoring it reproduces the exact nanosecond
+    /// mtime the fingerprint compares.
+    private let pinnedModificationDate = Date(timeIntervalSince1970: 1_800_000_000)
+
+    private func pinModificationDate(_ date: Date? = nil) throws {
+        try FileManager.default.setAttributes(
+            [.modificationDate: date ?? pinnedModificationDate], ofItemAtPath: stateFileURL.path)
+    }
+
+    /// An unchanged file is not parsed again — every read serves the values the
+    /// last parse extracted. `FreshestQuotaProvider` asks for credits on nearly
+    /// every poll, so without this each poll paid a full parse of a file that
+    /// hadn't moved. Proved by making the contents lie under an untouched
+    /// fingerprint, the way `ActiveAccountReaderTests` does.
+    func testUnchangedFileIsServedWithoutReparsing() async throws {
+        let fetchedAt = now.addingTimeInterval(-60)
+        try write(stateFile(fetchedAt: fetchedAt))
+        try pinModificationDate()
+        let reader = makeReader()
+        let first = try await reader.currentSnapshot()
+        XCTAssertEqual(first.fiveHour?.percentUsed, 11)
+
+        try write(sameSizedRewrite(fetchedAt: fetchedAt))
+        try pinModificationDate()
+
+        let second = try await reader.currentSnapshot()
+        XCTAssertEqual(second.fiveHour?.percentUsed, 11)
+        XCTAssertEqual(second, first)
+        // The staleness-bypassing reads ride the same cache.
+        let scoped = try await reader.currentScopedWeekly()
+        XCTAssertEqual(scoped, first.scopedWeekly)
+        let credits = try await reader.currentUsageCredits()
+        XCTAssertEqual(credits, UsageCreditsReading(credits: first.usageCredits, disabledReason: first.usageCreditsDisabledReason))
+    }
+
+    /// A changed file is re-read — any fingerprint component moving is enough.
+    func testChangedFileIsReparsed() async throws {
+        let fetchedAt = now.addingTimeInterval(-60)
+        try write(stateFile(fetchedAt: fetchedAt))
+        try pinModificationDate()
+        let reader = makeReader()
+        let first = try await reader.currentSnapshot()
+        XCTAssertEqual(first.fiveHour?.percentUsed, 11)
+
+        try write(sameSizedRewrite(fetchedAt: fetchedAt))
+        try pinModificationDate(pinnedModificationDate.addingTimeInterval(5))
+
+        let second = try await reader.currentSnapshot()
+        XCTAssertEqual(second.fiveHour?.percentUsed, 42)
+    }
+
+    /// Staleness is the clock's business, not the file's: a cached parse must
+    /// still age out while the file sits unchanged — which is exactly what a
+    /// blob that stopped refreshing looks like.
+    func testCachedParseStillGoesStaleAsTheClockMoves() async throws {
+        let clock = OSAllocatedUnfairLock(initialState: now)
+        let reader = CachedUtilizationReader(candidateURLs: [stateFileURL], now: { clock.withLock { $0 } })
+        try write(stateFile(fetchedAt: now.addingTimeInterval(-60)))
+
+        _ = try await reader.currentSnapshot()
+
+        clock.withLock { $0 = self.now.addingTimeInterval(3600) }
+        await assertThrowsStale(age: 3660) {
+            try await reader.currentSnapshot()
+        }
+    }
+
+    /// A malformed file drops the cached parse along with the error, so a later
+    /// file that happens to match the old fingerprint (same inode, size and
+    /// mtime — an in-place rewrite with the mtime restored) is parsed, not
+    /// answered from the stale cache.
+    func testMalformedFileDropsTheCachedParse() async throws {
+        let fetchedAt = now.addingTimeInterval(-60)
+        try write(stateFile(fetchedAt: fetchedAt))
+        try pinModificationDate()
+        let reader = makeReader()
+        _ = try await reader.currentSnapshot()
+
+        try write("{ this is not json")
+        await assertThrowsUnexpectedQuotaResponse {
+            try await reader.currentSnapshot()
+        }
+
+        try write(sameSizedRewrite(fetchedAt: fetchedAt))
+        try pinModificationDate()
+        let snapshot = try await reader.currentSnapshot()
+        XCTAssertEqual(snapshot.fiveHour?.percentUsed, 42)
+    }
+
+    /// Same for a file that goes away: moved aside (a rename keeps the inode),
+    /// rewritten in place under the old size and mtime, and moved back, it
+    /// matches the old fingerprint exactly — and is still parsed afresh.
+    func testUnavailableFileDropsTheCachedParse() async throws {
+        let fetchedAt = now.addingTimeInterval(-60)
+        try write(stateFile(fetchedAt: fetchedAt))
+        try pinModificationDate()
+        let reader = makeReader()
+        _ = try await reader.currentSnapshot()
+
+        let aside = directory.appendingPathComponent("aside.json")
+        try FileManager.default.moveItem(at: stateFileURL, to: aside)
+        await assertThrows(.noQuotaSourceAvailable) {
+            try await reader.currentSnapshot()
+        }
+
+        try Data(sameSizedRewrite(fetchedAt: fetchedAt).utf8).write(to: aside)
+        try FileManager.default.setAttributes([.modificationDate: pinnedModificationDate], ofItemAtPath: aside.path)
+        try FileManager.default.moveItem(at: aside, to: stateFileURL)
+        let snapshot = try await reader.currentSnapshot()
+        XCTAssertEqual(snapshot.fiveHour?.percentUsed, 42)
+    }
+
+    /// A file with no `cachedUsageUtilization` at all is a real parse result
+    /// too, and is remembered like one: the key appearing in place under the
+    /// same fingerprint is not seen, while a real rewrite is.
+    func testMissingUtilizationIsCachedAgainstTheFingerprint() async throws {
+        let fetchedAt = now.addingTimeInterval(-60)
+        let full = stateFile(fetchedAt: fetchedAt)
+        // Same byte count as `full`, no `cachedUsageUtilization` key.
+        let padding = String(repeating: " ", count: full.utf8.count - #"{"numStartups":3}"#.utf8.count)
+        let bare = #"{"numStartups":3}"# + padding
+        try write(bare)
+        try pinModificationDate()
+        let reader = makeReader()
+        await assertThrows(.noQuotaSourceAvailable) { try await reader.currentSnapshot() }
+
+        try write(full)
+        try pinModificationDate()
+        await assertThrows(.noQuotaSourceAvailable) { try await reader.currentSnapshot() }
+
+        try pinModificationDate(pinnedModificationDate.addingTimeInterval(5))
+        let snapshot = try await reader.currentSnapshot()
+        XCTAssertEqual(snapshot.fiveHour?.percentUsed, 11)
     }
 
     // MARK: - Clearing

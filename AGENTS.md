@@ -162,6 +162,12 @@ Two independent tiers, deliberately decoupled:
        Claude Code sessions actively running, so the real cadence looks like
        hours, not minutes. A 10-minute gate would reject good readings. The 60
        is a judgement call from those measurements, not a documented cadence.
+     - **Read behind the same fingerprint gate as the promo reader.**
+       `FreshestQuotaProvider` asks this source for usage credits on nearly
+       every poll (the hook's copy usually has `spend.enabled: false`, so no
+       credits), and that used to be a full ~170 KB parse of an unchanged file
+       — about half a poll. The values one parse extracts are cached against
+       the fingerprint; staleness is still judged against the clock per call.
      - **Undocumented private state.** It can be renamed or dropped by any
        Claude Code release — a `spend` object appeared inside this payload
        between 2026-08-27 and 2026-08-28. That is precisely why the statusline
@@ -272,6 +278,17 @@ Two independent tiers, deliberately decoupled:
          backup source until its next render writes a stamped file. Session files unwritten
          for 7 days are deleted as the reader passes over them; the legacy file
          is not, since it may be that machine's only reading.
+       - **Each file's parse is cached, keyed by path, behind a `stat`.** Every
+         poll lists the directory and walks every file, so per-file cost is what
+         scales — and on a Mac running endpoint-security tools `open` costs
+         ~33 µs against ~1.3 µs for `stat`. A file whose (inode, ns mtime, size) still
+         matches is not opened; a changed one is read and fingerprinted from
+         one descriptor as before. Retention and the merge are re-applied every
+         poll; files that leave the listing leave the cache, and
+         `clearCache()` empties it. Listing works on path strings, not `URL`s:
+         `lastPathComponent` in the sort comparator alone was ~23 µs per file.
+         Measured 2026-09-15 (release, state file unchanged, whole poll): 19
+         files 4.0 → 0.4 ms, 250 files 24.7 → 2.3 ms.
      - **The cache carries all four bars, not two — plus whose they are.** When
        `jq` is available the
        helper script also reads Claude Code's own `~/.claude.json` (located the
@@ -325,7 +342,7 @@ Two independent tiers, deliberately decoupled:
        watching `$HOME` recursively is not an acceptable cost for one cached
        feature flag. Reads ride the throttled quota refresh instead (≥30s,
        ≤300s; manual Refresh always re-reads), gated on a nanosecond-mtime +
-       inode + size fingerprint so an unchanged 145 KB file costs one `open`
+       inode + size fingerprint so an unchanged 170 KB file costs one `open`
        plus one `fstat`, not a parse.
      - **Hidden when `cachedGrowthBookFeaturesAt` is older than 7 days**, and
        when it is missing entirely (unknown age ≠ fresh). **The file's mtime is
@@ -398,6 +415,14 @@ Two independent tiers, deliberately decoupled:
      `estimatedCostToday()`), each of which walked tens of thousands of
      `UsageEvent`s on the main actor. All three are still on `UsageStoring`; no
      view calls them.
+   - **That one query is cached per store and local day, and read off the main
+     actor.** It still costs ~11 ms on the real corpus. `AppModel` keeps the day
+     its `dailyHistory` was read on and reads again only for a new store or a
+     new day — so popover opens, the rebuild path's follow-up refresh and the
+     account-switch retry ladder cost nothing. The rebuild queue reads it
+     (`LocalStatsLoad.load(from:)`) beside the store it just built and hands
+     both over; the main actor only assigns. A load's day is taken before the
+     read, so one straddling midnight is re-read rather than kept.
 
 ### Explicit non-goals (v1)
 

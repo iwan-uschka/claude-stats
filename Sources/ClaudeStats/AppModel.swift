@@ -27,13 +27,57 @@ enum DefaultDisplayRange: String, CaseIterable, Identifiable {
 
     /// What the Settings picker calls it. The 30 is spelled from
     /// ``AppModel/chartWindowDays`` rather than typed, so shortening the
-    /// window can't leave the label claiming a month — which is also why this
-    /// is `@MainActor`: that constant lives on the main-actor model.
-    @MainActor
+    /// window can't leave the label claiming a month.
     var label: String {
         switch self {
         case .last30Days: return "Last \(AppModel.chartWindowDays) days"
         case .latestDay: return "Latest day"
+        }
+    }
+}
+
+/// The popover's daily history read out of one usage store, together with the
+/// local day it was read on — the unit ``AppModel`` caches and the rebuild
+/// queue hands over.
+///
+/// A value rather than a call so it can be computed off the main actor:
+/// ``UsageStoring/dailyUsage(days:)`` walks every retained event plus the
+/// folded day cells — about 11 ms against a real 14k-file corpus — and
+/// `ClaudeStatsApp.rebuildUsageStore` used to pay that on the main actor for
+/// every FSEvents rebuild. It now builds one of these on the rebuild queue,
+/// next to the store it describes, and ``AppModel/updateUsageStore(_:localStats:)``
+/// only assigns it.
+struct LocalStatsLoad: Sendable {
+    enum Outcome: Sendable, Equatable {
+        case history(DailyUsageHistory)
+        /// The store threw; carries its `localizedDescription`, which is all
+        /// ``AppModel/localStatsError`` ever shows.
+        case failure(String)
+    }
+
+    /// Local start of the day the history was read on. A history is only
+    /// valid for that day: its window ends with "today", so after midnight the
+    /// same store gives a different answer.
+    let day: Date
+    let outcome: Outcome
+
+    /// Reads ``AppModel/chartWindowDays`` of history out of `store`. Safe on
+    /// any thread — every ``UsageStoring`` is `Sendable` and the real one is
+    /// immutable arithmetic over data already in memory.
+    ///
+    /// `day` is taken *before* the read, so a read that straddles midnight is
+    /// labelled with the earlier day and simply reloaded on the next check —
+    /// never kept a day longer than it is right.
+    static func load(
+        from store: any UsageStoring,
+        calendar: Calendar = .current,
+        now: Date = Date()
+    ) -> LocalStatsLoad {
+        let day = calendar.startOfDay(for: now)
+        do {
+            return LocalStatsLoad(day: day, outcome: .history(try store.dailyUsage(days: AppModel.chartWindowDays)))
+        } catch {
+            return LocalStatsLoad(day: day, outcome: .failure(error.localizedDescription))
         }
     }
 }
@@ -94,6 +138,15 @@ final class AppModel: ObservableObject {
     private let quotaProvider: any QuotaProviding
     private let promoNoticeProvider: any PromoNoticeProviding
     private var usageStore: any UsageStoring
+    /// The day ``dailyHistory`` was read on, out of the current
+    /// ``usageStore`` — `nil` when it has to be read (again): nothing loaded
+    /// yet, the store was swapped, or the last read failed. See
+    /// ``reloadLocalStats()``.
+    private var dailyHistoryDay: Date?
+    /// Clock and calendar behind the "is ``dailyHistory`` still today's"
+    /// check, injected so a test can cross midnight.
+    private let calendar: Calendar
+    private let now: @Sendable () -> Date
     private var refreshTask: Task<Void, Never>?
     private var lastQuotaPoll: Date?
     private var postInstallPollTask: Task<Void, Never>?
@@ -143,13 +196,17 @@ final class AppModel: ObservableObject {
         usageStore: any UsageStoring,
         promoNoticeProvider: any PromoNoticeProviding,
         usingSampleData: Bool = false,
-        defaults: UserDefaults = .standard
+        defaults: UserDefaults = .standard,
+        calendar: Calendar = .current,
+        now: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.quotaProvider = quotaProvider
         self.usageStore = usageStore
         self.promoNoticeProvider = promoNoticeProvider
         self.usingSampleData = usingSampleData
         self.defaults = defaults
+        self.calendar = calendar
+        self.now = now
 
         let stored = defaults.double(forKey: Self.pollIntervalDefaultsKey)
         self.quotaPollInterval = Self.pollIntervalOptions.contains(stored) ? stored : 60
@@ -176,10 +233,28 @@ final class AppModel: ObservableObject {
 
     /// Swaps in a freshly-rebuilt store (the FSEvents-triggered refresh path)
     /// without replacing the `AppModel` instance the views are bound to, and
-    /// reloads the published local-stats/breakdown state from it immediately.
-    func updateUsageStore(_ newStore: any UsageStoring) {
+    /// publishes its daily history immediately.
+    ///
+    /// `localStats` is that history already read — by
+    /// `ClaudeStatsApp.rebuildUsageStore`, on the rebuild queue — so the main
+    /// actor only assigns it. Without one it is read here. A successful load
+    /// is also checked against today afterwards, so one computed just before
+    /// midnight and delivered just after is read again rather than kept; a
+    /// failed load is not retried immediately, since the store hasn't changed.
+    func updateUsageStore(_ newStore: any UsageStoring, localStats: LocalStatsLoad? = nil) {
         usageStore = newStore
-        reloadLocalStats()
+        dailyHistoryDay = nil
+        guard let localStats else {
+            reloadLocalStats()
+            return
+        }
+        apply(localStats)
+        // Only a successful load can be stale-dated (computed just before
+        // midnight); a failure isn't worth immediately retrying against the
+        // same, unchanged store — the next natural reload will retry it.
+        if case .history = localStats.outcome {
+            reloadLocalStats()
+        }
     }
 
     /// Reload everything. The quota network poll is throttled to
@@ -187,15 +262,15 @@ final class AppModel: ObservableObject {
     /// the spawned quota-poll task (`nil` if throttled) so callers that need
     /// to know when it lands — e.g. ``pollAfterInstall()`` — can await it.
     ///
-    /// `reloadLocalData` skips `reloadLocalStats()` for the one caller
-    /// (`ClaudeStatsApp.rebuildUsageStore`) that just ran it via
-    /// `updateUsageStore(_:)` moments earlier — it walks the corpus, so redoing
-    /// it here would pay that cost twice on every FSEvents batch.
+    /// The local half is free unless something changed: ``reloadLocalStats()``
+    /// only reads the store when it has a new one or the day has rolled over,
+    /// so neither a popover open, the rebuild path's refresh right after
+    /// ``updateUsageStore(_:localStats:)``, nor a retry-ladder rung pays for
+    /// the corpus walk again. `force` does not bypass that: the store is
+    /// in-memory, and reading it twice can only give the same answer.
     @discardableResult
-    func refresh(force: Bool = false, reloadLocalData: Bool = true) -> Task<Void, Never>? {
-        if reloadLocalData {
-            reloadLocalStats()
-        }
+    func refresh(force: Bool = false) -> Task<Void, Never>? {
+        reloadLocalStats()
 
         let shouldPollQuota = force || shouldRunUpdateCheck(lastCheck: lastQuotaPoll, now: Date(), interval: quotaPollInterval)
         guard shouldPollQuota else { return nil }
@@ -492,21 +567,47 @@ final class AppModel: ObservableObject {
     /// Window the popover's charts cover. Thirty days is what the daily fold
     /// can serve without touching retention, and about what fits at a readable
     /// ~10 pt per day across the popover's width.
-    static let chartWindowDays = 30
+    ///
+    /// `nonisolated` because the rebuild queue reads it too — see
+    /// ``LocalStatsLoad/load(from:calendar:now:)``.
+    nonisolated static let chartWindowDays = 30
 
-    /// One query, because the popover now reads one window.
+    /// One query, because the popover now reads one window — and only when its
+    /// answer can have changed.
     ///
     /// It used to also sum a five-hour per-entrypoint breakdown and a fixed-24h
     /// per-model list, both of which walked tens of thousands of `UsageEvent`s
     /// on the main actor for numbers that sat beside a thirty-day chart. The
     /// two tables read the same ``DailyUsageHistory`` the charts do, so that
     /// work is gone rather than moved.
+    ///
+    /// The one query left still costs ~11 ms on a real corpus, and it used to
+    /// run on every call: each popover open, each FSEvents rebuild, and four
+    /// times per account switch (the clear plus three ladder rungs). Its answer
+    /// depends on exactly two things — the store, which is immutable, and
+    /// which local day it is — so it is cached against both: a swapped store
+    /// clears ``dailyHistoryDay``, and a new day no longer matches it.
+    /// Nothing else can change the result, the display-range setting included:
+    /// that picks a reading out of the history at render time.
+    ///
+    /// A failed read is not cached, so the next call retries it.
     private func reloadLocalStats() {
-        do {
-            dailyHistory = try usageStore.dailyUsage(days: Self.chartWindowDays)
+        let today = calendar.startOfDay(for: now())
+        guard dailyHistoryDay != today else { return }
+        apply(LocalStatsLoad.load(from: usageStore, calendar: calendar, now: now()))
+    }
+
+    /// Publishes one load. A failure keeps the history already on screen — see
+    /// `testAFailedReloadAfterASuccessfulOneKeepsTheHistoryItAlreadyHas`.
+    private func apply(_ load: LocalStatsLoad) {
+        switch load.outcome {
+        case .history(let history):
+            dailyHistory = history
             localStatsError = nil
-        } catch {
-            localStatsError = error.localizedDescription
+            dailyHistoryDay = load.day
+        case .failure(let message):
+            localStatsError = message
+            dailyHistoryDay = nil
         }
     }
 

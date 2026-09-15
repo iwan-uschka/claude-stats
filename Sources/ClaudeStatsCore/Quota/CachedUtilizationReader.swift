@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Reads `cachedUsageUtilization` out of Claude Code's private state file
 /// (`~/.claude.json`) — the same account-wide rate-limit numbers the statusline
@@ -70,6 +71,17 @@ import Foundation
 /// false-positive staleness warnings during normal active use without
 /// switching staleness detection off entirely.
 ///
+/// ## Reading cost
+///
+/// Same fingerprint gate as ``ActiveAccountReader`` and
+/// ``RateLimitPromoNoticeReader``: the file is ~170 KB, and
+/// ``FreshestQuotaProvider`` asks this reader for usage credits on every poll
+/// whose hook reading carries none (the common case — `spend.enabled` is
+/// usually `false`). An unchanged file costs one `open` and one `fstat`, and the
+/// values extracted from the last parse are served from memory. Staleness is
+/// still judged against the clock on every call, so a reading that stops
+/// changing still ages out.
+///
 /// ## Undocumented private state
 ///
 /// This key is another program's internals and can be renamed or dropped by any
@@ -91,6 +103,10 @@ public struct CachedUtilizationReader: QuotaProviding {
     public let candidateURLs: [URL]
     public let stalenessThreshold: TimeInterval
     private let now: @Sendable () -> Date
+    /// The last parse and the fingerprint of the bytes it read — see
+    /// ``loadUtilization()``. Shared by every copy of this value, like
+    /// ``ActiveAccountReader``'s.
+    private let cache = OSAllocatedUnfairLock<Cached?>(initialState: nil)
 
     public init(
         candidateURLs: [URL] = ClaudeConfigDirectory.stateFileCandidates(),
@@ -103,14 +119,13 @@ public struct CachedUtilizationReader: QuotaProviding {
     }
 
     public func currentSnapshot() async throws -> QuotaSnapshot {
-        let (root, cached, utilization) = try loadUtilization()
+        let parsed = try loadUtilization()
 
         // Each window can be independently absent — Claude Code stops reporting
         // one once it has rolled over — and an absent one stays absent on the
         // snapshot rather than becoming 0%. Only *both* missing means this
         // source has nothing to say.
-        let windows = QuotaJSON.optionalWindows(in: utilization)
-        guard windows.fiveHour != nil || windows.sevenDay != nil else {
+        guard parsed.fiveHour != nil || parsed.sevenDay != nil else {
             throw ClaudeStatsError.noQuotaSourceAvailable
         }
 
@@ -118,24 +133,23 @@ public struct CachedUtilizationReader: QuotaProviding {
         // rewrites `~/.claude.json` constantly for unrelated keys, so its mtime
         // would report a months-old reading as seconds fresh. `fetchedAtMs` is
         // the only honest age signal here, and without it the age is unknown.
-        guard let capturedAt = QuotaJSON.capturedAtKeys.lazy
-            .compactMap({ QuotaJSON.date(cached[$0]) }).first
-        else {
+        guard let capturedAt = parsed.capturedAt else {
             throw ClaudeStatsError.noQuotaSourceAvailable
         }
 
-        let credits = QuotaJSON.usageCredits(in: utilization)
         let snapshot = QuotaSnapshot(
-            fiveHour: windows.fiveHour,
-            sevenDay: windows.sevenDay,
+            fiveHour: parsed.fiveHour,
+            sevenDay: parsed.sevenDay,
             confidence: .cachedOfficial,
             capturedAt: capturedAt,
-            scopedWeekly: QuotaJSON.scopedLimits(in: utilization),
-            usageCredits: credits.credits,
-            usageCreditsDisabledReason: credits.disabledReason,
-            account: Self.account(root: root, cached: cached)
+            scopedWeekly: parsed.scopedWeekly,
+            usageCredits: parsed.credits.credits,
+            usageCreditsDisabledReason: parsed.credits.disabledReason,
+            account: parsed.account
         )
 
+        // Judged against the clock on every call, cached parse or not: an
+        // unchanged file is exactly how a reading goes stale.
         guard !snapshot.isStale(asOf: now(), threshold: stalenessThreshold) else {
             throw ClaudeStatsError.staleQuotaSource(snapshot: snapshot, age: snapshot.age(asOf: now()))
         }
@@ -152,9 +166,9 @@ public struct CachedUtilizationReader: QuotaProviding {
     /// current. Bypassing staleness does not mean bypassing whose numbers
     /// these are, though — see ``matchesActiveAccount(root:cached:)``.
     public func currentScopedWeekly() async throws -> [QuotaScopedLimit] {
-        let (root, cached, utilization) = try loadUtilization()
-        guard Self.matchesActiveAccount(root: root, cached: cached) else { return [] }
-        return QuotaJSON.scopedLimits(in: utilization)
+        let parsed = try loadUtilization()
+        guard parsed.matchesActiveAccount else { return [] }
+        return parsed.scopedWeekly
     }
 
     /// Same payload as ``currentSnapshot()``, never gated on staleness — the
@@ -165,9 +179,9 @@ public struct CachedUtilizationReader: QuotaProviding {
     /// total an hour behind is still the right number to show — as long as
     /// it's this account's total; see ``matchesActiveAccount(root:cached:)``.
     public func currentUsageCredits() async throws -> UsageCreditsReading {
-        let (root, cached, utilization) = try loadUtilization()
-        guard Self.matchesActiveAccount(root: root, cached: cached) else { return .unavailable }
-        return QuotaJSON.usageCredits(in: utilization)
+        let parsed = try loadUtilization()
+        guard parsed.matchesActiveAccount else { return .unavailable }
+        return parsed.credits
     }
 
     /// Which account the cached numbers describe — see the type's note on
@@ -197,42 +211,103 @@ public struct CachedUtilizationReader: QuotaProviding {
         return loggedInUuid == readingUuid
     }
 
+    // MARK: - Reading the file
+
+    /// Everything the three public reads want out of one parse of the state
+    /// file, extracted into typed values so it can outlive the parse behind
+    /// the fingerprint gate. Nothing here depends on the clock — staleness is
+    /// applied by ``currentSnapshot()`` on every call.
+    private struct Parsed: Sendable {
+        let fiveHour: QuotaWindow?
+        let sevenDay: QuotaWindow?
+        /// `fetchedAtMs`; `nil` when the blob carries no usable stamp.
+        let capturedAt: Date?
+        let scopedWeekly: [QuotaScopedLimit]
+        let credits: UsageCreditsReading
+        let account: QuotaAccount?
+        let matchesActiveAccount: Bool
+    }
+
+    /// What one parse of the file concluded, cached against the fingerprint of
+    /// the bytes it parsed.
+    private enum Outcome: Sendable {
+        case parsed(Parsed)
+        /// The file is valid JSON but has no `cachedUsageUtilization.utilization`
+        /// — cached too, so a machine that has never had a rate-limited response
+        /// doesn't re-parse 170 KB on every poll to find that out again.
+        case missingUtilization
+    }
+
+    private struct Cached: Sendable {
+        var fingerprint: ClaudeStateFileFingerprint
+        var outcome: Outcome
+    }
+
     /// Loads and unwraps `cachedUsageUtilization.utilization`, common to
     /// ``currentSnapshot()``, ``currentScopedWeekly()`` and
     /// ``currentUsageCredits()``. Neither the windows nor `fetchedAtMs` are
     /// required here — callers that need them check separately, since the two
     /// staleness-bypassing readers don't.
-    private func loadUtilization() throws
-        -> (root: [String: Any], cached: [String: Any], utilization: [String: Any]) {
-        let root: [String: Any]
-        // No fingerprint: a quota poll always wants the current numbers, and
-        // the unchanged-since gate has nothing to hand back if it fires.
-        switch ClaudeStateFile.load(candidates: candidateURLs, unchangedSince: nil) {
-        case .loaded(let loaded, _):
-            root = loaded
+    ///
+    /// Behind ``ClaudeStateFile``'s fingerprint gate, like
+    /// ``ActiveAccountReader``: ``FreshestQuotaProvider`` asks for the credits
+    /// on every poll whose hook reading has none, and without the gate each of
+    /// those was a full parse of an unchanged file.
+    private func loadUtilization() throws -> Parsed {
+        let previous = cache.withLock { $0 }
+        let outcome: Outcome
+        switch ClaudeStateFile.load(candidates: candidateURLs, unchangedSince: previous?.fingerprint) {
+        case .unchanged:
+            // Only ever returned against `previous`'s fingerprint, so it is set.
+            guard let previous else { throw ClaudeStatsError.noQuotaSourceAvailable }
+            outcome = previous.outcome
+        case .loaded(let root, let fingerprint):
+            outcome = Self.outcome(in: root)
+            cache.withLock { $0 = Cached(fingerprint: fingerprint, outcome: outcome) }
         case .malformed:
             // Present but corrupt — distinct from "Claude Code has never
             // cached a reading", and the only shape of this the user could
-            // plausibly act on.
+            // plausibly act on. The fingerprint is dropped with it, as for
+            // `.unavailable`, so the next poll looks again.
+            cache.withLock { $0 = nil }
             throw ClaudeStatsError.unexpectedQuotaResponse(
                 "\(ClaudeConfigDirectory.stateFileName) is not a JSON object"
             )
-        case .unavailable, .unchanged:
-            // `.unchanged` is unreachable — it is only ever returned against a
-            // previous fingerprint, and this call passes none.
+        case .unavailable:
+            cache.withLock { $0 = nil }
             throw ClaudeStatsError.noQuotaSourceAvailable
         }
 
-        // Every one of these is "Claude Code hasn't cached usage for this
-        // account yet" (a fresh install, or a plan with no rate-limit windows),
-        // not a fault: the key is absent on machines that have never had a
-        // rate-limited response.
-        guard let cached = QuotaJSON.object(root[Self.cachedUtilizationKey]),
-            let utilization = QuotaJSON.object(cached[Self.utilizationKey])
-        else {
+        switch outcome {
+        case .parsed(let parsed):
+            return parsed
+        case .missingUtilization:
+            // Every one of these is "Claude Code hasn't cached usage for this
+            // account yet" (a fresh install, or a plan with no rate-limit
+            // windows), not a fault: the key is absent on machines that have
+            // never had a rate-limited response.
             throw ClaudeStatsError.noQuotaSourceAvailable
         }
-        return (root, cached, utilization)
+    }
+
+    private static func outcome(in root: [String: Any]) -> Outcome {
+        guard let cached = QuotaJSON.object(root[cachedUtilizationKey]),
+            let utilization = QuotaJSON.object(cached[utilizationKey])
+        else {
+            return .missingUtilization
+        }
+        let windows = QuotaJSON.optionalWindows(in: utilization)
+        return .parsed(
+            Parsed(
+                fiveHour: windows.fiveHour,
+                sevenDay: windows.sevenDay,
+                capturedAt: QuotaJSON.capturedAtKeys.lazy.compactMap({ QuotaJSON.date(cached[$0]) }).first,
+                scopedWeekly: QuotaJSON.scopedLimits(in: utilization),
+                credits: QuotaJSON.usageCredits(in: utilization),
+                account: account(root: root, cached: cached),
+                matchesActiveAccount: matchesActiveAccount(root: root, cached: cached)
+            )
+        )
     }
 
     /// Deliberately does nothing.
