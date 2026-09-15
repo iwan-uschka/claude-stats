@@ -106,39 +106,26 @@ Two independent tiers, deliberately decoupled:
        fractional seconds) and is far below the gap between two real 7-day
        windows. Readings with no `seven_day` are never dropped (nothing to
        compare), and with no cached reference everything is accepted.
-     - **Every other account's readings are still carried**, through
-       `QuotaProviding.otherAccountSnapshots()` — listed below the active
-       account's rows, never gated on staleness, never an error, and left out
-       entirely for a group whose windows have all rolled over. Each group
-       **starts collapsed**: the closed row is a cross icon
-       (`xmark.circle.fill`, in the row's own ink and no colour of its own —
-       see "Colour"), the account name, and a trailing
-       caret, with no summary number (a percentage there would be about an
-       account the glyph and the bars above aren't describing). The whole row
-       is a single plain `Button`, not a `DisclosureGroup` — clicking anywhere
-       on it reveals exactly the rows below. The caret shows the **action, not
-       the state**: `chevron.down` while closed (click to reveal), `chevron.up`
-       while open (click to collapse), in the row's own ink. The row is set in
-       `PopoverMetrics.sectionTitleFont` like the active account's title row,
-       but in secondary ink — same weight, one step dimmer — so the accounts
-       read as one list while the dimmer one is visibly not the account the
-       bars describe. The active account's own section title takes the
-       matching checkmark (`checkmark.circle.fill`, the icon Settings uses next
-       to "Statusline hook installed"), monochrome like the cross —
-       the two differ by shape alone, never green against red and never
-       terracotta, because "inactive" is a state and not a fault and a
-       marker is not a reading — and only while such a
-       group exists (`AppModel.showsAccountStateMarkers`) — with nothing to
-       contrast against, the bare account name reads better. Which groups are open lives in
-       `AppModel.expandedOtherAccounts` (keyed by account uuid, `"unknown"` for
-       the unstamped group), so it survives the popover closing and the rows
-       being rebuilt by a poll — and is not persisted across launches, since
-       the set of other accounts isn't either. The state file
-       naming an account that has *no* readings anywhere is "no reading" for
-       that account (both windows `nil`), not an error and not somebody else's
-       numbers; with nothing on disk for any account the old
-       `noQuotaSourceAvailable` still stands, because "Claude Code hasn't
-       cached a reading on this Mac" is then accurate advice.
+     - **Only the active account is shown — the inactive-account rows were
+       removed, don't re-add them.** The popover used to list every other
+       account group below the active one, collapsed, with ✓/✕ markers. It went
+       for two reasons. An inactive account's numbers are a **frozen copy**:
+       its cache files are only written while that account is logged in on
+       this Mac, so the rows can never update, and a reading that looks live
+       can be days behind. And those groups are **not covered by the mislabel
+       guard**, which only checks readings stamped with the account
+       `cachedUsageUtilization` describes — a mislabelled file under another
+       account's stamp would be shown unchallenged. Per-account grouping and
+       the guard stay: they are what keeps the *active* bars honest. The one
+       question still asked of the other groups is whether any exist with a
+       live window (`StatuslineCacheReader.hasReadingsForOtherAccounts()`,
+       behind the internal `OtherAccountReadingsReporting` protocol): the
+       state file naming an account that has *no* readings anywhere while
+       other accounts do is "no reading" for that account (both windows
+       `nil`), not an error and not somebody else's numbers; with nothing on
+       disk for any account the old `noQuotaSourceAvailable` still stands,
+       because "Claude Code hasn't cached a reading on this Mac" is then
+       accurate advice.
    - **`cachedUsageUtilization` (backup, `official (cached)`, zero setup).**
      Claude Code caches the same rate-limit payload into its own state file,
      `~/.claude.json`, as
@@ -195,7 +182,7 @@ Two independent tiers, deliberately decoupled:
          bar — no placeholder, nothing in `activeErrors`, no warning. The only
          thing ever surfaced about their absence is `disabled_reason`, carried
          as `usageCreditsDisabledReason` and appended to the quota title's
-         tooltip (and to an inactive account's row tooltip).
+         tooltip.
        - **Money is formatted from the payload's own `currency` and
          `exponent`** via `DisplayFormat.money(_:locale:)` — never a hardcoded
          symbol, never a hardcoded `/100`, since a zero-decimal currency reports
@@ -454,14 +441,6 @@ geometry is what marks it as a different kind of measurement — and took the sa
 ink as the rest, since a grey hatched bar under three terracotta ones reads as
 disabled rather than as different in kind.
 
-**The account state markers are *not* coloured.** The checkmark on the active
-account and the cross on a collapsed one inherit the ink of the row they sit in
-(primary, secondary), the way they did before the one-colour pass briefly made
-them terracotta. The rule is that nothing takes a colour of its *own*, not that
-every monochrome glyph has to take Claude's: two terracotta badges in the card's
-two most prominent rows pulled the eye to the least urgent thing on it, and left
-the row's own ink saying nothing about which account it was.
-
 **Only the chart bands and the table dots that point at them may use a
 *shade*** — `PopoverMetrics.chartBandColor(index, of: count)`, shades of the one
 hue, strongest first, position 0 being the brand colour itself.
@@ -544,7 +523,7 @@ tints it, so it takes no colour of its own.
 Click opens a popover:
 
 ```
-✓ me@example.com                cached
+me@example.com                  cached
                                   ← the quota block's section title, the same
                                     shape as "By source" and "By model" below:
                                     title left, tag right. The title names the
@@ -554,13 +533,9 @@ Click opens a popover:
                                     short uuid) — only when something on disk
                                     says; an unstamped reading (or no reading at
                                     all) titles the section `Quota` rather than
-                                    guessing a name. The ✓ checkmark icon
-                                    appears **only** when there is at least one
-                                    other account listed below to contrast with
-                                    (then an unstamped reading is titled
-                                    "Unknown account", not "Quota");
-                                    on the one-account machine the bare name
-                                    stands alone. Tooltip distinguishes a named
+                                    guessing a name. No other account is ever
+                                    listed (see "Only the active account is
+                                    shown"). Tooltip distinguishes a named
                                     account from the unstamped fallback.
                                     The trailing tag is `cached` while Claude
                                     Code's own cached reading serves, and
@@ -668,40 +643,6 @@ Usage credits ▨▨░░░░░░   €0.00 of €33.00
 <staleness warning, terracotta>   ← and after those, the staleness warning or,
                                     with no snapshot at all, the "no source yet"
                                     / just-cleared-cache line.
-
-✕ other@example.com            ⌄  ← one collapsed group per *other* account
-                                    this Mac has readings for — what is left
-                                    behind after switching the global login.
-                                    Closed by default, showing the ✕ cross icon
-                                    and the account name, nothing else; no
-                                    summary percentage. Set in the same
-                                    semibold section-title font as the active
-                                    account's title above but in secondary
-                                    ink (one step dimmer), so the two read as one list of
-                                    accounts rather than as a section with a
-                                    footnote under it. The whole row is one
-                                    button, not a disclosure: clicking anywhere
-                                    on it toggles the group. The caret is
-                                    trailing and names the *action*, not the
-                                    state — `⌄` on a closed row because
-                                    clicking reveals the rows below, `⌃` on an
-                                    open one because clicking folds them away.
-                                    Pairs with the ✓ checkmark above. Separated
-                                    from the bars and from each other by
-                                    whitespace only — no divider (that line
-                                    marks a top-level section) and no indent.
-✕ other@example.com            ⌃  ← expanded: the same rows as above, same `—` /
-5-hour      ░░░░░░░░░░  —           "no data" for an expired window, a
-7-day       ▓▓▓▓▓░░░░░ 56%          `cached` tag at the foot only if that group
-                                    came from the backup source (it never does:
-                                    statusline files are the only per-account
-                                    readings), no usage-credits row
-                                    (that data only ever exists for the active
-                                    account). Labelled "✕ Unknown
-                                    account" for the unstamped group, which is
-                                    shown only when it isn't the one driving the
-                                    bars above and still has a live window.
-                                    Absent entirely on a one-account machine.
 
 By source
 3M ┤
@@ -1184,8 +1125,8 @@ Refresh   Clear Quota Cache   Settings        Quit
                                     cache and re-polls. It lives in the footer
                                     with the other actions rather than under the
                                     quota rows it acts on, where it floated
-                                    after the other accounts' groups and read as
-                                    though it belonged to the last one.
+                                    at the end of the quota block and read as
+                                    though it belonged to its last row.
 ```
 
 The source tag names the source only when it is the backup: `cached` (Claude

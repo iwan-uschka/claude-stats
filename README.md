@@ -10,7 +10,7 @@ any), filled bottom-up. Click it for the popover:
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/screenshot-popover-dark.png">
-  <img alt="Menu bar glyph and the popover below it, showing the signed-in account's 5-hour/7-day quota, a scoped weekly limit, usage credits, a second account collapsed below them, and two matching 30-day blocks: a stacked chart of tokens by source and one of estimated cost by model, each over a table of that window's tokens and spend per band with a total" src="assets/screenshot-popover-light.png" width="420">
+  <img alt="Menu bar glyph and the popover below it, showing the signed-in account's 5-hour/7-day quota, a scoped weekly limit, usage credits, and two matching 30-day blocks: a stacked chart of tokens by source and one of estimated cost by model, each over a table of that window's tokens and spend per band with a total" src="assets/screenshot-popover-light.png" width="420">
 </picture>
 
 ## Download
@@ -34,7 +34,7 @@ Pre-built releases (macOS app bundle, zipped) are available on the
 - Hover either chart to read one day back: that block's table swaps its caption for the day's date and every number with it, so a spike gets a figure without a tooltip covering the plot — and hovering one block leaves the other alone
 - Local session-log parsing (`~/.claude/projects/*/*.jsonl`) — token counts and cost always available, no network or credentials needed
 - Live 5-hour/7-day quota percentage straight from Claude Code's own cached reading — no setup, no hook to install; the `statusLine` hook is optional and just makes it fresher — see [Quota source](#quota-source)
-- Account-aware: the quota section is titled with the Anthropic account Claude Code is logged in as (its login email, or the account's name/ID when no email is on file), and any other account this Mac has readings for is listed below it as a collapsed row you can open with a click anywhere on it, marked with a cross against the active account's checkmark — swapping the global login no longer mixes two accounts' numbers
+- Account-aware: the quota section is titled with the Anthropic account Claude Code is logged in as (its login email, or the account's name/ID when no email is on file), and only that account's readings are shown — swapping the global login no longer mixes two accounts' numbers
 - Claude Code's own rate-limit promo notices, shown below the quota bars they apply to, with any link in them clickable
 - FSEvents-driven refresh — updates on write, not on a poll timer
 

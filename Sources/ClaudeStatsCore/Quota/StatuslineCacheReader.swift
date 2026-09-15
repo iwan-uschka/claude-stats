@@ -76,8 +76,11 @@ import Foundation
 /// script falls through to the backup source until its next render restamps.
 /// When the active account itself is unknown, the most recently captured group
 /// serves, which is exactly the pre-account behaviour on a one-account machine.
-/// Every other group is available to the popover through
-/// ``otherAccountSnapshots()``.
+/// Every other group is never displayed: its numbers are a frozen copy, written
+/// only while that account was logged in on this Mac, and the mislabel guard
+/// below only checks files stamped with the account Claude Code's own cached
+/// reading describes — the active one. The one thing still asked of
+/// those groups is whether any exist — ``hasReadingsForOtherAccounts()``.
 ///
 /// ### The mislabel guard
 ///
@@ -184,7 +187,7 @@ import Foundation
 /// ``FreshestQuotaProvider`` that swallows both by falling back to
 /// ``CachedUtilizationReader``, so an error only reaches the UI when neither
 /// source has a reading.
-public struct StatuslineCacheReader: QuotaProviding {
+public struct StatuslineCacheReader: QuotaProviding, OtherAccountReadingsReporting {
     /// Directory name used under Application Support.
     public static let cacheDirectoryName = "ClaudeStats"
     /// Sub-directory holding one cache file per Claude Code session.
@@ -277,21 +280,36 @@ public struct StatuslineCacheReader: QuotaProviding {
         return snapshot
     }
 
-    /// Every account group except the one ``currentSnapshot()`` serves — see
-    /// ``QuotaProviding/otherAccountSnapshots()``.
+    /// Whether any account group other than the one ``currentSnapshot()``
+    /// serves still claims a live window — see
+    /// ``OtherAccountReadingsReporting``.
     ///
-    /// Never throws and never applies the staleness gate: these rows are
-    /// decoration carrying their own freshness tag, and a file-level fault here
-    /// has already been reported by the snapshot path.
-    public func otherAccountSnapshots() async -> [QuotaSnapshot] {
-        guard let readings = try? loadReadings() else { return [] }
+    /// Counts exactly the groups that would merge into a snapshot: a group
+    /// whose every window has already reset contributes nothing to
+    /// ``snapshot(for:asOf:)`` and does not count here either, so a machine
+    /// whose only other files are ancient still gets the plain "no quota
+    /// source" advice rather than two empty bars. Checked per reading with the
+    /// merge's own rule 1 (``isLive(_:asOf:)``) instead of by building the
+    /// snapshots, since only the yes/no is wanted.
+    ///
+    /// Never gated on staleness: a cold other account is still proof that
+    /// readings exist on this Mac. Never throws: a file-level fault has already
+    /// been reported by the snapshot path.
+    func hasReadingsForOtherAccounts() -> Bool {
+        guard let readings = try? loadReadings() else { return false }
         let asOf = now()
         let active = activeAccount.readActiveAccount()
         let groups = groups(in: readings, reference: active.reference)
         let chosen = chosen(among: groups, account: active.account)
         return groups
             .filter { group in chosen.map { group.key != $0.key } ?? true }
-            .compactMap { snapshot(for: $0, asOf: asOf) }
+            .contains { group in
+                group.readings.contains { reading in
+                    [reading.fiveHour, reading.sevenDay].contains { window in
+                        window.map { Self.isLive($0, asOf: asOf) } ?? false
+                    }
+                }
+            }
     }
 
     /// Same payload as ``currentSnapshot()``, but never gated on staleness —
@@ -604,7 +622,7 @@ public struct StatuslineCacheReader: QuotaProviding {
     private func choose(_ candidates: [Candidate], asOf now: Date) -> Candidate? {
         // Rule 1: a window whose reset has passed is one Claude Code has
         // already stopped reporting. Expired, not 0%.
-        let live = candidates.filter { $0.window.resetsAt.map { $0 >= now } ?? true }
+        let live = candidates.filter { Self.isLive($0.window, asOf: now) }
 
         // Rules 2 and 3, on the readings that date themselves.
         let dated = live.compactMap { candidate in
@@ -623,6 +641,14 @@ public struct StatuslineCacheReader: QuotaProviding {
         // Rule 4: undated readings only ever win when nothing dated survived,
         // and then the newest capture is all there is to go on.
         return live.max { $0.capturedAt < $1.capturedAt }
+    }
+
+    /// Rule 1 of "Merging" on its own: a window is live until its reset has
+    /// passed, and one with no `resets_at` at all can't be shown to have
+    /// expired. Shared with ``hasReadingsForOtherAccounts()`` so "this group
+    /// would merge into a snapshot" can't drift from the merge itself.
+    private static func isLive(_ window: QuotaWindow, asOf now: Date) -> Bool {
+        window.resetsAt.map { $0 >= now } ?? true
     }
 
     /// The `utilization` object from the most recently captured file that

@@ -47,24 +47,6 @@ enum DefaultDisplayRange: String, CaseIterable, Identifiable {
 @MainActor
 final class AppModel: ObservableObject {
     @Published private(set) var snapshot: QuotaSnapshot?
-    /// The other Anthropic accounts this Mac has readings for, newest first —
-    /// the user switches the global login between two accounts, and the cache
-    /// keeps the previous one's files until they age out.
-    ///
-    /// Decoration below the active account's rows: never an error source, never
-    /// part of the glyph (which shows the account the bars are about), and
-    /// empty on a one-account machine. See
-    /// ``QuotaProviding/otherAccountSnapshots()``.
-    @Published private(set) var otherAccountSnapshots: [QuotaSnapshot] = []
-    /// Keys of the ``otherAccountSnapshots`` groups the user has opened in the
-    /// popover — `account?.uuid`, or `"unknown"` for the unstamped group.
-    ///
-    /// Every group starts collapsed, so this is empty until something is
-    /// opened. It lives on the model rather than in the view's `@State` so it
-    /// survives the popover closing and reopening, and a poll rebuilding the
-    /// rows; it is deliberately not persisted across launches, since which
-    /// other accounts exist isn't either.
-    @Published private(set) var expandedOtherAccounts: Set<String> = []
     /// Daily history behind both popover blocks — "By source" stacks its
     /// per-source token split, "By model" stacks the estimated spend of its
     /// per-family one — covering ``chartWindowDays``.
@@ -233,18 +215,9 @@ final class AppModel: ObservableObject {
     /// with a red error banner for the same expected condition.
     private func runQuotaPoll() -> Task<Void, Never> {
         Task { [quotaProvider] in
-            // Read and applied before the snapshot rather than per outcome:
-            // these rows come from other accounts' cache files, so whether
-            // *this* account's reading succeeds, goes stale or fails says
-            // nothing about them. The call can't throw — see
-            // `QuotaProviding.otherAccountSnapshots()`.
-            //
-            // Both reads hit disk, so a poll already superseded by a newer one
-            // bails before paying for either rather than after both have run.
+            // The read hits disk, so a poll already superseded by a newer one
+            // bails before paying for it.
             guard !Task.isCancelled else { return }
-            let otherAccounts = await quotaProvider.otherAccountSnapshots()
-            guard !Task.isCancelled else { return }
-            self.otherAccountSnapshots = otherAccounts
             // The per-branch guards below stay: `currentSnapshot()` is the
             // longest await here, and a poll cancelled during it must not
             // clobber `snapshot`/`quotaError` with a superseded result.
@@ -343,11 +316,7 @@ final class AppModel: ObservableObject {
             return
         }
 
-        // The other accounts' rows come from the same files this just deleted,
-        // so they go with the active account's reading rather than lingering as
-        // the only numbers on screen.
         snapshot = nil
-        otherAccountSnapshots = []
         quotaError = nil
         quotaWarning = nil
         quotaCacheClearedNotice = "Statusline cache cleared — the bars fall back to Claude Code's own cached reading until the next statusline render."
@@ -385,79 +354,13 @@ final class AppModel: ObservableObject {
     /// "By source" and "By model" titles next to it.
     ///
     /// Names the account the bars underneath describe, so the block announces
-    /// itself the way the other two sections do. Two rules decide the wording:
-    ///
-    /// - **The account's name, or the literal "Quota".** An unstamped reading
-    ///   (or no reading at all) must not be labelled with a guessed account, so
-    ///   the section falls back to naming itself rather than naming nobody.
-    /// - **"Unknown account" instead of "Quota" once other accounts are
-    ///   listed.** With inactive groups below, the title marks *which* login
-    ///   the bars belong to (see ``showsAccountStateMarkers``), so an unstamped
-    ///   active reading has to say it names nobody rather than hide behind
-    ///   the section name.
-    ///
-    /// The active/inactive contrast itself is drawn by icons in the view, not
-    /// by words here. Lives here rather than in the view so all four
-    /// combinations are testable.
+    /// itself the way the other two sections do. An unstamped reading (or no
+    /// reading at all) must not be labelled with a guessed account, so the
+    /// section falls back to naming itself — the literal "Quota" — rather than
+    /// naming nobody. Lives here rather than in the view so both cases are
+    /// testable.
     var quotaSectionTitle: String {
-        let name = snapshot?.account?.displayName
-        guard !otherAccountSnapshots.isEmpty else { return name ?? "Quota" }
-        return name ?? "Unknown account"
-    }
-
-    /// Whether the account titles carry their state icons — a checkmark on
-    /// the active account's title, a cross on every inactive group.
-    ///
-    /// Only when there is something to be active *against*: on the
-    /// one-account machine, which is every machine until the user switches
-    /// logins, a checkmark would contrast with nothing and the bare name
-    /// reads better. The inactive groups exist only in that same case, so
-    /// their crosses need no separate gate.
-    var showsAccountStateMarkers: Bool { !otherAccountSnapshots.isEmpty }
-
-    /// What the popover calls one of the *other* accounts' disclosure groups.
-    ///
-    /// The bare account name; the view puts a cross icon in front of it,
-    /// against the checkmark on ``quotaSectionTitle``, so a collapsed row says
-    /// what it is without a number: these readings belong to a login nobody is
-    /// currently signed in as.
-    ///
-    /// An unstamped reading is genuinely "we don't know whose this is" — a
-    /// cache file written before the hook script learned to stamp one — so it
-    /// says so rather than leaving a blank label or borrowing a name from the
-    /// account next to it. Lives here rather than in the view so both branches
-    /// are testable.
-    func otherAccountTitle(for snapshot: QuotaSnapshot) -> String {
-        snapshot.account?.displayName ?? "Unknown account"
-    }
-
-    /// Stable key for one other-account group's expansion state.
-    ///
-    /// The uuid, or the one `"unknown"` bucket the unstamped group forms — the
-    /// same grouping the readings themselves use, so a group keeps its open or
-    /// closed state across a refresh that rebuilds the snapshots.
-    static func otherAccountKey(for snapshot: QuotaSnapshot) -> String {
-        snapshot.account?.uuid ?? "unknown"
-    }
-
-    /// Whether one other-account group is currently open.
-    ///
-    /// A `Set` of open keys on the model rather than a `Bool` per row because
-    /// the rows are rebuilt from the snapshots on every refresh: anything
-    /// stored per view would collapse the group the moment a poll lands.
-    func isOtherAccountExpanded(_ snapshot: QuotaSnapshot) -> Bool {
-        expandedOtherAccounts.contains(Self.otherAccountKey(for: snapshot))
-    }
-
-    /// Flips one group open or closed — what a click anywhere on the inactive
-    /// account's row does, since the whole row is one button.
-    func toggleOtherAccountExpansion(for snapshot: QuotaSnapshot) {
-        let key = Self.otherAccountKey(for: snapshot)
-        if expandedOtherAccounts.contains(key) {
-            expandedOtherAccounts.remove(key)
-        } else {
-            expandedOtherAccounts.insert(key)
-        }
+        snapshot?.account?.displayName ?? "Quota"
     }
 
     /// The promo notice for one bar, or `nil` when there is none.
@@ -519,7 +422,6 @@ extension AppModel {
         error: String? = nil,
         warning: String? = nil,
         promoNotices: [RateLimitPromoNotice] = [],
-        otherAccounts: [QuotaSnapshot] = [],
         usingSampleData: Bool = false
     ) -> AppModel {
         let store = MockUsageStore()
@@ -537,16 +439,12 @@ extension AppModel {
             capturedAt: Date()
         )
         let model = AppModel(
-            quotaProvider: MockQuotaProvider(
-                snapshot: snapshot ?? previewPlaceholder,
-                otherAccounts: otherAccounts
-            ),
+            quotaProvider: MockQuotaProvider(snapshot: snapshot ?? previewPlaceholder),
             usageStore: store,
             promoNoticeProvider: MockPromoNoticeProvider(notices: promoNotices),
             usingSampleData: usingSampleData
         )
         model.snapshot = snapshot
-        model.otherAccountSnapshots = otherAccounts
         model.promoNotices = promoNotices
         model.dailyHistory = (try? store.dailyUsage(days: AppModel.chartWindowDays)) ?? .empty
         model.quotaError = error
@@ -586,15 +484,8 @@ extension AppModel {
     }
 
     /// Everything the popover can draw at once: both fixed windows, the promo
-    /// notice, the scoped weekly row, a part-spent usage-credits bar, and two
-    /// accounts — the active one titling the quota section, the other collapsed
-    /// beneath it.
-    ///
-    /// The second account is here rather than only in ``previewTwoAccounts``
-    /// because the README screenshot is the one picture most readers see, and a
-    /// single-account shot says nothing about what a machine that has been
-    /// logged into two accounts looks like. Collapsed, which is the shipping
-    /// default — the screenshot shows the state the app actually opens in.
+    /// notice, the scoped weekly row, a part-spent usage-credits bar, and the
+    /// active account titling the quota section.
     ///
     /// The single source of truth for the README asset renderer
     /// (`Tests/ClaudeStatsTests/ReadmeAssetRenderTests.swift`), so the shipped
@@ -609,26 +500,8 @@ extension AppModel {
         active.account = MockQuotaProvider.sampleAccount()
         return preview(
             snapshot: active,
-            promoNotices: [MockPromoNoticeProvider.sampleNotice()],
-            otherAccounts: [MockQuotaProvider.sampleOtherAccountSnapshot(now: now)]
+            promoNotices: [MockPromoNoticeProvider.sampleNotice()]
         )
-    }
-
-    /// Two accounts: the one Claude Code is logged in as now, labelled, with
-    /// the account the user switched away from collapsed under it.
-    ///
-    /// - Parameter expanded: opens the other account's disclosure, which is
-    ///   closed in the shipping default — the canvas needs a way to see the
-    ///   rows inside it without clicking.
-    static func previewTwoAccounts(now: Date = Date(), expanded: Bool = false) -> AppModel {
-        var active = MockQuotaProvider.sampleSnapshot(now: now)
-        active.account = MockQuotaProvider.sampleAccount()
-        let other = MockQuotaProvider.sampleOtherAccountSnapshot(now: now)
-        let model = preview(snapshot: active, otherAccounts: [other])
-        if expanded {
-            model.expandedOtherAccounts = [otherAccountKey(for: other)]
-        }
-        return model
     }
 
     /// Live source, but stale — quota still shown, plus a warning line.

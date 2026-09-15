@@ -174,17 +174,8 @@ enum PopoverMetrics {
     static let chartHoverPointSize: CGFloat = 16
     static let rowSpacing: CGFloat = 8
     static let sectionSpacing: CGFloat = 10
-    /// Gap between an account's active/inactive icon and its name.
-    static let accountMarkerSpacing: CGFloat = 4
     /// Vertical gap between the rows inside one section.
     static let quotaRowSpacing: CGFloat = 6
-    /// Gap above each *other*-account disclosure group, and between two of
-    /// them. Deliberately double ``quotaRowSpacing``: the groups carry no
-    /// divider of their own any more (a `Divider()` there read as a top-level
-    /// section break, the same rule that separates "By source" from "By model"),
-    /// so whitespace is the only thing left saying a collapsed row belongs to
-    /// neither the bars above it nor the group below it.
-    static let accountGroupSpacing: CGFloat = 12
 
     static let bodyFont = Font.system(size: 11)
     /// Every number the popover sets at body size: the percentages, the token

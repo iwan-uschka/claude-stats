@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Removed
+- Other accounts' quota rows are gone from the popover; only the logged-in
+  account is shown. Those rows were a frozen copy that could never update, and
+  weren't covered by the guard against mislabelled readings.
+
 ## [0.9.10] - 2026-09-14
 
 ### Added
