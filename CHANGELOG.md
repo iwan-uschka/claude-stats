@@ -6,6 +6,13 @@
 - Switching Claude Code to another account now clears the quota cache
   automatically, as "Clear Quota Cache" does. Noticed on the next quota poll.
 
+### Changed
+- Quota polls skip re-reading files that haven't changed since the last poll,
+  so they stay cheap however many Claude Code sessions have written a cache.
+- The 30-day history is no longer recomputed on the main thread for every
+  session-log change, popover open or account switch — only for new data or a
+  new day.
+
 ### Removed
 - Other accounts' quota rows are gone from the popover; only the logged-in
   account is shown. Those rows were a frozen copy that could never update, and

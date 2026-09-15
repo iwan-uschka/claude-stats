@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Reads the on-disk cache written by our `statusLine` hook — the app's
 /// **primary** quota source (`.official` confidence; see
@@ -187,6 +188,28 @@ import Foundation
 /// ``FreshestQuotaProvider`` that swallows both by falling back to
 /// ``CachedUtilizationReader``, so an error only reaches the UI when neither
 /// source has a reading.
+///
+/// ## Reading cost
+///
+/// Every quota poll lists the directory and considers every file in it, so
+/// the per-file cost is what scales. Most of it used to be `open` — about
+/// 33 µs on a Mac running endpoint-security tools, against ~1.3 µs for a
+/// `stat` of the same path — plus the read and the JSON parse, on files that
+/// almost never change between two polls. So each file's parse is kept in
+/// memory against a (inode, nanosecond mtime, size) fingerprint, and a file
+/// whose `stat` still matches is served from there without being opened. A
+/// file that is new or changed is read and parsed exactly as before, from one
+/// descriptor, and its fingerprint is taken from that same descriptor's
+/// `fstat`, so it always describes the bytes that were parsed. The helper
+/// script's `mktemp` + `mv` rewrite gives every write a new inode.
+///
+/// The listing itself stays, but works on path strings rather than `URL`s —
+/// see ``cacheFilePaths()``.
+///
+/// Nothing clock-dependent is cached: retention and every merge rule are
+/// re-applied on each read. Entries for files no longer in the listing are
+/// dropped as the listing is walked, and ``clearCache()`` empties the cache
+/// along with the files.
 public struct StatuslineCacheReader: QuotaProviding, OtherAccountReadingsReporting {
     /// Directory name used under Application Support.
     public static let cacheDirectoryName = "ClaudeStats"
@@ -245,6 +268,10 @@ public struct StatuslineCacheReader: QuotaProviding, OtherAccountReadingsReporti
     /// those constructions at the developer's own state file.
     /// ``FreshestQuotaProvider`` wires the real reader in.
     private let activeAccount: any ActiveAccountProviding
+    /// Each cache file's last parse, keyed by path — see "Reading cost".
+    /// Shared by every copy of this value, like ``ActiveAccountReader``'s
+    /// fingerprint cache.
+    private let fileCache = OSAllocatedUnfairLock<[String: CachedFile]>(initialState: [:])
 
     public init(
         cacheDirectoryURL: URL = StatuslineCacheReader.defaultCacheDirectoryURL,
@@ -324,7 +351,7 @@ public struct StatuslineCacheReader: QuotaProviding, OtherAccountReadingsReporti
     /// freshness claim of their own (see ``QuotaScopedLimit``).
     public func currentScopedWeekly() async throws -> [QuotaScopedLimit] {
         guard let utilization = newestUtilization(in: try chosenReadings()) else { return [] }
-        return QuotaJSON.scopedLimits(in: utilization)
+        return utilization.scopedWeekly
     }
 
     /// Same payload as ``currentSnapshot()``, never gated on staleness — the
@@ -333,7 +360,7 @@ public struct StatuslineCacheReader: QuotaProviding, OtherAccountReadingsReporti
     /// limits captured beside it have aged out.
     public func currentUsageCredits() async throws -> UsageCreditsReading {
         guard let utilization = newestUtilization(in: try chosenReadings()) else { return .unavailable }
-        return QuotaJSON.usageCredits(in: utilization)
+        return utilization.credits
     }
 
     /// The chosen account group's files, for the two staleness-bypassing
@@ -362,7 +389,11 @@ public struct StatuslineCacheReader: QuotaProviding, OtherAccountReadingsReporti
     /// ``ClaudeStatsError/noQuotaSourceAvailable`` — expected, not a failure.
     /// Best-effort on absence: a missing directory or file is not an error,
     /// anything else is and reaches the caller.
+    ///
+    /// The in-memory parses go too, whatever the delete manages: a cleared
+    /// cache must not be able to hand back a single file's old reading.
     public func clearCache() throws {
+        fileCache.withLock { $0.removeAll() }
         var failure: Swift.Error?
         for url in [sessionCacheDirectoryURL, legacyCacheURL] {
             do {
@@ -382,11 +413,11 @@ public struct StatuslineCacheReader: QuotaProviding, OtherAccountReadingsReporti
     /// may be absent — see the 0% pitfall in "One file per session"), when we
     /// wrote it, the account it was stamped with, and the `utilization` copy if
     /// it carried one.
-    private struct Reading {
+    private struct Reading: Sendable {
         let capturedAt: Date
         let fiveHour: QuotaWindow?
         let sevenDay: QuotaWindow?
-        let utilization: [String: Any]?
+        let utilization: CopiedUtilization?
         /// `nil` for an unstamped file — a script copy from before the stamp,
         /// one running without `jq`, or the legacy single file.
         let account: QuotaAccount?
@@ -398,10 +429,54 @@ public struct StatuslineCacheReader: QuotaProviding, OtherAccountReadingsReporti
         }
     }
 
+    /// The two things read out of a file's `utilization` copy, extracted at
+    /// parse time so a ``Reading`` holds typed values only and can sit in
+    /// ``fileCache`` between polls.
+    private struct CopiedUtilization: Sendable {
+        let scopedWeekly: [QuotaScopedLimit]
+        let credits: UsageCreditsReading
+    }
+
     /// One file's reading of one window, in the merge.
     private struct Candidate {
         let window: QuotaWindow
         let capturedAt: Date
+    }
+
+    /// Identifies one on-disk state of a cache file — the same three fields
+    /// ``ClaudeStateFileFingerprint`` compares, for the same reason: nanosecond
+    /// mtime and inode, so an atomic replacement can't pass for unchanged.
+    private struct FileFingerprint: Hashable, Sendable {
+        let inode: UInt64
+        let modifiedSeconds: Int
+        let modifiedNanoseconds: Int
+        let size: Int64
+
+        init(_ info: stat) {
+            inode = UInt64(info.st_ino)
+            modifiedSeconds = Int(info.st_mtimespec.tv_sec)
+            modifiedNanoseconds = Int(info.st_mtimespec.tv_nsec)
+            size = Int64(info.st_size)
+        }
+
+        /// The path's current fingerprint, from `stat` alone — no `open`, which
+        /// is the whole saving. `stat` rather than `lstat` so a symlinked file
+        /// compares against the `fstat` of what `open` followed it to.
+        init?(path: String) {
+            var info = stat()
+            guard stat(path, &info) == 0 else { return nil }
+            self.init(info)
+        }
+    }
+
+    /// One file's parse, as ``fileCache`` keeps it.
+    private struct CachedFile: Sendable {
+        let fingerprint: FileFingerprint
+        /// The payload's `captured_at`, else the file's mtime — what retention
+        /// is judged on, which is why a file that isn't JSON has one too.
+        let capturedAt: Date
+        /// `nil` when the contents are not a JSON object.
+        let reading: Reading?
     }
 
     /// Every readable cache file, parsed, pruning expired session files as it
@@ -413,81 +488,121 @@ public struct StatuslineCacheReader: QuotaProviding, OtherAccountReadingsReporti
     /// ``currentSnapshot()`` does. A single unparseable file among good ones is
     /// skipped: one session writing garbage must not take down the bars that
     /// every other session is still feeding.
+    ///
+    /// A file whose fingerprint still matches ``fileCache`` is not opened — see
+    /// "Reading cost". The cache is replaced wholesale by what this pass saw,
+    /// so files that vanished or were pruned leave it here too.
     private func loadReadings() throws -> [Reading] {
         let cutoff = now().addingTimeInterval(-Self.sessionRetention)
+        let previous = fileCache.withLock { $0 }
+        var seen: [String: CachedFile] = [:]
         var readings: [Reading] = []
-        var malformed: URL?
+        var malformed: String?
 
-        for (url, isSessionFile) in cacheFileURLs() {
-            guard let (data, mtime) = readFileWithModificationDate(at: url) else { continue }
-            let root = QuotaJSON.object(try? JSONSerialization.jsonObject(with: data))
-            // No fallback to `now()`: if neither the payload nor the file
-            // itself can tell us when this was captured, treat the age as
-            // unknown rather than silently trusting it as freshly captured.
-            let capturedAt = root.flatMap { root in
-                QuotaJSON.capturedAtKeys.lazy.compactMap { QuotaJSON.date(root[$0]) }.first
-            } ?? mtime
+        for (path, isSessionFile) in cacheFilePaths() {
+            let file: CachedFile
+            if let cached = previous[path], FileFingerprint(path: path) == cached.fingerprint {
+                file = cached
+            } else {
+                guard let parsed = parseFile(atPath: path) else { continue }
+                file = parsed
+            }
 
             // Best-effort, and deliberately ahead of the parse check so a
             // session file that is both ancient and garbage still goes away.
-            if isSessionFile, let capturedAt, capturedAt < cutoff {
-                try? fileManager.removeItem(at: url)
+            // Re-checked on a cached file too: retention is a question about
+            // the clock, and an unchanged file is exactly the one that ages.
+            if isSessionFile, file.capturedAt < cutoff {
+                try? fileManager.removeItem(at: URL(fileURLWithPath: path, isDirectory: false))
                 continue
             }
+            seen[path] = file
 
-            guard let root else {
-                malformed = malformed ?? url
+            guard let reading = file.reading else {
+                malformed = malformed ?? path
                 continue
             }
-            guard let capturedAt else { continue }
-
-            let windows = QuotaJSON.optionalWindows(in: root)
-            readings.append(
-                Reading(
-                    capturedAt: capturedAt,
-                    fiveHour: windows.fiveHour,
-                    sevenDay: windows.sevenDay,
-                    utilization: QuotaJSON.object(root[Self.utilizationKey]),
-                    account: QuotaJSON.object(root[Self.accountKey])
-                        .flatMap(QuotaAccount.init(json:))
-                )
-            )
+            readings.append(reading)
         }
+        let current = seen
+        fileCache.withLock { $0 = current }
 
         guard readings.isEmpty else { return readings }
         if let malformed {
             throw ClaudeStatsError.unexpectedQuotaResponse(
-                "statusline cache at \(malformed.lastPathComponent) is not a JSON object"
+                "statusline cache at \((malformed as NSString).lastPathComponent) is not a JSON object"
             )
         }
         // No hook installed, or it has never fired.
         throw ClaudeStatsError.noQuotaSourceAvailable
     }
 
-    /// Every candidate cache file, flagged with whether pruning applies to it.
-    /// Sorted by name so a tie the merge can't break resolves the same way on
-    /// every poll rather than following directory order.
-    private func cacheFileURLs() -> [(url: URL, isSessionFile: Bool)] {
-        let sessionFiles = (try? fileManager.contentsOfDirectory(
-            at: sessionCacheDirectoryURL,
-            includingPropertiesForKeys: nil,
-            options: [.skipsHiddenFiles]
-        )) ?? []
-        return sessionFiles
-            .filter { $0.pathExtension.lowercased() == "json" }
-            .sorted { $0.lastPathComponent < $1.lastPathComponent }
-            .map { ($0, true) }
-            + [(legacyCacheURL, false)]
+    /// Reads and parses one file — the cache-miss path of ``loadReadings()``.
+    /// `nil` when it can't be opened or stat-ed at all.
+    private func parseFile(atPath path: String) -> CachedFile? {
+        guard let (data, info) = readFileWithStat(atPath: path) else { return nil }
+        let mtime = Date(timeIntervalSince1970: Double(info.st_mtimespec.tv_sec))
+        let root = QuotaJSON.object(try? JSONSerialization.jsonObject(with: data))
+        // No fallback to `now()`: if the payload can't say when it was
+        // captured, the file's own mtime is the best evidence there is, and
+        // it is never mistaken for "just now".
+        let capturedAt = root.flatMap { root in
+            QuotaJSON.capturedAtKeys.lazy.compactMap { QuotaJSON.date(root[$0]) }.first
+        } ?? mtime
+
+        let reading = root.map { root in
+            let windows = QuotaJSON.optionalWindows(in: root)
+            return Reading(
+                capturedAt: capturedAt,
+                fiveHour: windows.fiveHour,
+                sevenDay: windows.sevenDay,
+                utilization: QuotaJSON.object(root[Self.utilizationKey]).map { utilization in
+                    CopiedUtilization(
+                        scopedWeekly: QuotaJSON.scopedLimits(in: utilization),
+                        credits: QuotaJSON.usageCredits(in: utilization)
+                    )
+                },
+                account: QuotaJSON.object(root[Self.accountKey])
+                    .flatMap(QuotaAccount.init(json:))
+            )
+        }
+        return CachedFile(fingerprint: FileFingerprint(info), capturedAt: capturedAt, reading: reading)
     }
 
-    /// Reads one cache file's bytes and modification time from a single open
-    /// descriptor, so they always describe the same file state — two separate
-    /// syscalls (as `FileManager.contents(atPath:)` followed by
-    /// `attributesOfItem(atPath:)`) could otherwise straddle the helper
-    /// script's atomic `mktemp` + `mv` rewrite and pair old bytes with a new
-    /// mtime (or vice versa).
-    private func readFileWithModificationDate(at url: URL) -> (data: Data, mtime: Date?)? {
-        let fd = open(url.path, O_RDONLY)
+    /// Every candidate cache file's path, flagged with whether pruning applies
+    /// to it. Sorted by name so a tie the merge can't break resolves the same
+    /// way on every poll rather than following directory order.
+    ///
+    /// Plain path strings, not `URL`s: this runs on every poll over every
+    /// file, and the `URL` round trip was most of the per-file cost left once
+    /// the parse cache stopped files being opened — `lastPathComponent`
+    /// re-derived inside the sort comparator alone came to ~23 µs per file at
+    /// 250 files, against ~1.3 µs for the `stat`. Dot-files are skipped by
+    /// name, which is what `.skipsHiddenFiles` did for every file the hook can
+    /// write: it strips leading dots from the session id for exactly this
+    /// reason.
+    private func cacheFilePaths() -> [(path: String, isSessionFile: Bool)] {
+        let directory = sessionCacheDirectoryURL.path
+        let names = (try? fileManager.contentsOfDirectory(atPath: directory)) ?? []
+        return names
+            .filter { !$0.hasPrefix(".") && ($0 as NSString).pathExtension.lowercased() == "json" }
+            .sorted()
+            // Concatenated rather than `appendingPathComponent`: that hands back
+            // an `NSString`-bridged value, and hashing one into the cache's
+            // dictionary or passing it to `stat` converts it again each time.
+            .map { (directory + "/" + $0, true) }
+            + [(legacyCacheURL.path, false)]
+    }
+
+    /// Reads one cache file's bytes and `stat` from a single open descriptor,
+    /// so they always describe the same file state — two separate syscalls (as
+    /// `FileManager.contents(atPath:)` followed by `attributesOfItem(atPath:)`)
+    /// could otherwise straddle the helper script's atomic `mktemp` + `mv`
+    /// rewrite and pair old bytes with a new mtime (or vice versa). That is
+    /// also what makes the fingerprint taken from this `stat` safe to cache the
+    /// parse against.
+    private func readFileWithStat(atPath path: String) -> (data: Data, info: stat)? {
+        let fd = open(path, O_RDONLY)
         guard fd >= 0 else { return nil }
         defer { close(fd) }
 
@@ -495,8 +610,7 @@ public struct StatuslineCacheReader: QuotaProviding, OtherAccountReadingsReporti
         guard fstat(fd, &info) == 0 else { return nil }
 
         let data = FileHandle(fileDescriptor: fd, closeOnDealloc: false).readDataToEndOfFile()
-        let mtime = Date(timeIntervalSince1970: Double(info.st_mtimespec.tv_sec))
-        return (data, mtime)
+        return (data, info)
     }
 
     // MARK: - Grouping by account
@@ -603,14 +717,14 @@ public struct StatuslineCacheReader: QuotaProviding, OtherAccountReadingsReporti
         // copy this across, and on every one written without `jq` — hence
         // empty/`nil` rather than a throw. See the type's "Cache file" note.
         let utilization = newestUtilization(in: group.readings)
-        let credits = utilization.map(QuotaJSON.usageCredits(in:)) ?? .unavailable
+        let credits = utilization?.credits ?? .unavailable
 
         return QuotaSnapshot(
             fiveHour: fiveHour?.window,
             sevenDay: sevenDay?.window,
             confidence: .official,
             capturedAt: capturedAt,
-            scopedWeekly: utilization.map(QuotaJSON.scopedLimits(in:)) ?? [],
+            scopedWeekly: utilization?.scopedWeekly ?? [],
             usageCredits: credits.credits,
             usageCreditsDisabledReason: credits.disabledReason,
             account: group.account
@@ -661,7 +775,7 @@ public struct StatuslineCacheReader: QuotaProviding, OtherAccountReadingsReporti
     /// simply the best one. Always called with a single account group's
     /// readings — the file belongs to whichever account was logged in when it
     /// was copied.
-    private func newestUtilization(in readings: [Reading]) -> [String: Any]? {
+    private func newestUtilization(in readings: [Reading]) -> CopiedUtilization? {
         readings
             .filter { $0.utilization != nil }
             .max { $0.capturedAt < $1.capturedAt }?

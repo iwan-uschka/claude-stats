@@ -1,3 +1,4 @@
+import os
 import XCTest
 @testable import ClaudeStatsCore
 
@@ -868,6 +869,139 @@ final class StatuslineCacheReaderTests: XCTestCase {
         XCTAssertThrowsError(try reader.clearCache()) { error in
             XCTAssertTrue(error is ThrowingFileManager.RemovalFailure, "\(error)")
         }
+    }
+
+    // MARK: - The per-file parse cache
+
+    /// ``filteredCache(capturedAt:)`` with the 5-hour figure swapped for another
+    /// of the same width: rewritten in place with the mtime restored (which
+    /// ``write(session:_:)`` always does), the file keeps its inode, size and
+    /// mtime, so only a re-read can tell the two apart — 67.5 read, 23.5 cached.
+    private func sameSizedRewrite(capturedAt: Date) -> String {
+        filteredCache(capturedAt: capturedAt)
+            .replacingOccurrences(of: "\"used_percentage\": 23.5", with: "\"used_percentage\": 67.5")
+    }
+
+    private func fiveHourPercent(_ reader: StatuslineCacheReader) async throws -> Double {
+        let snapshot = try await reader.currentSnapshot()
+        return try XCTUnwrap(snapshot.fiveHour).percentUsed
+    }
+
+    /// An unchanged file is served from the last parse rather than read again:
+    /// contents that lie under an untouched fingerprint are not seen, and a file
+    /// that can no longer even be opened still answers — it was never opened.
+    func testUnchangedFileIsServedFromTheCacheWithoutBeingOpened() async throws {
+        let capturedAt = now.addingTimeInterval(-30)
+        let url = try write(filteredCache(capturedAt: capturedAt))
+        let reader = makeReader()
+        let percent1 = try await fiveHourPercent(reader)
+        XCTAssertEqual(percent1, 23.5, accuracy: 0.001)
+
+        try write(sameSizedRewrite(capturedAt: capturedAt))
+        let percent2 = try await fiveHourPercent(reader)
+        XCTAssertEqual(percent2, 23.5, accuracy: 0.001)
+
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: url.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: url.path) }
+        let percent3 = try await fiveHourPercent(reader)
+        XCTAssertEqual(percent3, 23.5, accuracy: 0.001)
+    }
+
+    /// A file the hook rewrote is read again — here the mtime alone moves.
+    func testRewrittenFileIsReadAgain() async throws {
+        let capturedAt = now.addingTimeInterval(-30)
+        let url = try write(filteredCache(capturedAt: capturedAt))
+        let reader = makeReader()
+        let percent4 = try await fiveHourPercent(reader)
+        XCTAssertEqual(percent4, 23.5, accuracy: 0.001)
+
+        try write(sameSizedRewrite(capturedAt: capturedAt))
+        try setModificationDate(now.addingTimeInterval(-10), of: url)
+
+        let percent5 = try await fiveHourPercent(reader)
+        XCTAssertEqual(percent5, 67.5, accuracy: 0.001)
+    }
+
+    /// A file that leaves the listing leaves the cache: moved aside (a rename
+    /// keeps the inode), rewritten in place under the same size and mtime and
+    /// moved back, it matches its old fingerprint exactly — and is still read
+    /// afresh, because the poll that didn't see it forgot it.
+    func testDeletedFileIsDroppedFromTheCache() async throws {
+        let capturedAt = now.addingTimeInterval(-30)
+        let url = try write(filteredCache(capturedAt: capturedAt))
+        let reader = makeReader()
+        let percent6 = try await fiveHourPercent(reader)
+        XCTAssertEqual(percent6, 23.5, accuracy: 0.001)
+
+        let aside = directory.appendingPathComponent("aside.json")
+        try FileManager.default.moveItem(at: url, to: aside)
+        await assertThrows(.noQuotaSourceAvailable) { try await reader.currentSnapshot() }
+
+        try Data(sameSizedRewrite(capturedAt: capturedAt).utf8).write(to: aside)
+        try setModificationDate(now.addingTimeInterval(-30), of: aside)
+        try FileManager.default.moveItem(at: aside, to: url)
+
+        let percent7 = try await fiveHourPercent(reader)
+        XCTAssertEqual(percent7, 67.5, accuracy: 0.001)
+    }
+
+    /// `clearCache()` empties the in-memory parses as well as the directory. The
+    /// file is moved aside *before* the clear, with no read in between, so only
+    /// the clear itself can have forgotten it; brought back under its old
+    /// fingerprint, it must be read, not answered from memory.
+    func testClearCacheEmptiesTheParseCache() async throws {
+        let capturedAt = now.addingTimeInterval(-30)
+        let url = try write(filteredCache(capturedAt: capturedAt))
+        let reader = makeReader()
+        let percent8 = try await fiveHourPercent(reader)
+        XCTAssertEqual(percent8, 23.5, accuracy: 0.001)
+
+        let aside = directory.appendingPathComponent("aside.json")
+        try FileManager.default.moveItem(at: url, to: aside)
+        try reader.clearCache()
+
+        try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
+        try Data(sameSizedRewrite(capturedAt: capturedAt).utf8).write(to: aside)
+        try setModificationDate(now.addingTimeInterval(-30), of: aside)
+        try FileManager.default.moveItem(at: aside, to: url)
+
+        let percent9 = try await fiveHourPercent(reader)
+        XCTAssertEqual(percent9, 67.5, accuracy: 0.001)
+    }
+
+    /// Retention is re-judged on every read: a cached file that ages past it
+    /// while unchanged is still deleted, and its reading goes with it.
+    func testCachedFileIsStillPrunedOnceItAgesOut() async throws {
+        let clock = OSAllocatedUnfairLock(initialState: now)
+        let reader = StatuslineCacheReader(
+            cacheDirectoryURL: directory,
+            stalenessThreshold: .infinity,
+            now: { clock.withLock { $0 } }
+        )
+        let url = try write(filteredCache(capturedAt: now.addingTimeInterval(-30)))
+        _ = try await reader.currentSnapshot()
+
+        clock.withLock { $0 = self.now.addingTimeInterval(StatuslineCacheReader.sessionRetention) }
+        await assertThrows(.noQuotaSourceAvailable) { try await reader.currentSnapshot() }
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+    }
+
+    /// The raw-payload fallback survives the cache: a file dated only by its
+    /// mtime keeps that date on the cached read.
+    func testMtimeDatedFileKeepsItsDateWhenServedFromTheCache() async throws {
+        let url = try write("""
+        { "rate_limits": { "five_hour": { "used_percentage": 62 } } }
+        """)
+        let modified = now.addingTimeInterval(-120)
+        try setModificationDate(modified, of: url)
+        let reader = makeReader()
+
+        let first = try await reader.currentSnapshot()
+        let second = try await reader.currentSnapshot()
+
+        XCTAssertEqual(first.capturedAt.timeIntervalSince1970, modified.timeIntervalSince1970, accuracy: 1)
+        XCTAssertEqual(second.capturedAt, first.capturedAt)
     }
 
     // MARK: - One group per account
