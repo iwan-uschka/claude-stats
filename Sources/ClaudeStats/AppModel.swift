@@ -421,9 +421,11 @@ final class AppModel: ObservableObject {
     /// - The same uuid again is not a switch, which is also what stops the
     ///   clear's own retry ladder from triggering another clear.
     ///
-    /// Latency is up to one ``quotaPollInterval``: the state file lives in
-    /// `$HOME`, which isn't watched, so a switch is only noticed by the next
-    /// poll.
+    /// Detection waits for the next quota poll: the state file lives in
+    /// `$HOME`, which isn't watched, and polls are triggered by opening the
+    /// popover or by session activity (throttled to ``quotaPollInterval``),
+    /// not by a timer — so with neither, a switch goes unnoticed until one
+    /// happens.
     private func noteActiveAccount(_ account: QuotaAccount) -> Bool {
         defer { lastKnownAccountUuid = account.uuid }
         guard let previous = lastKnownAccountUuid else { return false }

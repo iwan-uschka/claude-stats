@@ -119,11 +119,14 @@ Two independent tiers, deliberately decoupled:
        Nothing clears on the first poll after launch, on unknown → known or on
        known → unknown; known → unknown → *different* known does clear, because
        the unknown poll doesn't overwrite the remembered uuid. Two limits, both
-       accepted: detection lags up to one `quotaPollInterval` (30–300 s — the
-       state file is in `$HOME`, which isn't watched), and an idle session can
-       still re-render the old account's numbers into a fresh, new-account-
-       stamped file *after* the clear — so the clear does not replace the
-       mislabel guard above, which stays the defence against exactly that.
+       accepted: detection waits for the next quota poll — the state file is in
+       `$HOME`, which isn't watched, and polls are triggered by opening the
+       popover or by session activity (throttled to `quotaPollInterval`), not by
+       a timer — so with neither, a switch goes unnoticed until one happens; and
+       an idle session can still re-render the old account's numbers into a
+       fresh, new-account-stamped file *after* the clear — so the clear does not
+       replace the mislabel guard above, which stays the defence against exactly
+       that.
      - **Only the active account is shown — the inactive-account rows were
        removed, don't re-add them.** The popover used to list every other
        account group below the active one, collapsed, with ✓/✕ markers. It went
