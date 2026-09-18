@@ -121,9 +121,10 @@ Two independent tiers, deliberately decoupled:
        the unknown poll doesn't overwrite the remembered uuid. Two limits, both
        accepted: detection waits for the next quota poll — the state file is in
        `$HOME`, which isn't watched, and polls are triggered by opening the
-       popover or by session activity (throttled to `quotaPollInterval`), not by
-       a timer — so with neither, a switch goes unnoticed until one happens; and
-       an idle session can still re-render the old account's numbers into a
+       popover, by session activity, or by `AppModel`'s background timer (all
+       throttled to `quotaPollInterval`) — so a switch is noticed no later than
+       one poll interval after it happens, even in an idle app; and an idle
+       session can still re-render the old account's numbers into a
        fresh, new-account-stamped file *after* the clear — so the clear does not
        replace the mislabel guard above, which stays the defence against exactly
        that.

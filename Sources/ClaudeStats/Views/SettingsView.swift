@@ -177,7 +177,7 @@ struct SettingsView: View {
                 }
             }
             .labelsHidden()
-            Text("Minimum time between live quota polls. Refreshes triggered by opening the popover or by new session activity are throttled to this; manual Refresh always bypasses it.")
+            Text("Minimum time between live quota polls, and how often the menu bar checks on its own. Refreshes triggered by opening the popover or by new session activity are also throttled to this; manual Refresh always bypasses it.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

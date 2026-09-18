@@ -36,7 +36,7 @@ Pre-built releases (macOS app bundle, zipped) are available on the
 - Live 5-hour/7-day quota percentage straight from Claude Code's own cached reading — no setup, no hook to install; the `statusLine` hook is optional and just makes it fresher — see [Quota source](#quota-source)
 - Account-aware: the quota section is titled with the Anthropic account Claude Code is logged in as (its login email, or the account's name/ID when no email is on file), and only that account's readings are shown — swapping the global login no longer mixes two accounts' numbers
 - Claude Code's own rate-limit promo notices, shown below the quota bars they apply to, with any link in them clickable
-- FSEvents-driven refresh — updates on write, not on a poll timer
+- FSEvents-driven refresh of local stats — updates on write; the quota reading is also re-polled on a background timer at the configured cadence
 
 Full architecture and data-source design: see [AGENTS.md](AGENTS.md).
 

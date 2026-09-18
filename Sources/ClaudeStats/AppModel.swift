@@ -165,10 +165,21 @@ final class AppModel: ObservableObject {
     /// leaves it alone rather than resetting it.
     private var lastKnownAccountUuid: String?
 
-    /// Minimum time between live quota polls. Refreshes are triggered by opening
-    /// the popover or by new session activity, not by a repeating timer; manual
-    /// "Refresh" always bypasses this. User-configurable in Settings.
+    /// Minimum time between live quota polls, and also the cadence of the
+    /// background timer started by ``startBackgroundPolling()``. Refreshes
+    /// are triggered by opening the popover, by new session activity, or by
+    /// that timer; manual "Refresh" always bypasses the throttle.
+    /// User-configurable in Settings.
     @Published private(set) var quotaPollInterval: TimeInterval
+
+    /// Ticks ``refresh()`` at ``quotaPollInterval`` so the menu-bar glyph
+    /// doesn't sit on a stale reading for as long as the app runs quietly —
+    /// without this, ``snapshot`` (and the glyph `StatusItemController` draws
+    /// from it) only updates on a popover open or new session activity, which
+    /// can be arbitrarily far apart. `nil` until ``startBackgroundPolling()``
+    /// runs; internal rather than `private` so a test can read and `fire()`
+    /// it without waiting on wall-clock time.
+    private(set) var backgroundPollTimer: Timer?
 
     /// Selectable cadences shown in the Settings poll-interval picker.
     static let pollIntervalOptions: [TimeInterval] = [30, 60, 120, 300]
@@ -218,10 +229,39 @@ final class AppModel: ObservableObject {
             .flatMap(DefaultDisplayRange.init(rawValue:)) ?? .last30Days
     }
 
-    /// Persists the new cadence immediately so it survives the next launch.
+    /// Persists the new cadence immediately so it survives the next launch,
+    /// and restarts the background poll timer at the new interval if it's
+    /// running — `Timer`'s own interval is fixed at creation, so a cadence
+    /// picked in Settings only takes effect once the timer is rebuilt.
     func setQuotaPollInterval(_ interval: TimeInterval) {
         quotaPollInterval = interval
         defaults.set(interval, forKey: Self.pollIntervalDefaultsKey)
+        if backgroundPollTimer != nil {
+            scheduleBackgroundPollTimer()
+        }
+    }
+
+    /// Starts the background poll timer described on ``backgroundPollTimer``.
+    /// Call once, after the launch poll — `ClaudeStatsApp` is the only caller.
+    func startBackgroundPolling() {
+        scheduleBackgroundPollTimer()
+    }
+
+    private func scheduleBackgroundPollTimer() {
+        backgroundPollTimer?.invalidate()
+        let timer = Timer(timeInterval: quotaPollInterval, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                _ = self?.refresh()
+            }
+        }
+        // `.common` so it keeps ticking while a menu or the popover's own
+        // event tracking is running — see `PopoverClock` for the same reasoning.
+        RunLoop.main.add(timer, forMode: .common)
+        backgroundPollTimer = timer
+    }
+
+    deinit {
+        backgroundPollTimer?.invalidate()
     }
 
     /// Persists the new resting window immediately, the way the cadence is —
@@ -498,9 +538,9 @@ final class AppModel: ObservableObject {
     ///
     /// Detection waits for the next quota poll: the state file lives in
     /// `$HOME`, which isn't watched, and polls are triggered by opening the
-    /// popover or by session activity (throttled to ``quotaPollInterval``),
-    /// not by a timer — so with neither, a switch goes unnoticed until one
-    /// happens.
+    /// popover, by session activity, or by the background timer (all
+    /// throttled to ``quotaPollInterval``) — so a switch is noticed no later
+    /// than one poll interval after it happens, even in an otherwise idle app.
     private func noteActiveAccount(_ account: QuotaAccount) -> Bool {
         defer { lastKnownAccountUuid = account.uuid }
         guard let previous = lastKnownAccountUuid else { return false }
