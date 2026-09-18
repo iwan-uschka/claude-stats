@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+- The menu-bar quota reading now refreshes on its own at the Settings poll
+  interval, not only when the popover opens or a session writes.
+
 ## [0.9.11] - 2026-09-15
 
 ### Added

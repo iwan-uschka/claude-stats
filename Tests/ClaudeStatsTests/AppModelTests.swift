@@ -378,6 +378,25 @@ final class AppModelTests: XCTestCase {
         let timer = try XCTUnwrap(model.backgroundPollTimer)
         XCTAssertEqual(timer.timeInterval, model.quotaPollInterval)
         XCTAssertTrue(timer.isValid)
+
+        // `Timer` exposes no readable `repeats` property, so the only way to
+        // confirm it was scheduled with `repeats: true` is behavioural: a
+        // non-repeating timer invalidates itself when `fire()` is called
+        // manually, a repeating one does not.
+        timer.fire()
+        XCTAssertTrue(timer.isValid, "a non-repeating timer would have invalidated itself on fire()")
+    }
+
+    /// `deinit` is the only thing that stops the background timer from firing
+    /// forever as a no-op once the model itself is gone.
+    func testDeallocatingTheModelInvalidatesTheBackgroundTimer() throws {
+        var model: AppModel? = makeModel(quota: ScriptedQuotaProvider())
+        model?.startBackgroundPolling()
+        let timer = try XCTUnwrap(model?.backgroundPollTimer)
+
+        model = nil
+
+        XCTAssertFalse(timer.isValid)
     }
 
     /// `Timer.fire()` runs the scheduled block immediately, so this exercises
@@ -400,7 +419,12 @@ final class AppModelTests: XCTestCase {
     /// in Settings only takes effect if the running timer is torn down and
     /// rebuilt.
     func testChangingThePollIntervalRestartsARunningBackgroundTimer() throws {
-        let model = makeModel(quota: ScriptedQuotaProvider())
+        let model = AppModel(
+            quotaProvider: ScriptedQuotaProvider(),
+            usageStore: MockUsageStore(),
+            promoNoticeProvider: MockPromoNoticeProvider(notices: []),
+            defaults: try makeDefaults()
+        )
         model.startBackgroundPolling()
         let original = try XCTUnwrap(model.backgroundPollTimer)
 
@@ -414,8 +438,13 @@ final class AppModelTests: XCTestCase {
 
     /// A cadence change before the timer has ever started must not start one —
     /// only `startBackgroundPolling()` (called once, at launch) does that.
-    func testChangingThePollIntervalBeforeStartingLeavesNoTimerRunning() {
-        let model = makeModel(quota: ScriptedQuotaProvider())
+    func testChangingThePollIntervalBeforeStartingLeavesNoTimerRunning() throws {
+        let model = AppModel(
+            quotaProvider: ScriptedQuotaProvider(),
+            usageStore: MockUsageStore(),
+            promoNoticeProvider: MockPromoNoticeProvider(notices: []),
+            defaults: try makeDefaults()
+        )
 
         model.setQuotaPollInterval(120)
 
