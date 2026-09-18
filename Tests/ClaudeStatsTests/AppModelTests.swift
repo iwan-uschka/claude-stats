@@ -364,6 +364,64 @@ final class AppModelTests: XCTestCase {
         XCTAssertNotNil(model.snapshot)
     }
 
+    // MARK: - Background polling
+
+    /// Starting it schedules a repeating timer at the current cadence — the
+    /// mechanism that keeps the menu-bar glyph from sitting stale when the
+    /// popover never opens and no session activity runs.
+    func testStartBackgroundPollingSchedulesARepeatingTimerAtTheConfiguredInterval() throws {
+        let model = makeModel(quota: ScriptedQuotaProvider())
+        XCTAssertNil(model.backgroundPollTimer)
+
+        model.startBackgroundPolling()
+
+        let timer = try XCTUnwrap(model.backgroundPollTimer)
+        XCTAssertEqual(timer.timeInterval, model.quotaPollInterval)
+        XCTAssertTrue(timer.isValid)
+    }
+
+    /// `Timer.fire()` runs the scheduled block immediately, so this exercises
+    /// what a real tick does without waiting on wall-clock time (the shortest
+    /// selectable cadence is 30s).
+    func testFiringTheBackgroundPollTimerPollsQuota() async throws {
+        let provider = ScriptedQuotaProvider()
+        await provider.setResult(.success(MockQuotaProvider.sampleSnapshot()))
+        let model = makeModel(quota: provider)
+        model.startBackgroundPolling()
+        XCTAssertNil(model.snapshot)
+
+        try XCTUnwrap(model.backgroundPollTimer).fire()
+
+        await waitUntil { model.snapshot != nil }
+        XCTAssertNotNil(model.snapshot)
+    }
+
+    /// `Timer`'s own interval is fixed at creation, so a cadence change picked
+    /// in Settings only takes effect if the running timer is torn down and
+    /// rebuilt.
+    func testChangingThePollIntervalRestartsARunningBackgroundTimer() throws {
+        let model = makeModel(quota: ScriptedQuotaProvider())
+        model.startBackgroundPolling()
+        let original = try XCTUnwrap(model.backgroundPollTimer)
+
+        model.setQuotaPollInterval(120)
+
+        XCTAssertFalse(original.isValid, "the old timer must be invalidated, not left running alongside the new one")
+        let replacement = try XCTUnwrap(model.backgroundPollTimer)
+        XCTAssertNotIdentical(original, replacement)
+        XCTAssertEqual(replacement.timeInterval, 120)
+    }
+
+    /// A cadence change before the timer has ever started must not start one —
+    /// only `startBackgroundPolling()` (called once, at launch) does that.
+    func testChangingThePollIntervalBeforeStartingLeavesNoTimerRunning() {
+        let model = makeModel(quota: ScriptedQuotaProvider())
+
+        model.setQuotaPollInterval(120)
+
+        XCTAssertNil(model.backgroundPollTimer)
+    }
+
     // MARK: - Daily history
 
     /// Both popover blocks read `dailyHistory` directly — it is the only local

@@ -106,6 +106,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.model = model
         statusItemController = StatusItemController(model: model)
         model.refresh(force: true)
+        model.startBackgroundPolling()
         UpdateChecker.shared.startPeriodicChecks()
 
         // Watch only the session-log tree, not the whole config root: Claude
