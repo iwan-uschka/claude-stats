@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Fixed
+- A quota bar no longer keeps showing its old percentage after that window has
+  reset while Claude Code sat idle. It reads `no data` until Claude Code
+  reports the new window, as it already did when the statusline hook was the
+  source.
+
 ## [0.9.12] - 2026-09-18
 
 ### Changed

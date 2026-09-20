@@ -26,6 +26,14 @@ public struct QuotaWindow: Sendable, Hashable, Codable {
         let remaining = resetsAt.timeIntervalSince(now)
         return remaining > 0 ? remaining : nil
     }
+
+    /// A window is live until its reset has passed, and one with no
+    /// `resets_at` at all can't be shown to have expired. Every quota reader
+    /// drops a window that isn't — its percentage describes a window that no
+    /// longer exists — so the rule lives here, where they can't drift apart.
+    public func isLive(asOf now: Date) -> Bool {
+        resetsAt.map { $0 >= now } ?? true
+    }
 }
 
 /// Which of the two rate-limit windows something refers to.
