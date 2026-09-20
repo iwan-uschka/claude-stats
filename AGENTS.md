@@ -1232,15 +1232,13 @@ suite rather than in whatever domain the process happens to have.
 ## Tech / release
 
 - Native Swift/SwiftUI, Swift Package Manager. No Electron, no Tauri.
-- Release process cloned from `qrski` (sibling repo,
-  `../qrski/make_app.sh` + `../qrski/make_release.sh`): hand-rolled
+- Release process (`make_app.sh` + `make_release.sh`): hand-rolled
   `Info.plist`, `actool` for the asset catalog, ad-hoc `codesign --sign -`
   (unsigned, no notarization — users click through Gatekeeper once), zip +
   sha256, `gh release create`. Direct-download distribution, not the Mac App
   Store (App Sandbox would need security-scoped bookmarks just to read
   `~/.claude`, real friction for no benefit here).
-- Reuse `qrski`'s `UpdateChecker.swift` pattern (poll GitHub releases API)
-  for self-update-check.
+- Self-update-check polls the GitHub releases API (`UpdateChecker.swift`).
 - `assets/claude-mark.svg` is the source for both the status-item glyph and
   the generated `AppIcon.appiconset` — regenerate PNG sizes from it rather
   than hand-drawing a new mark.
