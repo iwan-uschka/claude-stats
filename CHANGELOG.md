@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.9.13] - 2026-09-20
+
 ### Fixed
 - A quota bar no longer keeps showing its old percentage after that window has
   reset while Claude Code sat idle. It reads `no data` until Claude Code
