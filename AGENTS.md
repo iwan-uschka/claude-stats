@@ -178,7 +178,10 @@ Two independent tiers, deliberately decoupled:
        percentage for a window that no longer existed — through the 60-minute
        gate and, as the freshest stale snapshot, beyond it. Dropped before the
        stale error is built, so that snapshot loses it too; both expired is
-       `noQuotaSourceAvailable`. Expired, never 0% — see below.
+       `noQuotaSourceAvailable`. Expired, never 0% — see below. `AppModel` applies
+       the same rule (`QuotaSnapshot.droppingExpiredWindows`) to the reading it
+       keeps on screen after a stale-source error, since that snapshot's
+       `capturedAt` never moves and a window can roll over inside it.
      - **Undocumented private state.** It can be renamed or dropped by any
        Claude Code release — a `spend` object appeared inside this payload
        between 2026-08-27 and 2026-08-28. That is precisely why the statusline

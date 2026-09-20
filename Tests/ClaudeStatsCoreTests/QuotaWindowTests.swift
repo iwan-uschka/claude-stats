@@ -18,4 +18,22 @@ final class QuotaWindowTests: XCTestCase {
     func testWindowWithoutAResetIsAlwaysLive() {
         XCTAssertTrue(QuotaWindow(percentUsed: 11).isLive(asOf: .distantFuture))
     }
+
+    /// The snapshot-level form of the same rule: each window is judged on its
+    /// own, and everything that isn't a window passes through untouched.
+    func testDroppingExpiredWindowsClearsOnlyTheExpiredOnes() {
+        let snapshot = QuotaSnapshot(
+            fiveHour: QuotaWindow(percentUsed: 11, resetsAt: reset),
+            sevenDay: QuotaWindow(percentUsed: 5, resetsAt: reset.addingTimeInterval(86_400)),
+            confidence: .official,
+            capturedAt: reset.addingTimeInterval(-600)
+        )
+
+        let aged = snapshot.droppingExpiredWindows(asOf: reset.addingTimeInterval(1))
+
+        XCTAssertNil(aged.fiveHour)
+        XCTAssertEqual(aged.sevenDay, snapshot.sevenDay)
+        XCTAssertEqual(aged.capturedAt, snapshot.capturedAt)
+        XCTAssertEqual(aged.confidence, snapshot.confidence)
+    }
 }

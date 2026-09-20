@@ -403,6 +403,11 @@ final class AppModel: ObservableObject {
                    self.snapshot == nil || self.snapshot!.capturedAt < snapshot.capturedAt {
                     self.snapshot = snapshot
                 }
+                // The kept reading ages in place: `capturedAt` never moves while
+                // the source is frozen, so a window can roll over inside the
+                // snapshot already on screen. Same rule the readers apply on
+                // every read.
+                self.snapshot = self.snapshot?.droppingExpiredWindows(asOf: self.now())
                 self.quotaError = nil
                 self.quotaCacheClearedNotice = nil
             } catch ClaudeStatsError.noQuotaSourceAvailable where self.quotaCacheClearedNotice != nil {
