@@ -120,12 +120,21 @@ public struct CachedUtilizationReader: QuotaProviding {
 
     public func currentSnapshot() async throws -> QuotaSnapshot {
         let parsed = try loadUtilization()
+        let asOf = now()
+
+        // The blob is a snapshot nothing rewrites when a window rolls over, so
+        // a window past its `resets_at` is dropped here, against the clock on
+        // every call like staleness below — left in, its old percentage stays
+        // on screen for a window that no longer exists. Same rule as
+        // ``StatuslineCacheReader``'s merge.
+        let fiveHour = parsed.fiveHour.flatMap { $0.isLive(asOf: asOf) ? $0 : nil }
+        let sevenDay = parsed.sevenDay.flatMap { $0.isLive(asOf: asOf) ? $0 : nil }
 
         // Each window can be independently absent — Claude Code stops reporting
         // one once it has rolled over — and an absent one stays absent on the
         // snapshot rather than becoming 0%. Only *both* missing means this
         // source has nothing to say.
-        guard parsed.fiveHour != nil || parsed.sevenDay != nil else {
+        guard fiveHour != nil || sevenDay != nil else {
             throw ClaudeStatsError.noQuotaSourceAvailable
         }
 
@@ -138,8 +147,8 @@ public struct CachedUtilizationReader: QuotaProviding {
         }
 
         let snapshot = QuotaSnapshot(
-            fiveHour: parsed.fiveHour,
-            sevenDay: parsed.sevenDay,
+            fiveHour: fiveHour,
+            sevenDay: sevenDay,
             confidence: .cachedOfficial,
             capturedAt: capturedAt,
             scopedWeekly: parsed.scopedWeekly,
@@ -150,8 +159,8 @@ public struct CachedUtilizationReader: QuotaProviding {
 
         // Judged against the clock on every call, cached parse or not: an
         // unchanged file is exactly how a reading goes stale.
-        guard !snapshot.isStale(asOf: now(), threshold: stalenessThreshold) else {
-            throw ClaudeStatsError.staleQuotaSource(snapshot: snapshot, age: snapshot.age(asOf: now()))
+        guard !snapshot.isStale(asOf: asOf, threshold: stalenessThreshold) else {
+            throw ClaudeStatsError.staleQuotaSource(snapshot: snapshot, age: snapshot.age(asOf: asOf))
         }
         return snapshot
     }
@@ -215,8 +224,8 @@ public struct CachedUtilizationReader: QuotaProviding {
 
     /// Everything the three public reads want out of one parse of the state
     /// file, extracted into typed values so it can outlive the parse behind
-    /// the fingerprint gate. Nothing here depends on the clock — staleness is
-    /// applied by ``currentSnapshot()`` on every call.
+    /// the fingerprint gate. Nothing here depends on the clock — staleness and
+    /// window expiry are applied by ``currentSnapshot()`` on every call.
     private struct Parsed: Sendable {
         let fiveHour: QuotaWindow?
         let sevenDay: QuotaWindow?

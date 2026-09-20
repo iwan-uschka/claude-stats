@@ -26,6 +26,16 @@ public struct QuotaWindow: Sendable, Hashable, Codable {
         let remaining = resetsAt.timeIntervalSince(now)
         return remaining > 0 ? remaining : nil
     }
+
+    /// A window is live until its reset has passed, and one with no
+    /// `resets_at` at all can't be shown to have expired. Both quota readers
+    /// drop an account-wide window (five-hour, seven-day) that isn't — its
+    /// percentage describes a window that no longer exists — so the rule lives
+    /// here, where they can't drift apart. The per-model ``QuotaScopedLimit``
+    /// rows are not filtered: they mostly carry no `resets_at` at all.
+    public func isLive(asOf now: Date) -> Bool {
+        resetsAt.map { $0 >= now } ?? true
+    }
 }
 
 /// Which of the two rate-limit windows something refers to.
@@ -270,5 +280,16 @@ public struct QuotaSnapshot: Sendable, Hashable, Codable {
         threshold: TimeInterval = QuotaSnapshot.defaultStalenessThreshold
     ) -> Bool {
         age(asOf: now) > threshold
+    }
+
+    /// This snapshot with any window that isn't ``QuotaWindow/isLive(asOf:)``
+    /// cleared to `nil`. For a reading that is kept on screen while its source
+    /// stays frozen: `capturedAt` never moves, so a window can roll over inside
+    /// it.
+    public func droppingExpiredWindows(asOf now: Date) -> QuotaSnapshot {
+        var kept = self
+        kept.fiveHour = fiveHour.flatMap { $0.isLive(asOf: now) ? $0 : nil }
+        kept.sevenDay = sevenDay.flatMap { $0.isLive(asOf: now) ? $0 : nil }
+        return kept
     }
 }

@@ -319,7 +319,7 @@ public struct StatuslineCacheReader: QuotaProviding, OtherAccountReadingsReporti
     /// ``snapshot(for:asOf:)`` and does not count here either, so a machine
     /// whose only other files are ancient still gets the plain "no quota
     /// source" advice rather than two empty bars. Checked per reading with the
-    /// merge's own rule 1 (``isLive(_:asOf:)``) instead of by building the
+    /// merge's own rule 1 (``QuotaWindow/isLive(asOf:)``) instead of by building the
     /// snapshots, since only the yes/no is wanted.
     ///
     /// Never gated on staleness: a cold other account is still proof that
@@ -336,7 +336,7 @@ public struct StatuslineCacheReader: QuotaProviding, OtherAccountReadingsReporti
             .contains { group in
                 group.readings.contains { reading in
                     [reading.fiveHour, reading.sevenDay].contains { window in
-                        window.map { Self.isLive($0, asOf: asOf) } ?? false
+                        window.map { $0.isLive(asOf: asOf) } ?? false
                     }
                 }
             }
@@ -747,7 +747,7 @@ public struct StatuslineCacheReader: QuotaProviding, OtherAccountReadingsReporti
     private func choose(_ candidates: [Candidate], asOf now: Date) -> Candidate? {
         // Rule 1: a window whose reset has passed is one Claude Code has
         // already stopped reporting. Expired, not 0%.
-        let live = candidates.filter { Self.isLive($0.window, asOf: now) }
+        let live = candidates.filter { $0.window.isLive(asOf: now) }
 
         // Rules 2 and 3, on the readings that date themselves.
         let dated = live.compactMap { candidate in
@@ -766,14 +766,6 @@ public struct StatuslineCacheReader: QuotaProviding, OtherAccountReadingsReporti
         // Rule 4: undated readings only ever win when nothing dated survived,
         // and then the newest capture is all there is to go on.
         return live.max { $0.capturedAt < $1.capturedAt }
-    }
-
-    /// Rule 1 of "Merging" on its own: a window is live until its reset has
-    /// passed, and one with no `resets_at` at all can't be shown to have
-    /// expired. Shared with ``hasReadingsForOtherAccounts()`` so "this group
-    /// would merge into a snapshot" can't drift from the merge itself.
-    private static func isLive(_ window: QuotaWindow, asOf now: Date) -> Bool {
-        window.resetsAt.map { $0 >= now } ?? true
     }
 
     /// The `utilization` object from the most recently captured file that

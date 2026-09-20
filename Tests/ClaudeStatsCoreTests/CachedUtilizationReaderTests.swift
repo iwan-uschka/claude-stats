@@ -38,9 +38,10 @@ final class CachedUtilizationReaderTests: XCTestCase {
     }
 
     private func makeReader(
-        stalenessThreshold: TimeInterval = CachedUtilizationReader.defaultStalenessThreshold
+        stalenessThreshold: TimeInterval = CachedUtilizationReader.defaultStalenessThreshold,
+        asOf: Date? = nil
     ) -> CachedUtilizationReader {
-        let fixedNow = now
+        let fixedNow = asOf ?? now
         return CachedUtilizationReader(
             candidateURLs: [stateFileURL],
             stalenessThreshold: stalenessThreshold,
@@ -717,6 +718,68 @@ final class CachedUtilizationReaderTests: XCTestCase {
         XCTAssertEqual(CachedUtilizationReader.defaultStalenessThreshold, 60 * 60)
     }
 
+    // MARK: - Expired windows
+
+    /// The blob is a snapshot Claude Code took once; nothing rewrites it when a
+    /// window rolls over. Read back after `resets_at`, the percentage describes
+    /// a window that no longer exists — observed as the 5-hour bar holding its
+    /// old figure for up to an hour of idle time. Same rule as
+    /// `StatuslineCacheReader`'s merge: expired means absent, never 0%.
+    func testWindowPastItsResetIsDroppedNotShownAtItsOldPercentage() async throws {
+        let fiveHourReset = Date(timeIntervalSince1970: fiveHourResetEpoch)
+        try write(stateFile(fetchedAt: now))
+
+        let before = try await makeReader(asOf: fiveHourReset.addingTimeInterval(-1)).currentSnapshot()
+        XCTAssertEqual(before.fiveHour?.percentUsed, 11)
+
+        let after = try await makeReader(asOf: fiveHourReset.addingTimeInterval(1)).currentSnapshot()
+        XCTAssertNil(after.fiveHour)
+        // Each window expires on its own schedule.
+        XCTAssertEqual(after.sevenDay?.percentUsed, 97)
+    }
+
+    /// With every window expired this source has nothing left to say — the same
+    /// outcome as a payload that never carried one.
+    func testEveryWindowPastItsResetThrowsNoQuotaSourceAvailable() async throws {
+        let afterBothResets = Date(timeIntervalSince1970: sevenDayResetEpoch + 60)
+        try write(stateFile(fetchedAt: afterBothResets.addingTimeInterval(-60)))
+
+        await assertThrows(.noQuotaSourceAvailable) {
+            try await self.makeReader(asOf: afterBothResets).currentSnapshot()
+        }
+    }
+
+    /// `FreshestQuotaProvider` keeps showing a stale error's snapshot, so the
+    /// expired window has to be gone from that one too — otherwise the old
+    /// figure comes back the moment the reading crosses the staleness gate.
+    func testStaleSnapshotAlsoDropsTheExpiredWindow() async throws {
+        try write(stateFile(fetchedAt: now))
+        let twoHoursOn = now.addingTimeInterval(2 * 3600)
+
+        let snapshot = await assertThrowsStale(age: 2 * 3600) {
+            try await self.makeReader(asOf: twoHoursOn).currentSnapshot()
+        }
+
+        XCTAssertNil(snapshot?.fiveHour)
+        XCTAssertEqual(snapshot?.sevenDay?.percentUsed, 97)
+    }
+
+    /// A window that names no reset can't be shown to have expired.
+    func testWindowWithoutAResetIsKept() async throws {
+        try write("""
+        {
+          "cachedUsageUtilization": {
+            "fetchedAtMs": \(Int(now.timeIntervalSince1970 * 1000)),
+            "utilization": { "five_hour": { "utilization": 11 } }
+          }
+        }
+        """)
+
+        let snapshot = try await makeReader(asOf: now.addingTimeInterval(30 * 60)).currentSnapshot()
+
+        XCTAssertEqual(snapshot.fiveHour?.percentUsed, 11)
+    }
+
     // MARK: - Failure modes
 
     func testMissingStateFileThrowsNoQuotaSourceAvailable() async throws {
@@ -960,6 +1023,22 @@ final class CachedUtilizationReaderTests: XCTestCase {
         await assertThrowsStale(age: 3660) {
             try await reader.currentSnapshot()
         }
+    }
+
+    /// Expiry is the clock's business too: the cached parse holds the window,
+    /// and an unchanged file is exactly the case where it rolls over unnoticed.
+    func testCachedParseStillDropsAWindowAsTheClockPassesItsReset() async throws {
+        let clock = OSAllocatedUnfairLock(initialState: now)
+        let reader = CachedUtilizationReader(candidateURLs: [stateFileURL], now: { clock.withLock { $0 } })
+        try write(stateFile(fetchedAt: now.addingTimeInterval(-60)))
+
+        let first = try await reader.currentSnapshot()
+        XCTAssertEqual(first.fiveHour?.percentUsed, 11)
+
+        clock.withLock { $0 = Date(timeIntervalSince1970: self.fiveHourResetEpoch + 1) }
+        let second = try await reader.currentSnapshot()
+        XCTAssertNil(second.fiveHour)
+        XCTAssertEqual(second.sevenDay?.percentUsed, 97)
     }
 
     /// A malformed file drops the cached parse along with the error, so a later

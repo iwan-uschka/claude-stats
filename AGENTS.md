@@ -169,6 +169,19 @@ Two independent tiers, deliberately decoupled:
        credits), and that used to be a full ~170 KB parse of an unchanged file
        — about half a poll. The values one parse extracts are cached against
        the fingerprint; staleness is still judged against the clock per call.
+     - **A window past its `resets_at` is dropped on read, against the clock
+       on every call** — `QuotaWindow.isLive(asOf:)`, the statusline merge's
+       own rule 1, shared so the two readers can't drift. The blob is a
+       snapshot nothing rewrites when a window rolls over, and this reader used
+       to pass it through untouched: whenever it beat the hook reading (fresher
+       `fetchedAtMs`, or the hook stale), the 5-hour bar kept its old
+       percentage for a window that no longer existed — through the 60-minute
+       gate and, as the freshest stale snapshot, beyond it. Dropped before the
+       stale error is built, so that snapshot loses it too; both expired is
+       `noQuotaSourceAvailable`. Expired, never 0% — see below. `AppModel` applies
+       the same rule (`QuotaSnapshot.droppingExpiredWindows`) to the reading it
+       keeps on screen after a stale-source error, since that snapshot's
+       `capturedAt` never moves and a window can roll over inside it.
      - **Undocumented private state.** It can be renamed or dropped by any
        Claude Code release — a `spend` object appeared inside this payload
        between 2026-08-27 and 2026-08-28. That is precisely why the statusline

@@ -163,6 +163,13 @@ final class AppModelTests: XCTestCase {
         capturedAt: Date(timeIntervalSince1970: 1_787_935_500)
     )
 
+    /// A settable clock for the one test that ages a kept reading.
+    /// `@unchecked Sendable`: only that `@MainActor` test ever touches it.
+    private final class StaleSourceClock: @unchecked Sendable {
+        var now: Date
+        init(_ now: Date) { self.now = now }
+    }
+
     private func waitUntil(
         timeout: TimeInterval = 2,
         _ condition: @escaping () async -> Bool
@@ -206,6 +213,42 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(model.snapshot, sample)
         XCTAssertNil(model.quotaError)
         XCTAssertNotNil(model.quotaWarning)
+    }
+
+    /// The kept reading ages in place: a stale-source failure carrying the same
+    /// `capturedAt` is discarded by the retention rule, so a window that rolled
+    /// over while the source sat frozen must be dropped from the snapshot that
+    /// stays on screen — never left showing its old percentage.
+    func testStaleSourceFailureDropsAnExpiredWindowFromTheKeptSnapshot() async {
+        let clock = StaleSourceClock(Date(timeIntervalSince1970: 1_787_935_000))
+        let provider = ScriptedQuotaProvider()
+        let reading = QuotaSnapshot(
+            fiveHour: QuotaWindow(percentUsed: 11, resetsAt: clock.now.addingTimeInterval(600)),
+            sevenDay: QuotaWindow(percentUsed: 5, resetsAt: clock.now.addingTimeInterval(86_400)),
+            confidence: .cachedOfficial,
+            capturedAt: clock.now
+        )
+        await provider.setResult(.success(reading))
+        let model = AppModel(
+            quotaProvider: provider,
+            usageStore: MockUsageStore(),
+            promoNoticeProvider: MockPromoNoticeProvider(notices: []),
+            now: { clock.now }
+        )
+        model.refresh(force: true)
+        await waitUntil { model.snapshot != nil }
+        XCTAssertNotNil(model.snapshot?.fiveHour)
+
+        clock.now = clock.now.addingTimeInterval(3_900)
+        await provider.setResult(.failure(ClaudeStatsError.staleQuotaSource(
+            snapshot: reading.droppingExpiredWindows(asOf: clock.now),
+            age: 3_900
+        )))
+        model.refresh(force: true)
+        await waitUntil { model.quotaWarning != nil }
+
+        XCTAssertNil(model.snapshot?.fiveHour)
+        XCTAssertEqual(model.snapshot?.sevenDay, reading.sevenDay)
     }
 
     /// Cold start against an already-stale source: no earlier poll ever
