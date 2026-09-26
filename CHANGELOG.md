@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.9.15] - 2026-09-26
+
 ### Fixed
 - Quota bars no longer go blank after the 7-day window resets. Until Claude
   Code refreshed its own cached usage reading, every live statusline reading
