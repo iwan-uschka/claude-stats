@@ -105,7 +105,12 @@ Two independent tiers, deliberately decoupled:
        spell the same instant differently (epoch seconds vs ISO-8601 with
        fractional seconds) and is far below the gap between two real 7-day
        windows. Readings with no `seven_day` are never dropped (nothing to
-       compare), and with no cached reference everything is accepted.
+       compare), and with no cached reference — or one whose reset has
+       already passed — everything is accepted. Claude Code refreshes
+       `cachedUsageUtilization` only now and then, so after a 7-day rollover
+       the cached reset can lag while live sessions report the next window.
+       Held against that stale reset, the guard once dropped every fresh
+       reading and both quota sources came up empty.
      - **An account switch clears the statusline cache on its own.** Every
        poll asks `QuotaProviding.currentAccount()` (on `FreshestQuotaProvider`,
        the same fingerprint-cached `ActiveAccountReader` the statusline reader
