@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.9.14] - 2026-09-26
+
 ### Added
 - MIT LICENSE file.
 
