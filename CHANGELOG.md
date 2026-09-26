@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- MIT LICENSE file.
+
 ## [0.9.13] - 2026-09-20
 
 ### Fixed
