@@ -1372,6 +1372,49 @@ final class StatuslineCacheReaderTests: XCTestCase {
         XCTAssertEqual(scopedWeekly.map(\.label), ["Sonnet", "Fable"])
     }
 
+    /// The boundary itself: a reference resetting at exactly `now` is already
+    /// past, so the guard is off, same as the clearly-expired case above.
+    func testReferenceExpiringExactlyNowDisablesTheGuard() async throws {
+        try write(session: "next-window", cache(
+            capturedAt: now.addingTimeInterval(-10),
+            windowJSON("seven_day", percent: 1, resetsAt: now.addingTimeInterval(7 * 24 * 3600)),
+            account: exampleOrg
+        ))
+
+        let snapshot = try await makeReader(activeAccount: ActiveAccountReading(
+            account: exampleOrg,
+            reference: reference(exampleOrg, sevenDayResetsIn: 0)
+        )).currentSnapshot()
+
+        XCTAssertEqual(snapshot.sevenDay?.percentUsed, 1)
+    }
+
+    /// The expiry bypass does not check whether the candidate looks like a
+    /// genuinely different account's reading — it turns the guard off
+    /// entirely. Documents a known gap: while the switched-to account's cached
+    /// reference is stale, a stamping mismatch that the guard would otherwise
+    /// drop is accepted instead, reintroducing the cross-account
+    /// contamination it exists to catch.
+    func testExpiredReferenceAlsoAdmitsAGenuinelyForeignReading() async throws {
+        try write(session: "mislabelled", cache(
+            capturedAt: now.addingTimeInterval(-10),
+            windowJSON("seven_day", percent: 56, resetsAt: now.addingTimeInterval(20 * 3600)),
+            account: exampleOrg
+        ))
+        try write(session: "honest", cache(
+            capturedAt: now.addingTimeInterval(-60),
+            windowJSON("seven_day", percent: 3, resetsAt: now.addingTimeInterval(4 * 3600)),
+            account: exampleOrg
+        ))
+
+        let snapshot = try await makeReader(activeAccount: ActiveAccountReading(
+            account: exampleOrg,
+            reference: reference(exampleOrg, sevenDayResetsIn: -9 * 3600)
+        )).currentSnapshot()
+
+        XCTAssertEqual(snapshot.sevenDay?.percentUsed, 56)
+    }
+
     /// The two sources spell the same instant differently — whole epoch seconds
     /// from the statusline payload, ISO-8601 with fractional seconds from
     /// `cachedUsageUtilization` — so a sub-tolerance difference is the same

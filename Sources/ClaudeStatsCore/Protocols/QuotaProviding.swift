@@ -156,7 +156,8 @@ public struct ActiveAccountReading: Sendable, Hashable {
     public let account: QuotaAccount?
     /// The mislabel guard's reference, when the state file also holds a cached
     /// 7-day reading to compare against. `nil` disables the guard — with no
-    /// reference, every reading is accepted.
+    /// reference, every reading is accepted — and so does a reference whose
+    /// reset has already passed (see ``StatuslineCacheReader``).
     public let reference: ActiveAccountReference?
 
     public init(account: QuotaAccount? = nil, reference: ActiveAccountReference? = nil) {
