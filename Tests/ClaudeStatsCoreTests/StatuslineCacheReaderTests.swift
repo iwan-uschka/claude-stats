@@ -1340,6 +1340,81 @@ final class StatuslineCacheReaderTests: XCTestCase {
         XCTAssertEqual(snapshot.sevenDay?.percentUsed, 41)
     }
 
+    /// Claude Code refreshes `cachedUsageUtilization` only now and then, so
+    /// after the 7-day window rolls over the cached reset can sit in the past
+    /// while every live session already reports the next window. A reset that
+    /// has passed says nothing about which window is current, so it must not
+    /// reject the fresh readings — observed: both tiers empty, because the
+    /// guard dropped the new window and the expiry rule the old one.
+    func testExpiredReferenceDoesNotRejectTheNextWindow() async throws {
+        try write(session: "stale-window", cache(
+            capturedAt: now.addingTimeInterval(-10 * 3600),
+            windowJSON("seven_day", percent: 22, resetsAt: now.addingTimeInterval(-9 * 3600)),
+            account: exampleOrg
+        ))
+        try write(session: "next-window", cache(
+            capturedAt: now.addingTimeInterval(-10),
+            windowJSON("seven_day", percent: 1, resetsAt: now.addingTimeInterval(7 * 24 * 3600 - 9 * 3600)),
+            utilization: copiedUtilization,
+            account: exampleOrg
+        ))
+
+        let reader = makeReader(activeAccount: ActiveAccountReading(
+            account: exampleOrg,
+            reference: reference(exampleOrg, sevenDayResetsIn: -9 * 3600)
+        ))
+        let snapshot = try await reader.currentSnapshot()
+
+        XCTAssertEqual(snapshot.sevenDay?.percentUsed, 1)
+        XCTAssertEqual(snapshot.sevenDay?.resetsAt, now.addingTimeInterval(7 * 24 * 3600 - 9 * 3600))
+        // The scoped rows go through the same guard, so they were lost too.
+        let scopedWeekly = try await reader.currentScopedWeekly()
+        XCTAssertEqual(scopedWeekly.map(\.label), ["Sonnet", "Fable"])
+    }
+
+    /// The boundary itself: a reference resetting at exactly `now` is already
+    /// past, so the guard is off, same as the clearly-expired case above.
+    func testReferenceExpiringExactlyNowDisablesTheGuard() async throws {
+        try write(session: "next-window", cache(
+            capturedAt: now.addingTimeInterval(-10),
+            windowJSON("seven_day", percent: 1, resetsAt: now.addingTimeInterval(7 * 24 * 3600)),
+            account: exampleOrg
+        ))
+
+        let snapshot = try await makeReader(activeAccount: ActiveAccountReading(
+            account: exampleOrg,
+            reference: reference(exampleOrg, sevenDayResetsIn: 0)
+        )).currentSnapshot()
+
+        XCTAssertEqual(snapshot.sevenDay?.percentUsed, 1)
+    }
+
+    /// The expiry bypass does not check whether the candidate looks like a
+    /// genuinely different account's reading — it turns the guard off
+    /// entirely. Documents a known gap: while the switched-to account's cached
+    /// reference is stale, a stamping mismatch that the guard would otherwise
+    /// drop is accepted instead, reintroducing the cross-account
+    /// contamination it exists to catch.
+    func testExpiredReferenceAlsoAdmitsAGenuinelyForeignReading() async throws {
+        try write(session: "mislabelled", cache(
+            capturedAt: now.addingTimeInterval(-10),
+            windowJSON("seven_day", percent: 56, resetsAt: now.addingTimeInterval(20 * 3600)),
+            account: exampleOrg
+        ))
+        try write(session: "honest", cache(
+            capturedAt: now.addingTimeInterval(-60),
+            windowJSON("seven_day", percent: 3, resetsAt: now.addingTimeInterval(4 * 3600)),
+            account: exampleOrg
+        ))
+
+        let snapshot = try await makeReader(activeAccount: ActiveAccountReading(
+            account: exampleOrg,
+            reference: reference(exampleOrg, sevenDayResetsIn: -9 * 3600)
+        )).currentSnapshot()
+
+        XCTAssertEqual(snapshot.sevenDay?.percentUsed, 56)
+    }
+
     /// The two sources spell the same instant differently — whole epoch seconds
     /// from the statusline payload, ISO-8601 with fractional seconds from
     /// `cachedUsageUtilization` — so a sub-tolerance difference is the same

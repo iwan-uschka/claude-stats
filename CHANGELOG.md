@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+- Quota bars no longer go blank after the 7-day window resets. Until Claude
+  Code refreshed its own cached usage reading, every live statusline reading
+  was rejected as another account's, so both quota sources showed nothing.
+
 ## [0.9.14] - 2026-09-26
 
 ### Added

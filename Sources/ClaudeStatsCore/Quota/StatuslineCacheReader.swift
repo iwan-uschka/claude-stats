@@ -98,8 +98,9 @@ import os
 /// ``ActiveAccountReference/tolerance`` describes a different 7-day window than
 /// the account is actually in, so the whole reading is dropped from that
 /// account's merge. Readings with no `seven_day` window at all are not subject
-/// to it (nothing to compare), and with no cached reference everything is
-/// accepted.
+/// to it (nothing to compare), and with no cached reference — or one whose
+/// reset has already passed, since Claude Code refreshes it only now and then —
+/// everything is accepted.
 ///
 /// ## Merging
 ///
@@ -298,7 +299,7 @@ public struct StatuslineCacheReader: QuotaProviding, OtherAccountReadingsReporti
         // an error of its own: `FreshestQuotaProvider` then falls through to
         // `cachedUsageUtilization`, which belongs to the active login by
         // construction. Another account's files are never substituted.
-        guard let group = chosenGroup(in: readings),
+        guard let group = chosenGroup(in: readings, asOf: asOf),
             let snapshot = snapshot(for: group, asOf: asOf)
         else {
             throw ClaudeStatsError.noQuotaSourceAvailable
@@ -329,7 +330,7 @@ public struct StatuslineCacheReader: QuotaProviding, OtherAccountReadingsReporti
         guard let readings = try? loadReadings() else { return false }
         let asOf = now()
         let active = activeAccount.readActiveAccount()
-        let groups = groups(in: readings, reference: active.reference)
+        let groups = groups(in: readings, reference: active.reference, asOf: asOf)
         let chosen = chosen(among: groups, account: active.account)
         return groups
             .filter { group in chosen.map { group.key != $0.key } ?? true }
@@ -376,7 +377,7 @@ public struct StatuslineCacheReader: QuotaProviding, OtherAccountReadingsReporti
     /// ``loadReadings()``, and "nothing for this account" is the same non-fault
     /// here as it is in ``currentSnapshot()``.
     private func chosenReadings() throws -> [Reading] {
-        chosenGroup(in: try loadReadings())?.readings ?? []
+        chosenGroup(in: try loadReadings(), asOf: now())?.readings ?? []
     }
 
     /// Deletes the whole session cache directory and the legacy single file, so
@@ -654,17 +655,25 @@ public struct StatuslineCacheReader: QuotaProviding, OtherAccountReadingsReporti
     ///
     /// Readings with no `seven_day` window are never dropped — there is nothing
     /// to compare — and with no reference at all nothing is dropped either.
+    /// Nor with a reference whose reset has already passed: Claude Code
+    /// refreshes `cachedUsageUtilization` only now and then, so after a
+    /// rollover the cached reset can lag behind while every live session
+    /// already reports the next window. A past reset proves only that a newer
+    /// window exists, not whose it is — held against it, the guard dropped
+    /// every fresh reading while the expiry rule dropped the old ones.
     ///
     /// The reference is passed in rather than read here so that one
     /// ``ActiveAccountProviding/readActiveAccount()`` serves both this and
     /// ``chosen(among:account:)``: two reads per refresh is duplicated file
     /// I/O, and a login switch landing between them could have the guard and
     /// the group choice describing different accounts.
-    private func groups(in readings: [Reading], reference: ActiveAccountReference?) -> [Group] {
+    private func groups(
+        in readings: [Reading], reference: ActiveAccountReference?, asOf: Date
+    ) -> [Group] {
         var order: [String?] = []
         var byKey: [String?: (account: QuotaAccount?, readings: [Reading])] = [:]
 
-        for reading in readings where !isForeign(reading, reference: reference) {
+        for reading in readings where !isForeign(reading, reference: reference, asOf: asOf) {
             let key = reading.account?.uuid
             if byKey[key] == nil {
                 order.append(key)
@@ -678,9 +687,10 @@ public struct StatuslineCacheReader: QuotaProviding, OtherAccountReadingsReporti
             .sorted { $0.newestCapture > $1.newestCapture }
     }
 
-    /// The mislabel guard's verdict on one file — see ``groups(in:reference:)``.
-    private func isForeign(_ reading: Reading, reference: ActiveAccountReference?) -> Bool {
-        guard let reference, reading.account?.uuid == reference.accountUuid,
+    /// The mislabel guard's verdict on one file — see ``groups(in:reference:asOf:)``.
+    private func isForeign(_ reading: Reading, reference: ActiveAccountReference?, asOf: Date) -> Bool {
+        guard let reference, reference.sevenDayResetsAt > asOf,
+            reading.account?.uuid == reference.accountUuid,
             let resetsAt = reading.sevenDay?.resetsAt
         else { return false }
         return abs(resetsAt.timeIntervalSince(reference.sevenDayResetsAt))
@@ -701,9 +711,10 @@ public struct StatuslineCacheReader: QuotaProviding, OtherAccountReadingsReporti
         return groups.first { $0.key == uuid }
     }
 
-    private func chosenGroup(in readings: [Reading]) -> Group? {
+    private func chosenGroup(in readings: [Reading], asOf: Date) -> Group? {
         let active = activeAccount.readActiveAccount()
-        return chosen(among: groups(in: readings, reference: active.reference), account: active.account)
+        return chosen(
+            among: groups(in: readings, reference: active.reference, asOf: asOf), account: active.account)
     }
 
     /// Merges one group's files into that account's snapshot, or `nil` when
