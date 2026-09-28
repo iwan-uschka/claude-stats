@@ -137,6 +137,15 @@ final class JSONObjectSurgeryTests: XCTestCase {
 
     // MARK: - removingTopLevelValue
 
+    // breaks-if: the `guard let interior = rootObjectInterior(of: text) else
+    // { throw SurgeryError.notAJSONObject }` guard in
+    // `removingTopLevelValue(forKey:in:)` is removed.
+    func testRemovingTopLevelValueThrowsWhenRootIsNotAnObject() {
+        XCTAssertThrowsError(try JSONObjectSurgery.removingTopLevelValue(forKey: "statusLine", in: "[1, 2, 3]")) { error in
+            XCTAssertEqual(error as? JSONObjectSurgery.SurgeryError, .notAJSONObject)
+        }
+    }
+
     func testRemovesMiddleMemberPreservingSiblings() throws {
         let text = """
         {

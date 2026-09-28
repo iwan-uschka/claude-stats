@@ -186,6 +186,20 @@ final class StatuslineHookInstallerTests: XCTestCase {
         }
     }
 
+    /// Distinct from the case above: here `statusLine` itself isn't an object
+    /// at all (a hand-edited `"statusLine": "foo"`), rather than an object with
+    /// an unrecognized `type`. Both are reported the same way, but only the
+    /// nested-object shape was ever exercised.
+    // breaks-if: the `guard let statusLine = rawStatusLine as? [String: Any]
+    // else { throw Error.unsupportedStatuslineType(...) }` guard in
+    // `currentCommand()` is removed.
+    func testDetectStateThrowsOnUnsupportedStatuslineTypeWhenStatusLineIsNotAnObject() throws {
+        try write(#"{"statusLine": "not an object"}"#)
+        XCTAssertThrowsError(try installer.detectState()) { error in
+            XCTAssertEqual(error as? StatuslineHookInstaller.Error, .unsupportedStatuslineType("string"))
+        }
+    }
+
     /// When a matched command's remainder doesn't match the exact `bash -c
     /// '...'` shape this installer generates (e.g. hand-edited or modified by
     /// another tool), the raw remainder is surfaced verbatim rather than
@@ -573,5 +587,118 @@ final class StatuslineHookInstallerTests: XCTestCase {
     func testUninstallNoOpWhenNoSettingsFileAtAll() throws {
         XCTAssertNoThrow(try installer.uninstall())
         XCTAssertFalse(FileManager.default.fileExists(atPath: settingsURL.path))
+    }
+
+    // MARK: - Error-path fakes
+
+    /// `settings.json` changing shape *during* `install()` — e.g. another
+    /// process rewriting the file mid-install. `first` must be seen by
+    /// ``currentCommand()``'s parsed read (call 1); every read after that,
+    /// including the backup step's snapshot and
+    /// ``spliceStatusLine(valueJSON:)``'s raw-text read, sees `subsequent`, so
+    /// ``JSONObjectSurgery`` eventually throws and
+    /// ``StatuslineHookInstaller/mappingSurgeryError(_:)`` maps it.
+    private final class RacyFileManager: FileManager {
+        let path: String
+        let first: Data
+        let subsequent: Data
+        private var callCount = 0
+
+        init(path: String, first: Data, subsequent: Data) {
+            self.path = path
+            self.first = first
+            self.subsequent = subsequent
+        }
+
+        override func contents(atPath path: String) -> Data? {
+            guard path == self.path else { return super.contents(atPath: path) }
+            callCount += 1
+            return callCount == 1 ? first : subsequent
+        }
+    }
+
+    /// Stands in for the temp-file step of ``StatuslineHookInstaller/writeScript(_:)``
+    /// failing outright (disk full, permission denied).
+    private final class FailingCreateFileManager: FileManager {
+        override func createFile(
+            atPath path: String, contents data: Data?, attributes attr: [FileAttributeKey: Any]? = nil
+        ) -> Bool {
+            false
+        }
+    }
+
+    /// Stands in for the temp file being created successfully but a later step
+    /// in ``StatuslineHookInstaller/writeScript(_:)`` (permissions, replace,
+    /// move) failing.
+    private final class FailingSetAttributesFileManager: FileManager {
+        struct Failure: Error {}
+
+        override func setAttributes(_ attributes: [FileAttributeKey: Any], ofItemAtPath path: String) throws {
+            throw Failure()
+        }
+    }
+
+    /// The race above: a valid object on the first read, an array (not an
+    /// object) on every read after.
+    // breaks-if: the `catch is JSONObjectSurgery.SurgeryError { throw
+    // Error.malformedSettings }` catch in `mappingSurgeryError(_:)` is removed.
+    func testInstallThrowsMalformedSettingsWhenFileChangesToNonObjectBetweenReads() throws {
+        try write(#"{"someOtherSetting": 42}"#)
+        let racyInstaller = StatuslineHookInstaller(
+            settingsURL: settingsURL,
+            installedScriptURL: scriptURL,
+            cacheDirectoryURL: cacheDirectoryURL,
+            fileManager: RacyFileManager(
+                path: settingsURL.path,
+                first: Data(#"{"someOtherSetting": 42}"#.utf8),
+                subsequent: Data("[1, 2, 3]".utf8)
+            ),
+            homeDirectory: URL(fileURLWithPath: "/nonexistent-home-for-tests")
+        )
+
+        XCTAssertThrowsError(try racyInstaller.install(bundledScript: bundledScript)) { error in
+            XCTAssertEqual(error as? StatuslineHookInstaller.Error, .malformedSettings)
+        }
+    }
+
+    // breaks-if: the `guard fileManager.createFile(...) else { throw
+    // Error.scriptWriteFailed }` guard in `writeScript(_:)` is removed.
+    func testInstallThrowsScriptWriteFailedWhenTempFileCannotBeCreated() throws {
+        let racyInstaller = StatuslineHookInstaller(
+            settingsURL: settingsURL,
+            installedScriptURL: scriptURL,
+            cacheDirectoryURL: cacheDirectoryURL,
+            fileManager: FailingCreateFileManager(),
+            homeDirectory: URL(fileURLWithPath: "/nonexistent-home-for-tests")
+        )
+
+        XCTAssertThrowsError(try racyInstaller.install(bundledScript: bundledScript)) { error in
+            XCTAssertEqual(error as? StatuslineHookInstaller.Error, .scriptWriteFailed)
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: scriptURL.path))
+    }
+
+    /// Also proves the `try? fileManager.removeItem(at: tempURL)` cleanup right
+    /// before the rethrow actually runs: no stray `.tmp` file is left behind in
+    /// the script's directory.
+    // breaks-if: the `catch { try? fileManager.removeItem(at: tempURL); throw
+    // Error.scriptWriteFailed }` block in `writeScript(_:)` is removed, or its
+    // cleanup line is dropped.
+    func testInstallThrowsScriptWriteFailedAndCleansUpTempFileWhenAttributesFail() throws {
+        let racyInstaller = StatuslineHookInstaller(
+            settingsURL: settingsURL,
+            installedScriptURL: scriptURL,
+            cacheDirectoryURL: cacheDirectoryURL,
+            fileManager: FailingSetAttributesFileManager(),
+            homeDirectory: URL(fileURLWithPath: "/nonexistent-home-for-tests")
+        )
+
+        XCTAssertThrowsError(try racyInstaller.install(bundledScript: bundledScript)) { error in
+            XCTAssertEqual(error as? StatuslineHookInstaller.Error, .scriptWriteFailed)
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: scriptURL.path))
+        let leftoverTempFiles = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+            .filter { $0.hasSuffix(".tmp") }
+        XCTAssertEqual(leftoverTempFiles, [], "the failed write's temp file should have been cleaned up")
     }
 }

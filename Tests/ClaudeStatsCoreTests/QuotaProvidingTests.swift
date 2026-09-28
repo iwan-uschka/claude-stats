@@ -49,4 +49,20 @@ final class QuotaProvidingTests: XCTestCase {
 
         XCTAssertNil(account)
     }
+
+    /// ``MockQuotaProvider/error`` is the seam the app's own error-path tests
+    /// lean on to exercise a failing quota source — nothing proved the mock
+    /// itself actually honours it, or that it takes priority over a snapshot
+    /// that's also set.
+    // breaks-if: the `if let error = box.error { throw error }` guard in
+    // `MockQuotaProvider.currentSnapshot()` is removed, or moved after the
+    // snapshot check.
+    func testErrorPropertyMakesCurrentSnapshotThrowInsteadOfReturningTheSnapshot() async {
+        var provider = MockQuotaProvider(snapshot: MockQuotaProvider.sampleSnapshot())
+        provider.error = .unexpectedQuotaResponse("boom")
+
+        await assertThrows(.unexpectedQuotaResponse("boom")) {
+            try await provider.currentSnapshot()
+        }
+    }
 }
