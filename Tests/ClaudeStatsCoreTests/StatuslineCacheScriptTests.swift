@@ -87,6 +87,62 @@ final class StatuslineCacheScriptTests: XCTestCase {
         return bin.path
     }
 
+    /// A `$PATH` with the real tools plus a fake `stat` that always fails —
+    /// simulates `state_fingerprint` failing on a state file `find_state_file`
+    /// already found readable (e.g. removed, or made unreadable, between the
+    /// two calls). `jq` and everything else still resolve from the real `$PATH`.
+    private func pathWithBrokenStat() throws -> String {
+        try pathShadowing(tool: "stat")
+    }
+
+    /// Same shape, `mktemp` broken instead — simulates the session cache
+    /// file's own `mktemp` call failing (e.g. a full disk, or the directory
+    /// losing its write bit after `mkdir -p` found it already present).
+    private func pathWithBrokenMktemp() throws -> String {
+        try pathShadowing(tool: "mktemp")
+    }
+
+    /// Same shape, `jq` broken instead — a corrupt/broken `jq` install, as
+    /// opposed to `jq` being absent from `$PATH` entirely (``pathWithoutJq()``).
+    /// `command -v jq` still finds it, so the script takes the `jq`-present
+    /// branch and its pipeline fails outright.
+    private func pathWithBrokenJq() throws -> String {
+        try pathShadowing(tool: "jq")
+    }
+
+    /// Prepends a directory containing a fake `tool` (always exits 1) onto the
+    /// real `$PATH`, so every other command still resolves normally.
+    private func pathShadowing(tool: String) throws -> String {
+        let bin = directory.appendingPathComponent("bin-broken-\(tool)", isDirectory: true)
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let fake = bin.appendingPathComponent(tool)
+        try Data("#!/bin/sh\nexit 1\n".utf8).write(to: fake)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fake.path)
+        let realPath = ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin"
+        return "\(bin.path):\(realPath)"
+    }
+
+    /// The no-`jq` tool set (``pathWithoutJq()``'s allowlist), but `mktemp`
+    /// replaced by one that hands back a pre-existing directory instead of
+    /// creating a fresh temp file. Deterministic in any environment — a `>`
+    /// redirect into a directory fails with `EISDIR` unconditionally, root
+    /// included, unlike relying on a permission bit a root-run CI could ignore.
+    private func pathWithoutJqAndMktempReturning(directory tmp: URL) throws -> String {
+        let bin = directory.appendingPathComponent("bin-mktemp-returns-directory", isDirectory: true)
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        for tool in ["cat", "mkdir", "grep", "rm", "mv", "chmod"] {
+            let source = try XCTUnwrap(["/bin/\(tool)", "/usr/bin/\(tool)"]
+                .first { FileManager.default.isExecutableFile(atPath: $0) })
+            try FileManager.default.createSymbolicLink(
+                at: bin.appendingPathComponent(tool),
+                withDestinationURL: URL(fileURLWithPath: source))
+        }
+        let fakeMktemp = bin.appendingPathComponent("mktemp")
+        try Data("#!/bin/sh\necho \"\(tmp.path)\"\n".utf8).write(to: fakeMktemp)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fakeMktemp.path)
+        return bin.path
+    }
+
     /// The `jq` branch is the one most tests assert on (`captured_at`,
     /// session-id file names, non-clobbering). Without `jq` on `$PATH` they
     /// would exercise the `tee` fallback instead and fail on confusing
@@ -438,5 +494,85 @@ final class StatuslineCacheScriptTests: XCTestCase {
 
         XCTAssertEqual(printed, payload(session: "aaaa-1111"))
         XCTAssertEqual(try sessionFiles(), ["aaaa-1111.json"])
+    }
+
+    // MARK: - Failure paths (all best-effort: the script always exits 0 —
+    // `run()` already asserts that on every call in this file)
+
+    /// `state_fingerprint`'s own failure: `stat` failing on a state file
+    /// `find_state_file` already found readable. The whole extraction is
+    /// skipped, same as a missing state file, and — since the fingerprint gate
+    /// never runs — the sidecar is never written either.
+    // breaks-if: the `fp=$(state_fingerprint "$state_file") || return 1` line
+    // in `extract_state_fields` is removed.
+    func testStateFingerprintFailureOmitsUtilizationWithoutWritingTheSidecar() throws {
+        try skipUnlessJqOnPath()
+        try writeStateFile(oauthAccount: fullOAuthAccount)
+
+        try run(payload(session: "aaaa-1111"), path: try pathWithBrokenStat())
+
+        let root = try json(of: "aaaa-1111.json")
+        XCTAssertNil(root["account"])
+        XCTAssertNil(root["utilization"])
+        XCTAssertNotNil(root["rate_limits"])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: utilizationSidecarURL.path))
+    }
+
+    /// `mkdir -p` failing on the session cache directory — e.g. a plain file
+    /// already occupying that path.
+    // breaks-if: the `mkdir -p "$session_cache_dir" || return 1` line in
+    // `write_cache` is removed.
+    func testSessionCacheDirectoryCreationFailureIsSwallowed() throws {
+        try FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
+        try Data().write(to: sessionDirectory) // a plain file where a directory must go
+
+        try run(payload(session: "aaaa-1111"))
+
+        var isDirectory: ObjCBool = false
+        XCTAssertTrue(FileManager.default.fileExists(atPath: sessionDirectory.path, isDirectory: &isDirectory))
+        XCTAssertFalse(isDirectory.boolValue, "the pre-existing file must be left exactly as it was")
+    }
+
+    /// `mktemp` failing for the session cache file itself, with the directory
+    /// already writable — distinct from the `mkdir -p` failure above.
+    // breaks-if: the `tmp=$(mktemp "${cache_file}.XXXXXX") || return 1` line in
+    // `write_cache` is removed.
+    func testSessionCacheFileMktempFailureIsSwallowed() throws {
+        try skipUnlessJqOnPath()
+
+        try run(payload(session: "aaaa-1111"), path: try pathWithBrokenMktemp())
+
+        XCTAssertEqual(try sessionFiles(), [])
+    }
+
+    /// The `jq` pipeline itself failing (a broken install) rather than `jq`
+    /// being absent — distinct from ``testWithoutJqTheRawPayloadGoesToTheSharedFile()``,
+    /// which exercises the no-`jq` fallback branch entirely.
+    // breaks-if: the `if ! printf ... | jq -c ... >"$tmp" ...; then rm -f
+    // "$tmp"; return 1; fi` block in `write_cache` is removed.
+    func testJqPipelineFailureIsSwallowed() throws {
+        try run(payload(session: "aaaa-1111"), path: try pathWithBrokenJq())
+
+        XCTAssertEqual(try sessionFiles(), [])
+    }
+
+    /// The no-`jq` branch's own write failing — here, `mktemp` hands back a
+    /// pre-existing directory, so the raw `printf … >"$tmp"` fails with
+    /// `EISDIR`. Distinct from the `jq`-branch failure above.
+    // breaks-if: the `printf '%s' "$input" >"$tmp" || { rm -f "$tmp"; return 1;
+    // }` line in `write_cache`'s no-`jq` branch is removed.
+    func testNoJqRawWriteFailureIsSwallowed() throws {
+        let stuckDirectory = directory.appendingPathComponent("stuck-tmp-dir", isDirectory: true)
+        try FileManager.default.createDirectory(at: stuckDirectory, withIntermediateDirectories: true)
+
+        try run(
+            payload(session: "aaaa-1111"),
+            path: try pathWithoutJqAndMktempReturning(directory: stuckDirectory)
+        )
+
+        XCTAssertEqual(try sessionFiles(), [])
+        // The failed write's target is left alone, not removed — `rm -f`
+        // without `-r` can't remove a directory.
+        XCTAssertTrue(FileManager.default.fileExists(atPath: stuckDirectory.path))
     }
 }
