@@ -56,7 +56,10 @@ public struct ClaudeStateFileFingerprint: Sendable, Hashable {
 /// feature flag. Reads ride the throttled refresh instead, behind this gate.
 enum ClaudeStateFile {
     enum LoadResult {
-        /// The file still matches the caller's previous fingerprint.
+        /// The file still matches the caller's previous fingerprint. Only
+        /// ever returned when `unchangedSince` was non-nil and equal to the
+        /// current fingerprint — callers may rely on this to treat a `nil`
+        /// previous fingerprint as a guarantee this case cannot come back.
         case unchanged
         case loaded(root: [String: Any], fingerprint: ClaudeStateFileFingerprint)
         /// Nothing to read: no candidate could be opened, the opened path

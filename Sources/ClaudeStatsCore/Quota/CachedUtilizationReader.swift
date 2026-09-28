@@ -270,7 +270,10 @@ public struct CachedUtilizationReader: QuotaProviding {
             // `ClaudeStateFile.load` only ever returns `.unchanged` when
             // `unchangedSince` (passed above as `previous?.fingerprint`) was
             // non-nil and matched — so `previous` is always set here.
-            outcome = previous!.outcome
+            guard let previous else {
+                preconditionFailure("ClaudeStateFile.load returned .unchanged without a previous fingerprint")
+            }
+            outcome = previous.outcome
         case .loaded(let root, let fingerprint):
             outcome = Self.outcome(in: root)
             cache.withLock { $0 = Cached(fingerprint: fingerprint, outcome: outcome) }
