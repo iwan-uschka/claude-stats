@@ -189,7 +189,12 @@ public enum SVGPathParser {
                 command = nil // Z takes no arguments; nothing to implicitly repeat.
 
             default:
-                throw SVGPathParseError.unexpectedCharacter(active, offset: scanner.offset)
+                // `active` is always assigned from `scanner.takeCommand()`
+                // (which only ever returns a member of `commandLetters`) or
+                // carried over unchanged from a previous `active` via the
+                // implicit-repeat branch above — so it is always one of the
+                // 20 letters this switch enumerates above.
+                preconditionFailure("active is always a member of Scanner.commandLetters")
             }
         }
 
