@@ -74,17 +74,24 @@ final class StatuslineCacheScriptTests: XCTestCase {
     private func pathWithoutJq() throws -> String {
         let bin = directory.appendingPathComponent("bin-without-jq", isDirectory: true)
         try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
-        for tool in ["cat", "mkdir", "mktemp", "grep", "rm", "mv", "chmod"] {
-            // `/bin` and `/usr/bin` split these between them (`mktemp` and
-            // `grep` live in the latter), and a symlink to the wrong one is a
-            // dangling link the script would report as a missing command.
+        // `/bin` and `/usr/bin` split these between them (`mktemp` and `grep`
+        // live in the latter), and a symlink to the wrong one is a dangling
+        // link the script would report as a missing command.
+        try symlinkedRealTools(["cat", "mkdir", "mktemp", "grep", "rm", "mv", "chmod"], into: bin)
+        return bin.path
+    }
+
+    /// Symlinks each of `tools` from wherever it actually lives (`/bin` or
+    /// `/usr/bin`) into `bin`, so a scratch `$PATH` entry can offer the real
+    /// tool without offering everything else on the real `$PATH` too.
+    private func symlinkedRealTools(_ tools: [String], into bin: URL) throws {
+        for tool in tools {
             let source = try XCTUnwrap(["/bin/\(tool)", "/usr/bin/\(tool)"]
                 .first { FileManager.default.isExecutableFile(atPath: $0) })
             try FileManager.default.createSymbolicLink(
                 at: bin.appendingPathComponent(tool),
                 withDestinationURL: URL(fileURLWithPath: source))
         }
-        return bin.path
     }
 
     /// A `$PATH` with the real tools plus a fake `stat` that always fails —
@@ -97,26 +104,34 @@ final class StatuslineCacheScriptTests: XCTestCase {
 
     /// Same shape, `mktemp` broken instead — simulates the session cache
     /// file's own `mktemp` call failing (e.g. a full disk, or the directory
-    /// losing its write bit after `mkdir -p` found it already present).
+    /// losing its write bit after `mkdir -p` found it already present). Prints
+    /// a writable path before exiting 1, rather than nothing: a test asserting
+    /// only "exit 1" can't tell the `|| return 1` guard from `write_cache`
+    /// simply never reaching a usable `$tmp`, since an empty `$tmp` fails the
+    /// write on its own regardless of the guard.
     private func pathWithBrokenMktemp() throws -> String {
-        try pathShadowing(tool: "mktemp")
+        try pathShadowing(tool: "mktemp", output: "echo \"\(directory.appendingPathComponent("mktemp-failure-leak").path)\"\n")
     }
 
     /// Same shape, `jq` broken instead — a corrupt/broken `jq` install, as
     /// opposed to `jq` being absent from `$PATH` entirely (``pathWithoutJq()``).
     /// `command -v jq` still finds it, so the script takes the `jq`-present
-    /// branch and its pipeline fails outright.
+    /// branch and its pipeline fails outright. Prints non-empty (fake) JSON
+    /// before exiting 1, rather than nothing: the same reasoning as
+    /// ``pathWithBrokenMktemp()`` — an empty `$tmp` fails `[ -s "$tmp" ]` on
+    /// its own, so a silent `jq` can't tell the guard from that.
     private func pathWithBrokenJq() throws -> String {
-        try pathShadowing(tool: "jq")
+        try pathShadowing(tool: "jq", output: "echo '{\"leaked\": true}'\n")
     }
 
-    /// Prepends a directory containing a fake `tool` (always exits 1) onto the
-    /// real `$PATH`, so every other command still resolves normally.
-    private func pathShadowing(tool: String) throws -> String {
+    /// Prepends a directory containing a fake `tool` onto the real `$PATH`,
+    /// so every other command still resolves normally. The fake prints
+    /// `output` (if any) to stdout, then always exits 1.
+    private func pathShadowing(tool: String, output: String = "") throws -> String {
         let bin = directory.appendingPathComponent("bin-broken-\(tool)", isDirectory: true)
         try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
         let fake = bin.appendingPathComponent(tool)
-        try Data("#!/bin/sh\nexit 1\n".utf8).write(to: fake)
+        try Data("#!/bin/sh\n\(output)exit 1\n".utf8).write(to: fake)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fake.path)
         let realPath = ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin"
         return "\(bin.path):\(realPath)"
@@ -130,15 +145,14 @@ final class StatuslineCacheScriptTests: XCTestCase {
     private func pathWithoutJqAndMktempReturning(directory tmp: URL) throws -> String {
         let bin = directory.appendingPathComponent("bin-mktemp-returns-directory", isDirectory: true)
         try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
-        for tool in ["cat", "mkdir", "grep", "rm", "mv", "chmod"] {
-            let source = try XCTUnwrap(["/bin/\(tool)", "/usr/bin/\(tool)"]
-                .first { FileManager.default.isExecutableFile(atPath: $0) })
-            try FileManager.default.createSymbolicLink(
-                at: bin.appendingPathComponent(tool),
-                withDestinationURL: URL(fileURLWithPath: source))
-        }
+        try symlinkedRealTools(["cat", "mkdir", "grep", "rm", "mv", "chmod"], into: bin)
         let fakeMktemp = bin.appendingPathComponent("mktemp")
-        try Data("#!/bin/sh\necho \"\(tmp.path)\"\n".utf8).write(to: fakeMktemp)
+        // Single-quoted with the standard `'` -> `'\''` shell escape, rather
+        // than interpolated into a double-quoted string, so this keeps
+        // working if `tmp` ever stops being a fixed literal under
+        // `FileManager.default.temporaryDirectory`.
+        let escapedPath = tmp.path.replacingOccurrences(of: "'", with: "'\\''")
+        try Data("#!/bin/sh\necho '\(escapedPath)'\n".utf8).write(to: fakeMktemp)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fakeMktemp.path)
         return bin.path
     }
@@ -520,8 +534,13 @@ final class StatuslineCacheScriptTests: XCTestCase {
 
     /// `mkdir -p` failing on the session cache directory — e.g. a plain file
     /// already occupying that path.
-    // breaks-if: the `mkdir -p "$session_cache_dir" || return 1` line in
-    // `write_cache` is removed.
+    // breaks-if: defence-in-depth, not a distinguishing test — removing the
+    // `mkdir -p "$session_cache_dir" || return 1` line in `write_cache` alone
+    // doesn't change this outcome, because `session_cache_dir` still isn't a
+    // directory afterwards, so the very next line's
+    // `tmp=$(mktemp "${cache_file}.XXXXXX") || return 1` fails the same way
+    // and stops the function regardless.
+    // `testSessionCacheFileMktempFailureIsSwallowed` pins that line instead.
     func testSessionCacheDirectoryCreationFailureIsSwallowed() throws {
         try FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
         try Data().write(to: sessionDirectory) // a plain file where a directory must go
@@ -534,12 +553,13 @@ final class StatuslineCacheScriptTests: XCTestCase {
     }
 
     /// `mktemp` failing for the session cache file itself, with the directory
-    /// already writable — distinct from the `mkdir -p` failure above.
+    /// already writable — distinct from the `mkdir -p` failure above. The fake
+    /// `mktemp` prints a writable path before failing, so a removed guard
+    /// would actually write/rename through it instead of just leaving `$tmp`
+    /// empty either way.
     // breaks-if: the `tmp=$(mktemp "${cache_file}.XXXXXX") || return 1` line in
     // `write_cache` is removed.
     func testSessionCacheFileMktempFailureIsSwallowed() throws {
-        try skipUnlessJqOnPath()
-
         try run(payload(session: "aaaa-1111"), path: try pathWithBrokenMktemp())
 
         XCTAssertEqual(try sessionFiles(), [])
@@ -547,7 +567,10 @@ final class StatuslineCacheScriptTests: XCTestCase {
 
     /// The `jq` pipeline itself failing (a broken install) rather than `jq`
     /// being absent — distinct from ``testWithoutJqTheRawPayloadGoesToTheSharedFile()``,
-    /// which exercises the no-`jq` fallback branch entirely.
+    /// which exercises the no-`jq` fallback branch entirely. The fake `jq`
+    /// prints non-empty output before failing, so a removed guard would
+    /// actually pass `[ -s "$tmp" ]` and move that output into place instead
+    /// of `$tmp` just being empty either way.
     // breaks-if: the `if ! printf ... | jq -c ... >"$tmp" ...; then rm -f
     // "$tmp"; return 1; fi` block in `write_cache` is removed.
     func testJqPipelineFailureIsSwallowed() throws {

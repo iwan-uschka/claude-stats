@@ -61,11 +61,8 @@ final class QuotaProvidingTests: XCTestCase {
         var provider = MockQuotaProvider(snapshot: MockQuotaProvider.sampleSnapshot())
         provider.error = .unexpectedQuotaResponse("boom")
 
-        do {
-            _ = try await provider.currentSnapshot()
-            XCTFail("expected currentSnapshot() to throw")
-        } catch {
-            XCTAssertEqual(error as? ClaudeStatsError, .unexpectedQuotaResponse("boom"))
+        await assertThrows(.unexpectedQuotaResponse("boom")) {
+            try await provider.currentSnapshot()
         }
     }
 }

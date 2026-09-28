@@ -591,11 +591,12 @@ final class StatuslineHookInstallerTests: XCTestCase {
 
     // MARK: - Error-path fakes
 
-    /// `settings.json` changing shape *between* ``currentCommand()``'s parsed
-    /// read and ``spliceStatusLine(valueJSON:)``'s raw-text read — e.g. another
-    /// process rewriting the file mid-install. The first read must see a valid
-    /// object (so `install()` gets past `currentCommand()`) and a later one a
-    /// non-object, so ``JSONObjectSurgery`` throws and
+    /// `settings.json` changing shape *during* `install()` — e.g. another
+    /// process rewriting the file mid-install. `first` must be seen by
+    /// ``currentCommand()``'s parsed read (call 1); every read after that,
+    /// including the backup step's snapshot and
+    /// ``spliceStatusLine(valueJSON:)``'s raw-text read, sees `subsequent`, so
+    /// ``JSONObjectSurgery`` eventually throws and
     /// ``StatuslineHookInstaller/mappingSurgeryError(_:)`` maps it.
     private final class RacyFileManager: FileManager {
         let path: String
