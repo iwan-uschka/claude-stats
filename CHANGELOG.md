@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.9.16] - 2026-10-12
+
 ### Fixed
 - The 7-day bar no longer shows an old, lower percentage after Claude moves the weekly reset earlier.
 
