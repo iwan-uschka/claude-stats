@@ -32,7 +32,8 @@
 # `five_hour` back as 0%.
 #
 # So the payload's own top-level `session_id` names the file: one file per
-# session, in a directory, and the app merges them (latest `resets_at` wins;
+# session, in a directory, and the app merges them (the window from the newest
+# capture wins;
 # same window, higher percentage wins; expired windows are ignored). A session
 # can now only ever overwrite its own numbers.
 #

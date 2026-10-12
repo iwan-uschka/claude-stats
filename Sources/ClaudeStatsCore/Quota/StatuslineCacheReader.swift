@@ -55,8 +55,8 @@ import os
 /// global login between two Anthropic accounts, and nothing in the statusline
 /// payload says which account it describes (see ``QuotaAccount``), so a cache
 /// left behind by the previous login is indistinguishable from a current one —
-/// and since a merge picks the latest `resets_at`, the *other* account's 7-day
-/// window won outright whenever its reset happened to be later. Observed: after
+/// and since a merge picks the window of the newest capture, the *other* account's 7-day
+/// window won outright whenever its file was captured last. Observed: after
 /// switching from account A (7-day reset 23:00Z, 56%) to account B (03:00Z,
 /// 0%), one idle session kept re-rendering A's payload and the bar showed A's
 /// 56% as the machine's 7-day usage.
@@ -105,13 +105,22 @@ import os
 /// ## Merging
 ///
 /// Within one account group, each window is chosen independently across that
-/// group's files, and `captured_at` is deliberately *not* the deciding field —
-/// it says when we wrote the file, not how old the numbers in it are. In order:
+/// group's files. `captured_at` says when we wrote the file, not how old the
+/// numbers in it are, so it only decides where nothing better exists (rules 2
+/// and 4), and never the choice between two readings of one window (rule 3). In
+/// order:
 ///
 /// 1. A reading whose `resets_at` has already passed is ignored: Claude Code
 ///    itself stops reporting such a window, so a file still carrying one is by
 ///    definition showing a window that has since rolled over.
-/// 2. The latest `resets_at` wins — a later reset is a later window.
+/// 2. The window is the `resets_at` carried by the most recently captured
+///    file. Two live windows only differ when the reset moved, and the newest
+///    capture is the one that saw it. Ranking on the latest `resets_at`
+///    instead let a file from before an earlier reset move outvote every
+///    fresh one. An exact capture tie goes to the later reset. Known limit: an
+///    idle session from before the move that re-renders after the fresh
+///    sessions last wrote restamps its old numbers as newest, and wins until a
+///    fresh session writes again.
 /// 3. Same `resets_at` (i.e. the same window) breaks toward the **highest**
 ///    percentage: utilization within one window never decreases, so a lower
 ///    reading is the older one. Identical percentages — two sessions polled
@@ -764,14 +773,20 @@ public struct StatuslineCacheReader: QuotaProviding, OtherAccountReadingsReporti
         let dated = live.compactMap { candidate in
             candidate.window.resetsAt.map { (resetsAt: $0, candidate: candidate) }
         }
-        if !dated.isEmpty {
-            return dated.max { lhs, rhs in
-                if lhs.resetsAt != rhs.resetsAt { return lhs.resetsAt < rhs.resetsAt }
-                if lhs.candidate.window.percentUsed != rhs.candidate.window.percentUsed {
-                    return lhs.candidate.window.percentUsed < rhs.candidate.window.percentUsed
+        // Rule 2: the window is the `resets_at` whose newest file was captured
+        // last, a later reset breaking an exact tie. `newestCapture` is empty
+        // only when `dated` is, so the `if let` never falls through with dated
+        // readings left over; it replaces a force unwrap.
+        let newestCapture = Dictionary(dated.map { ($0.resetsAt, $0.candidate.capturedAt) }, uniquingKeysWith: max)
+        if let resetsAt = newestCapture.max(by: { lhs, rhs in
+            lhs.value != rhs.value ? lhs.value < rhs.value : lhs.key < rhs.key
+        })?.key {
+            return dated.filter { $0.resetsAt == resetsAt }.map(\.candidate).max { lhs, rhs in
+                if lhs.window.percentUsed != rhs.window.percentUsed {
+                    return lhs.window.percentUsed < rhs.window.percentUsed
                 }
-                return lhs.candidate.capturedAt < rhs.candidate.capturedAt
-            }?.candidate
+                return lhs.capturedAt < rhs.capturedAt
+            }
         }
 
         // Rule 4: undated readings only ever win when nothing dated survived,
