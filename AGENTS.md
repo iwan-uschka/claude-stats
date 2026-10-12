@@ -289,7 +289,9 @@ Two independent tiers, deliberately decoupled:
          `resets_at` has passed; take the `resets_at` of the most recently captured
          file (two live windows only differ when the reset moved, and the newest
          capture saw the move; "latest `resets_at` wins" let a pre-move file pin
-         an old 8% over a fresh 24%). Within that window take the *highest*
+         an old 8% over a fresh 24%; known limit: an idle pre-move session that
+         re-renders last restamps its old numbers as newest and wins until a
+         fresh session writes). Within that window take the *highest*
          percentage, since utilization within one window never decreases, so a
          lower number is the older read; a reading with no `resets_at` ranks
          below every reading that has one, and among those the newest capture

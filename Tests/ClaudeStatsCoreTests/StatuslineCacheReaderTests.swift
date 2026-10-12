@@ -404,6 +404,47 @@ final class StatuslineCacheReaderTests: XCTestCase {
         XCTAssertEqual(snapshot.sevenDay?.resetsAt, now.addingTimeInterval(330_000))
     }
 
+    /// Two files captured at the same instant that disagree on the reset can't be
+    /// told apart by capture time, so the later reset wins, as it always did.
+    ///
+    /// breaks-if: the exact-tie branch in `choose` is dropped or flipped to the earlier reset.
+    func testCaptureTieBetweenDifferentResetsGoesToTheLaterReset() async throws {
+        let captured = now.addingTimeInterval(-60)
+        try write(session: "earlier-reset", cache(
+            capturedAt: captured,
+            windowJSON("seven_day", percent: 30, resetsAt: now.addingTimeInterval(330_000))
+        ))
+        try write(session: "later-reset", cache(
+            capturedAt: captured,
+            windowJSON("seven_day", percent: 8, resetsAt: now.addingTimeInterval(400_000))
+        ))
+
+        let snapshot = try await makeReader().currentSnapshot()
+
+        XCTAssertEqual(snapshot.sevenDay?.resetsAt, now.addingTimeInterval(400_000))
+        XCTAssertEqual(snapshot.sevenDay?.percentUsed, 8)
+    }
+
+    /// Known limit, pinned so it stays a decision: an idle session from before
+    /// the reset moved that re-renders last restamps its old numbers as newest,
+    /// and wins over the fresh sessions until one of them writes again.
+    ///
+    /// breaks-if: `choose` stops ranking the window by newest capture, which also revives the stale-pin bug above.
+    func testIdleSessionRestampedAfterAResetMoveWinsUntilAFreshOneWrites() async throws {
+        try write(session: "fresh", cache(
+            capturedAt: now.addingTimeInterval(-120),
+            windowJSON("seven_day", percent: 24, resetsAt: now.addingTimeInterval(330_000))
+        ))
+        try write(session: "idle-restamped", cache(
+            capturedAt: now.addingTimeInterval(-10),
+            windowJSON("seven_day", percent: 8, resetsAt: now.addingTimeInterval(400_000))
+        ))
+
+        let snapshot = try await makeReader().currentSnapshot()
+
+        XCTAssertEqual(snapshot.sevenDay?.percentUsed, 8)
+    }
+
     /// A reading with no `resets_at` can't be ranked against one that has it,
     /// so it only ever wins when nothing dated survives — and then the newest
     /// capture is all there is to go on.
