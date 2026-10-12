@@ -358,8 +358,8 @@ final class StatuslineCacheReaderTests: XCTestCase {
         }
     }
 
-    /// A later reset is a later window, and a fresh window legitimately starts
-    /// near zero — so `resets_at` outranks the percentage.
+    /// A later reset seen in a later capture is a later window, and a fresh
+    /// window legitimately starts near zero — so the window outranks the percentage.
     func testLaterResetsAtBeatsAHigherPercentage() async throws {
         try write(session: "old-window", cache(
             capturedAt: now.addingTimeInterval(-30),
@@ -374,6 +374,34 @@ final class StatuslineCacheReaderTests: XCTestCase {
 
         XCTAssertEqual(snapshot.fiveHour?.percentUsed, 5)
         XCTAssertEqual(snapshot.fiveHour?.resetsAt, now.addingTimeInterval(18_000))
+    }
+
+    /// Claude moved the 7-day reset earlier. A session file from before the move
+    /// still claims the later reset, and used to win on that alone, pinning an
+    /// old, lower percentage on screen. Two live windows can only differ when the
+    /// reset moved, and then the newest capture is the one that saw it.
+    ///
+    /// breaks-if: `choose` ranks by the latest `resets_at` before the capture time again.
+    func testReadingCapturedAfterAnEarlierResetMoveBeatsAStaleLaterReset() async throws {
+        try write(session: "before-the-move", cache(
+            capturedAt: now.addingTimeInterval(-120_000),
+            windowJSON("seven_day", percent: 8, resetsAt: now.addingTimeInterval(400_000))
+        ))
+        try write(session: "after-the-move", cache(
+            capturedAt: now.addingTimeInterval(-60),
+            windowJSON("seven_day", percent: 24, resetsAt: now.addingTimeInterval(330_000))
+        ))
+        // A second fresh file in the new window, lower than the first: the
+        // highest percentage still wins inside the chosen window.
+        try write(session: "after-the-move-quiet", cache(
+            capturedAt: now.addingTimeInterval(-30),
+            windowJSON("seven_day", percent: 23, resetsAt: now.addingTimeInterval(330_000))
+        ))
+
+        let snapshot = try await makeReader().currentSnapshot()
+
+        XCTAssertEqual(snapshot.sevenDay?.percentUsed, 24)
+        XCTAssertEqual(snapshot.sevenDay?.resetsAt, now.addingTimeInterval(330_000))
     }
 
     /// A reading with no `resets_at` can't be ranked against one that has it,

@@ -286,8 +286,10 @@ Two independent tiers, deliberately decoupled:
            `.empty` placeholder any more; `nil` is the placeholder.)
        - **Merge rule, per window, independently, and within one account
          group only** (see "Which account, though" above). Ignore any reading whose
-         `resets_at` has passed; take the latest `resets_at` (a later reset is
-         a later window); on a tie, which means the same window, take the *highest*
+         `resets_at` has passed; take the `resets_at` of the most recently captured
+         file (two live windows only differ when the reset moved, and the newest
+         capture saw the move; "latest `resets_at` wins" let a pre-move file pin
+         an old 8% over a fresh 24%). Within that window take the *highest*
          percentage, since utilization within one window never decreases, so a
          lower number is the older read; a reading with no `resets_at` ranks
          below every reading that has one, and among those the newest capture

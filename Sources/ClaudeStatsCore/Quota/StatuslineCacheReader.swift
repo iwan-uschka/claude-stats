@@ -111,7 +111,11 @@ import os
 /// 1. A reading whose `resets_at` has already passed is ignored: Claude Code
 ///    itself stops reporting such a window, so a file still carrying one is by
 ///    definition showing a window that has since rolled over.
-/// 2. The latest `resets_at` wins — a later reset is a later window.
+/// 2. The window is the `resets_at` carried by the most recently captured
+///    file. Two live windows only differ when the reset moved, and the newest
+///    capture is the one that saw it. Ranking on the latest `resets_at`
+///    instead let a file from before an earlier reset move outvote every
+///    fresh one. An exact capture tie goes to the later reset.
 /// 3. Same `resets_at` (i.e. the same window) breaks toward the **highest**
 ///    percentage: utilization within one window never decreases, so a lower
 ///    reading is the older one. Identical percentages — two sessions polled
@@ -761,17 +765,21 @@ public struct StatuslineCacheReader: QuotaProviding, OtherAccountReadingsReporti
         let live = candidates.filter { $0.window.isLive(asOf: now) }
 
         // Rules 2 and 3, on the readings that date themselves.
-        let dated = live.compactMap { candidate in
-            candidate.window.resetsAt.map { (resetsAt: $0, candidate: candidate) }
-        }
+        let dated = live.filter { $0.window.resetsAt != nil }
         if !dated.isEmpty {
-            return dated.max { lhs, rhs in
-                if lhs.resetsAt != rhs.resetsAt { return lhs.resetsAt < rhs.resetsAt }
-                if lhs.candidate.window.percentUsed != rhs.candidate.window.percentUsed {
-                    return lhs.candidate.window.percentUsed < rhs.candidate.window.percentUsed
+            // Rule 2: the window is the `resets_at` whose newest file was
+            // captured last, a later reset breaking an exact tie.
+            let newestCapture = Dictionary(grouping: dated) { $0.window.resetsAt! }
+                .mapValues { $0.map(\.capturedAt).max()! }
+            guard let resetsAt = newestCapture.max(by: { lhs, rhs in
+                lhs.value != rhs.value ? lhs.value < rhs.value : lhs.key < rhs.key
+            })?.key else { return nil }
+            return dated.filter { $0.window.resetsAt == resetsAt }.max { lhs, rhs in
+                if lhs.window.percentUsed != rhs.window.percentUsed {
+                    return lhs.window.percentUsed < rhs.window.percentUsed
                 }
-                return lhs.candidate.capturedAt < rhs.candidate.capturedAt
-            }?.candidate
+                return lhs.capturedAt < rhs.capturedAt
+            }
         }
 
         // Rule 4: undated readings only ever win when nothing dated survived,
