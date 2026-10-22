@@ -476,9 +476,15 @@ struct DailyUsageChart: View {
                     .foregroundStyle(.primary)
                 // Dated ticks are numbers: monospaced digits so `6. Sept.` and
                 // `16. Aug.` sit on the same stems as the labels either side.
-                AxisValueLabel(format: PopoverChartHover.dayLabelFormat)
-                    .font(PopoverMetrics.captionValueFont)
-                    .foregroundStyle(.primary)
+                // The style goes on the `Text`, as for the y labels: set on
+                // `AxisValueLabel` itself it didn't override the system accent.
+                AxisValueLabel {
+                    if let day = value.as(Date.self) {
+                        Text(day, format: PopoverChartHover.dayLabelFormat)
+                            .font(PopoverMetrics.captionValueFont)
+                            .foregroundStyle(.primary)
+                    }
+                }
             }
         }
         .chartYAxis {
