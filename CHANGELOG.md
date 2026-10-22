@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- The daily chart's date labels use the primary text colour instead of the system accent colour.
+
 ## [0.9.16] - 2026-10-12
 
 ### Fixed
